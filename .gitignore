@@ -1,0 +1,20 @@
+node_modules
+dist
+coverage
+.vite
+.DS_Store
+
+# Playwright
+test-results/
+playwright-report/
+blob-report/
+
+# Snapshots created on local machines may differ from CI; only CI baselines
+# are tracked. Keep tests/e2e/snapshots in git but ignore local diffs.
+tests/e2e/**/*-actual.png
+tests/e2e/**/*-diff.png
+
+# IDE
+.idea
+.vscode
+*.log

@@ -1,0 +1,49 @@
+version: 2
+
+# Dependabot keeps the npm and GitHub Actions dependency graphs current.
+# Weekly cadence on Monday morning (UTC) avoids the Friday-deploy trap and
+# gives us a quiet window to triage updates before the work week begins.
+updates:
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 8
+    labels:
+      - dependencies
+      - npm
+    groups:
+      react:
+        patterns:
+          - "react"
+          - "react-dom"
+          - "@types/react"
+          - "@types/react-dom"
+      vite:
+        patterns:
+          - "vite"
+          - "@vitejs/*"
+          - "vitest"
+      testing:
+        patterns:
+          - "@playwright/*"
+          - "@testing-library/*"
+          - "jsdom"
+      lint:
+        patterns:
+          - "eslint"
+          - "eslint-*"
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Etc/UTC
+    labels:
+      - dependencies
+      - github-actions

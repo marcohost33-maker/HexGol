@@ -1,0 +1,58 @@
+name: update-snapshots
+
+# Manual snapshot refresh: run with workflow_dispatch when a deliberate
+# visual change has been merged into App.jsx and the committed baselines
+# need to follow. The job pushes the updated PNGs back to the source
+# branch as a single commit named "chore(snapshots): refresh baselines".
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: "Branch to refresh snapshots on"
+        required: true
+        default: "main"
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.branch }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Build production bundle
+        run: npm run build
+
+      - name: Update Playwright snapshots
+        run: npx playwright test --update-snapshots
+        env:
+          CI: "true"
+
+      - name: Commit refreshed snapshots
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet -- tests/e2e/__snapshots__; then
+            echo "No snapshot changes detected"
+            exit 0
+          fi
+          git add tests/e2e/__snapshots__
+          git commit -m "chore(snapshots): refresh baselines"
+          git push origin HEAD:${{ github.event.inputs.branch }}
