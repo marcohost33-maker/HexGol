@@ -118,6 +118,48 @@ All NR-G3..G55 and F01..F19 fixes from prior versions remain intact.
 Code remains ASCII-clean (no smart quotes, no special characters in
 identifiers) and brace-balanced (0 / 0 / 0).
 
+## v17.14.1 (post-merge audit follow-up)
+
+A second-pass review of the v17.14 source surfaced three more real bugs.
+They are corrected in v17.14.1 (no changes to user-visible behavior beyond
+making the bridge actually deliver on its written contract).
+
+### NR-G65 (P0): bridge.step now hard-pauses the sim via simPaused ref
+
+v17.14's NR-G63 wrapped the deterministic step in
+`setRunning(false); for (...) step(true); setRunning(true);`. React batches
+state updates inside a single synchronous block, so the net change to
+`running` was zero. The sim-loop `useEffect` therefore did **not** re-run,
+and the previously scheduled `setTimeout` continued firing - racing the
+bridge's deterministic steps and inserting phantom generations.
+
+v17.14.1 introduces `simPaused` (a `useRef<boolean>`). The sim-loop's
+`tick()` reads it on every iteration and reschedules itself without
+calling `step` while the flag is set. The bridge sets `simPaused.current
+= true` synchronously around its `step` calls, which is observable to
+the next setTimeout callback - no batching involved.
+
+The release-notes claim that NR-G63 "pauses the sim before deterministic
+step" is now actually true.
+
+### NR-G66 (P1): randomize accepts an optional seed override
+
+v17.14's bridge exposed `bridge.seed` from the `?seed=N` query param but
+`bridge.randomize()` ignored it - randomize used the app's hash-stored
+seed state instead. Tests therefore could not produce a known random
+state without first calling `setSeed` and waiting a render.
+
+v17.14.1 makes `randomize(seedOverride)` accept an integer seed for the
+single call. The bridge now exposes `setSeed(n)` for persistent state and
+forwards the optional argument on `randomize`. The new e2e regression
+spec "randomize(seed) is deterministic across calls" enforces this.
+
+### NR-G67 (P2): paintableView dead code removed
+
+`src/lib/hex.js`'s `paintableView` had `panY: cy * 0 + (ch / 2 - cy *
+paintZ)`. The `cy * 0 +` term contributes nothing. Removed. No semantic
+change; cleanup only, surfaced during the audit.
+
 ## Test surface added in v17.14
 
 - 18 Vitest specs covering buildGrid, pixelToOddR/Snap, cMix, mMix,

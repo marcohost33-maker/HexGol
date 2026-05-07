@@ -1,11 +1,9 @@
-// E2E tests that exercise the window.__TEST__ bridge introduced in v17.13
-// and hardened in v17.14 (NR-G62: ready-state lifecycle; NR-G63: deterministic
-// step that pauses and restores the running flag).
+// E2E tests for the window.__TEST__ bridge.
 //
-// Each test loads /?test=1&seed=42 so the bridge is installed and the seeded
-// RNG produces reproducible randomize() output. We then drive the simulation
-// through the bridge and assert via state() / telemetry() rather than DOM
-// inspection - this is the faster, less-flaky path for canvas applications.
+// v17.14 hardened the bridge against several races (NR-G62: ready-state on
+// teardown; NR-G65: sim hard-pause via simPaused ref; NR-G66: per-call
+// seed override on randomize). These specs cover both happy paths and the
+// regression cases that motivated the fixes.
 
 import { test, expect } from "@playwright/test";
 
@@ -28,8 +26,9 @@ declare global {
       };
       step: (n?: number) => void;
       advanceTime: (ms: number) => void;
-      randomize: () => void;
+      randomize: (seedOverride?: number) => void;
       clear: () => void;
+      setSeed: (n: number) => void;
       setRuleset: (i: number) => void;
       setGrid: (i: number) => void;
       telemetry: () => Array<Record<string, unknown>>;
@@ -74,7 +73,24 @@ test.describe("__TEST__ bridge", () => {
     expect(after - before).toBe(5);
   });
 
-  test("randomize() produces a non-empty alive count for seed 42", async ({ page }) => {
+  // NR-G66: randomize accepts a per-call seed override; the same seed must
+  // produce the same alive count across two clear+randomize cycles.
+  test("randomize(seed) is deterministic across calls", async ({ page }) => {
+    const aliveA = await page.evaluate(() => {
+      window.__TEST__!.clear();
+      window.__TEST__!.randomize(123);
+      return window.__TEST__!.state().alive;
+    });
+    const aliveB = await page.evaluate(() => {
+      window.__TEST__!.clear();
+      window.__TEST__!.randomize(123);
+      return window.__TEST__!.state().alive;
+    });
+    expect(aliveA).toBeGreaterThan(0);
+    expect(aliveB).toBe(aliveA);
+  });
+
+  test("randomize() produces a non-empty alive count", async ({ page }) => {
     await page.evaluate(() => window.__TEST__!.randomize());
     const s = await page.evaluate(() => window.__TEST__!.state());
     expect(s.alive).toBeGreaterThan(0);
@@ -92,13 +108,40 @@ test.describe("__TEST__ bridge", () => {
   test("telemetry buffer accumulates entries after stepping", async ({ page }) => {
     await page.evaluate(() => {
       window.__TEST__!.clear();
-      window.__TEST__!.randomize();
+      window.__TEST__!.randomize(42);
       window.__TEST__!.step(20);
     });
     const entries = await page.evaluate(() => window.__TEST__!.telemetry());
-    // Some entries (sim/render) should have accumulated; LoAF/longtask are
-    // browser-dependent so we only require that the buffer is non-empty.
     expect(Array.isArray(entries)).toBe(true);
     expect(entries.length).toBeGreaterThan(0);
+  });
+
+  // NR-G65 regression: prior to the simPaused ref the bridge's setRunning
+  // toggle was batched away by React, leaving the rAF sim loop free to add
+  // phantom generations between bridge.step() calls. Now we start a sim
+  // tick (slow speed so the loop's setTimeout is well above one tick) and
+  // call step(N) several times, verifying gen advances by exactly N each.
+  test("step(n) does not race the running sim", async ({ page }) => {
+    await page.evaluate(() => {
+      const t = window.__TEST__!;
+      t.clear();
+      t.randomize(7);
+    });
+    // Click PLAY to start the rAF sim loop. The button is keyboard-focused
+    // by clicking on it; pressing Space toggles play. Using the button keeps
+    // the test independent of label text, which the i18n could change.
+    const play = page.getByRole("button", { name: "Space" }).first();
+    await play.click();
+
+    // Now drive 3 deterministic step batches and assert exact gen deltas.
+    for (let i = 0; i < 3; i++) {
+      const before = await page.evaluate(() => window.__TEST__!.state().gen);
+      await page.evaluate(() => window.__TEST__!.step(4));
+      const after = await page.evaluate(() => window.__TEST__!.state().gen);
+      expect(after - before).toBe(4);
+    }
+
+    // Pause again so subsequent tests in this describe see a quiescent app.
+    await play.click();
   });
 });

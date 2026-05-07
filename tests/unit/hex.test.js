@@ -179,6 +179,14 @@ describe("viewport math", () => {
     const v = paintableView(400, 400, 1000, 1000, hr, targetPxR);
     expect(v.zoom).toBeCloseTo(targetPxR / hr, 5);
   });
+
+  // NR-G67 regression: panY had a "cy * 0 + (...)" dead-code term. Verify
+  // the centering math is symmetric (panX and panY must mirror each other
+  // for a square grid in a square canvas).
+  it("paintableView centers symmetrically on a square grid in a square canvas", () => {
+    const v = paintableView(800, 800, 1000, 1000, 2.5, 12);
+    expect(v.panX).toBeCloseTo(v.panY, 5);
+  });
 });
 
 describe("classify", () => {

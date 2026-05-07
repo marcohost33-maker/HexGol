@@ -799,6 +799,10 @@ export default function App() {
   const dirty  = useRef(true);
   const simStats = useRef({ counter: 0, lastAt: performance.now() });
   const fpsStats = useRef({ count: 0, lastAt: performance.now(), ema: 0 });
+  // NR-G65: simPaused is a hard-pause flag readable by the sim-loop's tick().
+  // The __TEST__ bridge uses it to suspend the sim during deterministic steps
+  // without going through setRunning, which React would batch into a no-op.
+  const simPaused = useRef(false);
   const perfStats = useRef({
     simStepMs: 0,
     renderMs: 0,
@@ -1203,9 +1207,13 @@ export default function App() {
     dirty.current = true;
   }, []);
 
-  const randomize = useCallback(() => {
+  // NR-G66: accept an optional seed override. The __TEST__ bridge uses this
+  // for one-shot deterministic randomize() without round-tripping through
+  // setSeed -> useEffect -> next render.
+  const randomize = useCallback((seedOverride) => {
     reset();
-    const G = getGrid(), g = rng(seed);
+    const usedSeed = Number.isFinite(seedOverride) ? (seedOverride | 0) : seed;
+    const G = getGrid(), g = rng(usedSeed);
     const { c, a } = getCur();
     const d = DENS[denI];
     for (let i = 0; i < G.N; i++) {
@@ -1459,6 +1467,14 @@ export default function App() {
     const tick = () => {
       if (!alive) return;
       const spd = SPEEDS[spR.current];
+      // NR-G65: respect the simPaused hard-pause flag. The bridge's step()
+      // sets it before issuing deterministic steps so the rAF tick that was
+      // already scheduled by setTimeout cannot race ahead and add phantom
+      // generations. A paused tick reschedules itself and yields.
+      if (simPaused.current) {
+        toId = setTimeout(tick, spd <= 16 ? 16 : spd);
+        return;
+      }
       if (spd <= 16) {
         for (let i = 0; i < MAX_STEPS_PER_TICK; i++) step(false);
       } else {
@@ -2195,24 +2211,39 @@ export default function App() {
         };
       },
       step: (n) => {
-        // NR-G63: pause sim before deterministic step, restore after
-        const wasRunning = rR.current;
-        if (wasRunning) setRunning(false);
+        // NR-G65: simPaused (a ref) is read by the rAF sim tick. Setting it
+        // synchronously prevents any in-flight setTimeout from racing the
+        // bridge's deterministic steps. v17.14's setRunning(false)/(true)
+        // toggle was batched away by React and did not actually pause.
+        const wasPaused = simPaused.current;
+        simPaused.current = true;
         const count = Math.max(1, Math.min(1000, n || 1));
-        for (let i = 0; i < count; i++) step(true);
+        try {
+          for (let i = 0; i < count; i++) step(true);
+        } finally {
+          simPaused.current = wasPaused;
+        }
         dirty.current = true;
-        if (wasRunning) setRunning(true);
       },
       advanceTime: (ms) => {
         const stepsApprox = Math.max(1, Math.round((ms || 16.67) / 16.67));
-        const wasRunning = rR.current;
-        if (wasRunning) setRunning(false);
-        for (let i = 0; i < stepsApprox; i++) step(true);
+        const wasPaused = simPaused.current;
+        simPaused.current = true;
+        try {
+          for (let i = 0; i < stepsApprox; i++) step(true);
+        } finally {
+          simPaused.current = wasPaused;
+        }
         dirty.current = true;
-        if (wasRunning) setRunning(true);
       },
-      randomize: () => randomize(),
+      // NR-G66: randomize accepts an optional seed override so tests can
+      // reproduce a specific random initialization without first calling
+      // setSeed and waiting for a re-render. When omitted, uses app state.
+      randomize: (seedOverride) => randomize(seedOverride),
       clear: () => clearAll(),
+      setSeed: (n) => {
+        if (Number.isFinite(n)) setSeed(n | 0);
+      },
       setRuleset: (i) => {
         if (Number.isInteger(i) && i >= 0 && i < RULES.length) setRI(i);
       },

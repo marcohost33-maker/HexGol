@@ -277,7 +277,7 @@ export function paintableView(cw, ch, gw, gh, hr, targetPxR) {
   return {
     zoom: paintZ,
     panX: cw / 2 - cx * paintZ,
-    panY: cy * 0 + (ch / 2 - cy * paintZ),
+    panY: ch / 2 - cy * paintZ,
   };
 }
 
