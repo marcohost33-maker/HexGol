@@ -26,7 +26,7 @@ jobs:
           ref: ${{ github.event.inputs.branch }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 20
           cache: npm
