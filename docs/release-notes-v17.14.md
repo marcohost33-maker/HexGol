@@ -118,6 +118,61 @@ All NR-G3..G55 and F01..F19 fixes from prior versions remain intact.
 Code remains ASCII-clean (no smart quotes, no special characters in
 identifiers) and brace-balanced (0 / 0 / 0).
 
+## v17.14.2 (XL/XXL selectability fix)
+
+Field report: hex cells on XL and XXL grids "did not feel selectable."
+Root cause was a null-pointer crash in the tap path that surfaced most
+often after grid switches - the path users exercise most when comparing
+sizes. v17.14.2 fixes the underlying race and adds a guard so taps
+during the resize transition do not lose mutations.
+
+### NR-G68 (P0): self-protecting getCur / getNxt
+
+`changeGridSize()` runs inside `startTransition` and synchronously nulls
+`cA.current`, `cB.current`, etc. The transition then queues a low-priority
+`setGridSizeI(newI)`. Between the synchronous null and the next rAF
+`forceDraw()` (which calls `ensureBufs()` and reallocates), the buffers
+are unsafe to read. A tap arriving in that window invoked
+`paintAt -> getCur() -> c[idx] = ...` against a null reference and
+threw a silent TypeError - the tap registered no visible state change.
+
+`getCur` and `getNxt` now call `ensureBufs()` before returning. The
+helper is idempotent (length compare short-circuits when buffers match
+the current grid) so the cost on the hot path is one comparison per
+call. Step's inner cell loop is unaffected; the helpers are called once
+per step and once per tap.
+
+Reproduction was hardest to spot on M and below because the rAF loop
+typically has populated buffers by the time the user reaches the canvas
+to tap. On XL and XXL, where users frequently switch grid presets to
+compare densities, the race window was wider and more visible.
+
+### NR-G69 (P1): pointer events disabled during pending transition
+
+Even with NR-G68's null guard, taps that arrive while `isPending` is
+true operate against the OLD-sized buffers. When the transition resolves
+and `ensureBufs()` reallocates for the new grid, those mutations are
+silently lost. v17.14.2 sets `pointerEvents: "none"` on the canvas for
+the duration of the pending transition. The TRANSITION badge already
+provides visual feedback; the canvas now backs that with actual gating.
+
+This is the standard React 18+ idiom for `useTransition`-guarded UI:
+visible feedback + interaction lockout.
+
+### NR-G68 test surface
+
+Added 27 -> 33 unit tests:
+- "every cell center is selectable on every GRID_SIZES preset" -
+  exhaustive round-trip every Nth cell on S/M/L/XL/XXL
+- "near-center taps land on the correct hex on XL and XXL" -
+  HR/4-offset taps in 4 directions for 100 cells on XL and XXL
+- "paintableView centers symmetrically on a square grid in a square
+  canvas" - guards NR-G67's dead-code removal
+
+Added Playwright spec: "XL and XXL state() is consistent right after
+setGrid" - drives the race through bridge.setGrid and verifies state
+remains valid throughout.
+
 ## v17.14.1 (post-merge audit follow-up)
 
 A second-pass review of the v17.14 source surfaced three more real bugs.

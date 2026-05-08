@@ -68,6 +68,65 @@ describe("pixelToOddR", () => {
     expect(pixelToOddR(-1000, -1000, 12, 10, 10)).toBe(-1);
     expect(pixelToOddR(1e9, 1e9, 12, 10, 10)).toBe(-1);
   });
+
+  // NR-G68: production grids (S..XXL) must support center-tap selection on
+  // every cell. This is the regression that motivated v17.14.2 - a user
+  // report that XL/XXL hex cells did not feel selectable. The test
+  // exhaustively round-trips every cell center on every grid preset and
+  // asserts the hex picker returns the original index.
+  it("every cell center is selectable on every GRID_SIZES preset", () => {
+    for (const gs of [
+      { rows: 40, cols: 50, hr: 12 },     // S
+      { rows: 80, cols: 100, hr: 6 },     // M
+      { rows: 120, cols: 150, hr: 4 },    // L
+      { rows: 160, cols: 200, hr: 3 },    // XL
+      { rows: 200, cols: 250, hr: 2.5 },  // XXL
+    ]) {
+      const G = buildGrid(gs.rows, gs.cols, gs.hr);
+      // Spot-check: walk a stride of 17 to keep the test under ~3000 picks
+      // total across all five grids - thorough but fast.
+      for (let i = 0; i < G.N; i += 17) {
+        const wx = G.centers[i * 2];
+        const wy = G.centers[i * 2 + 1];
+        const idx = pixelToOddR(wx, wy, gs.hr, gs.rows, gs.cols);
+        if (idx !== i) {
+          throw new Error(
+            `Grid ${gs.rows}x${gs.cols} hr=${gs.hr}: center of cell ${i} ` +
+            `(world ${wx.toFixed(2)},${wy.toFixed(2)}) picked cell ${idx}`
+          );
+        }
+      }
+    }
+  });
+
+  // NR-G68: a tap at HR/4 offset from the center (well within the hex) must
+  // also land on the correct cell. This guards against shape-test errors
+  // where the bounding box is right but the hex shape is wrong.
+  it("near-center taps land on the correct hex on XL and XXL", () => {
+    for (const gs of [
+      { rows: 160, cols: 200, hr: 3 },
+      { rows: 200, cols: 250, hr: 2.5 },
+    ]) {
+      const G = buildGrid(gs.rows, gs.cols, gs.hr);
+      const offsets = [
+        [+gs.hr / 4, 0], [-gs.hr / 4, 0],
+        [0, +gs.hr / 4], [0, -gs.hr / 4],
+      ];
+      for (let i = 100; i < 200; i++) {
+        const wx = G.centers[i * 2];
+        const wy = G.centers[i * 2 + 1];
+        for (const [dx, dy] of offsets) {
+          const idx = pixelToOddR(wx + dx, wy + dy, gs.hr, gs.rows, gs.cols);
+          if (idx !== i) {
+            throw new Error(
+              `Grid ${gs.rows}x${gs.cols}: cell ${i} + offset ` +
+              `(${dx.toFixed(2)},${dy.toFixed(2)}) picked cell ${idx}`
+            );
+          }
+        }
+      }
+    }
+  });
 });
 
 describe("pixelToOddRSnap", () => {

@@ -893,12 +893,24 @@ export default function App() {
   }, []);
 
   const history = useRef([]);
-  const getCur = () => alt.current
-    ? { c: cB.current, a: aB.current }
-    : { c: cA.current, a: aA.current };
-  const getNxt = () => alt.current
-    ? { c: cA.current, a: aA.current }
-    : { c: cB.current, a: aB.current };
+  // NR-G68: getCur/getNxt are self-protecting. ensureBufs is idempotent
+  // (short-circuits when buffers match the current grid) so the cost is one
+  // length compare per call, but it eliminates a real crash class: a tap
+  // arriving between changeGridSize() nulling the buffers and the next rAF
+  // forceDraw() reallocating them would otherwise dereference null and
+  // silently break selection on XL/XXL where users switch grids most often.
+  const getCur = () => {
+    ensureBufs();
+    return alt.current
+      ? { c: cB.current, a: aB.current }
+      : { c: cA.current, a: aA.current };
+  };
+  const getNxt = () => {
+    ensureBufs();
+    return alt.current
+      ? { c: cA.current, a: aA.current }
+      : { c: cB.current, a: aB.current };
+  };
 
   const cvRef = useRef(null);
   const ctxR = useRef(null);
@@ -2677,6 +2689,14 @@ export default function App() {
             WebkitTouchCallout: "none",
             WebkitTapHighlightColor: "transparent",
             WebkitUserDrag: "none",
+            // NR-G69: discard taps that arrive while the grid resize is
+            // pending. The transition has not yet committed setGridSizeI,
+            // so any tap would mutate the OLD-sized buffers - those
+            // buffers are reallocated when the transition resolves and
+            // the user's tap is silently lost. Disabling pointer events
+            // for the duration is the standard React 18+ pattern for
+            // useTransition-guarded UI.
+            pointerEvents: isPending ? "none" : "auto",
           }}
           onPointerDown={onPD}
           onPointerMove={onCanvasPM}

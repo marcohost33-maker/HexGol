@@ -116,6 +116,32 @@ test.describe("__TEST__ bridge", () => {
     expect(entries.length).toBeGreaterThan(0);
   });
 
+  // NR-G68 regression: prior to v17.14.2 a tap arriving between
+  // changeGridSize() nulling the cell buffers and the next rAF loop
+  // reallocating them would dereference null inside paintAt and silently
+  // throw. The visible symptom was "XL and XXL hex cells feel unselectable"
+  // because grid switches were the most common path to trigger the race.
+  // The fix made getCur/getNxt self-protecting via ensureBufs.
+  test("XL and XXL state() is consistent right after setGrid", async ({ page }) => {
+    for (const i of [3, 4]) {
+      await page.evaluate((gi) => {
+        const t = window.__TEST__!;
+        t.setGrid(gi);
+      }, i);
+      // Don't wait for the transition - the bridge.state() call itself
+      // dereferences the buffers. Pre-fix this would throw because the
+      // buffers were null. Post-fix it returns alive=0 cleanly.
+      const alive = await page.evaluate(() => window.__TEST__!.state().alive);
+      expect(alive).toBeGreaterThanOrEqual(0);
+      // After transition completes, dimensions should match the preset.
+      await page.waitForFunction((gi) => window.__TEST__!.state().gridSizeI === gi,
+                                  i, { timeout: 5_000 });
+      const s = await page.evaluate(() => window.__TEST__!.state());
+      if (i === 3) { expect(s.rows).toBe(160); expect(s.cols).toBe(200); }
+      if (i === 4) { expect(s.rows).toBe(200); expect(s.cols).toBe(250); }
+    }
+  });
+
   // NR-G65 regression: prior to the simPaused ref the bridge's setRunning
   // toggle was batched away by React, leaving the rAF sim loop free to add
   // phantom generations between bridge.step() calls. Now we start a sim
