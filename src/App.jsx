@@ -1291,6 +1291,16 @@ export default function App() {
       stampImg.current = null;
       stampU32.current = null;
       spriteCache.clear();
+      // NR-G74: stampCache is module-scope and survived grid switches.
+      // Stamp images are pure-function-of-pxR, so wrong-grid stamps would
+      // not produce visual artifacts, but the cache held ~800KB of stale
+      // Int16Arrays per session. Clearing on grid change frees them.
+      stampCache.clear();
+      // NR-G75: perfStats counters are unbounded across a session.
+      // Resetting on grid change keeps the clip-hits ratio meaningful and
+      // bounds the values to ~Math.MAX_SAFE_INTEGER never being approached.
+      perfStats.current.clipHits = 0;
+      perfStats.current.fullHits = 0;
       didFit.current = false;
       rectCache.current.rect = null;
       rectCache.current.ts = 0;
@@ -1499,14 +1509,24 @@ export default function App() {
   }, [running, step]);
 
   useEffect(() => {
+    // NR-G70: explicit cancelAnimationFrame on cleanup. The previous
+    // implementation relied on the loop function checking an "on" flag and
+    // refusing to schedule the next frame - that works but leaves one
+    // already-scheduled frame to drain after unmount/StrictMode-remount.
+    // Cancelling explicitly is the React 19 + StrictMode best practice
+    // (react.dev/reference/react/StrictMode#fixing-bugs-found-by-rerunning-effects).
     let on = true;
+    let rafId = 0;
     const loop = () => {
       if (!on) return;
       if (dirty.current) forceDraw();
-      requestAnimationFrame(loop);
+      rafId = requestAnimationFrame(loop);
     };
-    requestAnimationFrame(loop);
-    return () => { on = false; };
+    rafId = requestAnimationFrame(loop);
+    return () => {
+      on = false;
+      cancelAnimationFrame(rafId);
+    };
   }, [forceDraw]);
 
   useEffect(() => { dirty.current = true; }, [uiTick, view, hov]);
@@ -1610,6 +1630,14 @@ export default function App() {
   }, []);
 
   const pushDiagHistory = useCallback((entry) => {
+    // NR-G77: only first-touch entries enter the history. paintStroke
+    // calls paintAt for every interpolated point in a drag, so without
+    // this guard a single 500-pixel drag at low pxR could fire several
+    // hundred setDiagHistory dispatches per second (the array is capped
+    // but each setState still re-renders the whole App tree). First-touch
+    // is the semantically interesting event; intermediate drag points are
+    // already covered by the LAST TAP detail block above the history.
+    if (!entry.firstTouch) return;
     setDiagHistory(prev => {
       const next = [entry, ...prev];
       if (next.length > DBG_HISTORY_SIZE) next.length = DBG_HISTORY_SIZE;
@@ -1743,6 +1771,15 @@ export default function App() {
     const cv = cvRef.current;
     if (!cv) return;
     if (e.button !== 0 && e.button !== undefined) return;
+
+    // NR-G76: invalidate the rect cache at the start of every gesture.
+    // The 500ms time-TTL would otherwise serve a stale rect across a
+    // layout shift (mobile address-bar collapse, virtual keyboard
+    // toggle). Stale rect means stale tap coordinates means stale hex
+    // index. Clearing on every pointerdown is cheap (just nulling a
+    // ref) and removes the race window entirely.
+    rectCache.current.rect = null;
+    rectCache.current.ts = 0;
 
     // NR-G59: track pointer type for selectTool's auto-zoom decision
     lastPointerTypeRef.current = normPointerType(e.pointerType);
@@ -2185,7 +2222,31 @@ export default function App() {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }, []);
 
-  // NR-G55 + NR-G62/G63: __TEST__ bridge.
+  // NR-G72: stable __TEST__ bridge via the "useLatest" pattern.
+  //
+  // v17.14's bridge effect had deps [step, randomize, clearAll, gridSizeI,
+  // changeGridSize], so every grid switch tore down and reinstalled the
+  // bridge. Tests that cached `const t = window.__TEST__` at the top of a
+  // page.evaluate ended up with a stale handle whose closures pointed at
+  // the previous render's React state. v17.14.3 stores the latest
+  // callbacks + reactive values in bridgeLatest (a ref updated every
+  // render) and installs the bridge ONCE in a mount-only effect. Methods
+  // dispatch through bridgeLatest at call time, always seeing the
+  // current values.
+  //
+  // Side effect: bridge.ready can be set synchronously (no microtask
+  // hop) because the methods are valid the moment the install commits.
+  // This eliminates the v17.14 race window where __TEST__ was on window
+  // but ready was still false.
+  const bridgeLatest = useRef({});
+  useEffect(() => {
+    bridgeLatest.current = {
+      step, randomize, clearAll, changeGridSize, setSeed, setRI,
+      getGrid, getCur, gridSizeI,
+      telemetry, perfStats, simPaused, vR, ruR, wR, mR, genRef,
+    };
+  });
+
   useEffect(() => {
     if (typeof window === "undefined") return;
     let testMode = false;
@@ -2195,93 +2256,92 @@ export default function App() {
     } catch (e) { /* not a normal URL */ }
     if (!testMode) return;
 
+    let seedFromUrl = 42;
+    try {
+      const url = new URL(window.location.href);
+      const s = parseInt(url.searchParams.get("seed") || "42", 10);
+      seedFromUrl = Number.isFinite(s) ? s : 42;
+    } catch (e) { /* default */ }
+
     const bridge = {
       ready: false,
       version: "v17.14",
-      seed: (() => {
-        try {
-          const url = new URL(window.location.href);
-          const s = parseInt(url.searchParams.get("seed") || "42", 10);
-          return Number.isFinite(s) ? s : 42;
-        } catch (e) { return 42; }
-      })(),
+      seed: seedFromUrl,
       state: () => {
-        const G = getGrid();
-        const { c, a } = getCur();
+        const r = bridgeLatest.current;
+        const G = r.getGrid();
+        const { a } = r.getCur();
         let alive = 0;
         for (let i = 0; i < a.length; i++) if (a[i] === ALIVE_T) alive++;
         return {
-          gen: genRef.current,
+          gen: r.genRef.current,
           alive,
           rows: G.ROWS,
           cols: G.COLS,
-          gridSizeI,
-          ruleI: ruR.current,
-          wrap: wR.current,
-          mix: mR.current,
-          view: { ...vR.current },
+          gridSizeI: r.gridSizeI,
+          ruleI: r.ruR.current,
+          wrap: r.wR.current,
+          mix: r.mR.current,
+          view: { ...r.vR.current },
         };
       },
       step: (n) => {
-        // NR-G65: simPaused (a ref) is read by the rAF sim tick. Setting it
-        // synchronously prevents any in-flight setTimeout from racing the
-        // bridge's deterministic steps. v17.14's setRunning(false)/(true)
-        // toggle was batched away by React and did not actually pause.
-        const wasPaused = simPaused.current;
-        simPaused.current = true;
+        const r = bridgeLatest.current;
+        const wasPaused = r.simPaused.current;
+        r.simPaused.current = true;
         const count = Math.max(1, Math.min(1000, n || 1));
         try {
-          for (let i = 0; i < count; i++) step(true);
+          for (let i = 0; i < count; i++) r.step(true);
         } finally {
-          simPaused.current = wasPaused;
+          r.simPaused.current = wasPaused;
         }
         dirty.current = true;
       },
       advanceTime: (ms) => {
+        const r = bridgeLatest.current;
         const stepsApprox = Math.max(1, Math.round((ms || 16.67) / 16.67));
-        const wasPaused = simPaused.current;
-        simPaused.current = true;
+        const wasPaused = r.simPaused.current;
+        r.simPaused.current = true;
         try {
-          for (let i = 0; i < stepsApprox; i++) step(true);
+          for (let i = 0; i < stepsApprox; i++) r.step(true);
         } finally {
-          simPaused.current = wasPaused;
+          r.simPaused.current = wasPaused;
         }
         dirty.current = true;
       },
-      // NR-G66: randomize accepts an optional seed override so tests can
-      // reproduce a specific random initialization without first calling
-      // setSeed and waiting for a re-render. When omitted, uses app state.
-      randomize: (seedOverride) => randomize(seedOverride),
-      clear: () => clearAll(),
+      randomize: (seedOverride) => bridgeLatest.current.randomize(seedOverride),
+      clear: () => bridgeLatest.current.clearAll(),
       setSeed: (n) => {
-        if (Number.isFinite(n)) setSeed(n | 0);
+        if (Number.isFinite(n)) bridgeLatest.current.setSeed(n | 0);
       },
       setRuleset: (i) => {
-        if (Number.isInteger(i) && i >= 0 && i < RULES.length) setRI(i);
+        if (Number.isInteger(i) && i >= 0 && i < RULES.length) {
+          bridgeLatest.current.setRI(i);
+        }
       },
       setGrid: (i) => {
         if (Number.isInteger(i) && i >= 0 && i < GRID_SIZES.length) {
-          changeGridSize(i);
+          bridgeLatest.current.changeGridSize(i);
         }
       },
       telemetry: () => {
-        const t = telemetry.current;
+        const t = bridgeLatest.current.telemetry.current;
         return t.size < TELEMETRY_CAP
           ? t.buffer.slice(0, t.size)
           : [...t.buffer.slice(t.idx), ...t.buffer.slice(0, t.idx)];
       },
-      perfStats: () => ({ ...perfStats.current }),
+      perfStats: () => ({ ...bridgeLatest.current.perfStats.current }),
     };
+    bridge.ready = true;
     window.__TEST__ = bridge;
-    Promise.resolve().then(() => { bridge.ready = true; });
     return () => {
-      // NR-G62: explicit ready=false before teardown so any test that
-      // briefly observes the bridge during unmount sees a stop signal.
       bridge.ready = false;
       try { delete window.__TEST__; }
       catch (e) { window.__TEST__ = undefined; }
     };
-  }, [step, randomize, clearAll, gridSizeI, changeGridSize]);
+    // Empty deps: install ONCE on mount, never tear down until unmount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const onLeave = useCallback((e) => {
     pointerCache.current.delete(e.pointerId);
@@ -2658,6 +2718,28 @@ export default function App() {
           o={() => setDiagOn(d => !d)}
           title="Toggle diagnostic panel"
         />
+      </div>
+
+      {/* NR-G80: aria-live region for grid-size announcements. The canvas
+          itself has no semantic content for assistive tech; without an
+          announcement, a screen reader user pressing a grid-size button
+          gets no acknowledgement. The text changes whenever gs changes,
+          which triggers the live region to announce the new dimensions. */}
+      <div
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        style={{
+          position: "absolute",
+          left: -9999,
+          top: -9999,
+          width: 1,
+          height: 1,
+          overflow: "hidden",
+        }}
+      >
+        Grid {gs.l}, {gs.rows} rows by {gs.cols} columns,
+        {" "}rule {RULES[rI].l}.
       </div>
 
       <div

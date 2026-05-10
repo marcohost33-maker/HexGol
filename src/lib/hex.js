@@ -218,6 +218,17 @@ export function pointInHex(dx, dy, r) {
 // =============================================================================
 export function cMix(nR, nB, nY, ci) {
   if (nR + nB + nY === 0) return CR;
+  // NR-G73: integer-tie short-circuit. (nR, nB, nY) ranging over the same
+  // value sums to a vector whose magnitude is mathematically zero (the
+  // three R/B/Y unit vectors are cube roots of unity), but FP rounding
+  // gives a small non-zero magnitude. The original `< 1e-10` check fired
+  // for nR=nB=nY=1 (residual ~1e-32) but only by luck of the rounding -
+  // larger equal counts could accumulate enough error to slip past the
+  // threshold and produce a lattice-dependent winner. Test on integer
+  // equality first; that is the actual semantic we want.
+  if (nR === nB && nB === nY) {
+    return [CR, CB, CY][((ci * 31 + 7) >>> 0) % 3];
+  }
   const sx = nR * cosR + nB * cosB + nY * cosY;
   const sy = nR * sinR + nB * sinB + nY * sinY;
   if (sx * sx + sy * sy < 1e-10) {

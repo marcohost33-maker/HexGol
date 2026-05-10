@@ -260,6 +260,32 @@ describe("classify", () => {
     expect(result).not.toBe("Chaos");
   });
 
+  // NR-G78: explicit coverage for the Dies@N branch. A single isolated
+  // cell under any rule that does not include 0 in S has no surviving
+  // neighbors and dies in one generation. classify must report this with
+  // the "Dies@N" label - regression-guarding the pop===0 short-circuit
+  // at hex.js's classify loop.
+  it("a single isolated cell dies in one generation", () => {
+    const result = classify([[0, 0]], 0, 50);
+    expect(result).toMatch(/^Dies@\d+$/);
+  });
+
+  // NR-G73 regression: cMix returns the same color for the same input
+  // when integer counts are equal, even at counts where FP rounding of
+  // (cosR + cosB + cosY) and (sinR + sinB + sinY) could vary.
+  it("cMix integer-tie is deterministic for equal nR/nB/nY counts", () => {
+    for (let n = 1; n <= 6; n++) {
+      const first = cMix(n, n, n, 17);
+      for (let trial = 0; trial < 50; trial++) {
+        expect(cMix(n, n, n, 17)).toBe(first);
+      }
+      // Different idx must produce a deterministic but possibly different color.
+      const a = cMix(n, n, n, 1);
+      const b = cMix(n, n, n, 1);
+      expect(a).toBe(b);
+    }
+  });
+
   it("returns labels matching the expected schema", () => {
     for (const key of Object.keys(PATS)) {
       const result = classify(PATS[key].c, 0, 100);

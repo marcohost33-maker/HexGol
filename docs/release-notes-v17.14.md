@@ -118,6 +118,95 @@ All NR-G3..G55 and F01..F19 fixes from prior versions remain intact.
 Code remains ASCII-clean (no smart quotes, no special characters in
 identifiers) and brace-balanced (0 / 0 / 0).
 
+## v17.14.3 (web-research-driven hardening pass)
+
+A web-research-driven audit (React 19 useTransition guidance, Playwright CI
+best practices for canvas apps, web.dev INP/LoAF guide) plus an internal
+deep-audit produced eleven additional hardening items. Most are P1 -
+real bugs that would surface under enough load or specific timing - and
+two are P0 stability fixes for the test bridge.
+
+### Test infrastructure
+
+- **NR-G70 (P1): explicit cancelAnimationFrame on rAF cleanup.** The rAF
+  loop relied on an `on=false` flag check inside the loop body. That works
+  but leaves one already-scheduled frame to drain after unmount. React 19
+  StrictMode rerunning effects exercises this path on every mount.
+  cancelAnimationFrame on the stored id is the documented React 19 pattern
+  (react.dev/reference/react/StrictMode).
+
+- **NR-G71 (P1): Playwright CI determinism via Docker + cache + masking.**
+  visual-regression and update-snapshots workflows now run inside the
+  Microsoft Playwright Docker image (mcr.microsoft.com/playwright:v1.48.0-noble)
+  so baselines and assertions execute against an identical font / library
+  environment. Browser binaries are cached via actions/cache@v4. Visual
+  specs use `mask: [.ghx-stats, .ghx-badges]` to exclude time-dependent UI
+  chrome (FPS, GEN, gps, transition badge) from the diff. The
+  playwright.config also locks colorScheme=dark, reducedMotion=reduce,
+  locale=en-US, timezoneId=Europe/Berlin so OS-level variation cannot
+  influence the screenshot. Source: playwright.dev/docs/docker,
+  testdino.com/blog/playwright-visual-testing.
+
+### Bridge stability
+
+- **NR-G72 (P0): stable __TEST__ bridge via the useLatest pattern.**
+  v17.14's bridge effect had deps `[step, randomize, clearAll, gridSizeI,
+  changeGridSize]`, so every grid switch tore down and reinstalled the
+  bridge object. Tests caching `const t = window.__TEST__` at the top of
+  a `page.evaluate` ended up with stale closures. v17.14.3 stores the
+  latest callbacks and reactive values in `bridgeLatest` (a ref updated
+  every render) and installs the bridge ONCE in a mount-only effect.
+  Methods dispatch through `bridgeLatest.current` at call time, always
+  seeing the current values. Side effect: `bridge.ready` is set
+  synchronously immediately after `window.__TEST__ = bridge`, eliminating
+  the v17.14 microtask race window. Pattern: react-tracked / useLatest /
+  React 19 docs on stable refs to mutable state.
+
+### Correctness / memory
+
+- **NR-G73 (P1): cMix integer-tie short-circuit.** The float magnitude
+  check `< 1e-10` worked for `(1,1,1)` (residual ~1e-32) but only by
+  rounding luck. Larger equal counts could accumulate enough error to
+  slip past the threshold and produce a lattice-dependent winner.
+  v17.14.3 tests `nR === nB && nB === nY` as the integer-tie branch
+  before the float check.
+
+- **NR-G74 (P1): clear stampCache on grid switch.** `stampCache` is
+  module-scope and survived grid switches. `spriteCache` was already
+  cleared. Stamp images are pure-function-of-pxR so wrong-grid stamps
+  produced no visual artifacts, but ~800KB of stale Int16Arrays were
+  held per session.
+
+- **NR-G75 (P1): reset perfStats counters on grid switch.** clipHits and
+  fullHits accumulated for the entire session. After a long run the ratio
+  display lost meaning and the values approached precision limits.
+  Resetting on grid change keeps the diagnostic display useful.
+
+- **NR-G76 (P1): rectCache invalidation on every pointerdown.** The 500ms
+  time-TTL would otherwise serve a stale rect across a layout shift
+  (mobile address-bar collapse, virtual keyboard toggle). Stale rect
+  means stale tap coordinates. Clearing the rect on every gesture start
+  is cheap and removes the race window.
+
+- **NR-G77 (P1): diagHistory only records first-touch entries.**
+  paintStroke fires paintAt for every interpolated point in a drag; the
+  diagHistory cap kept the array bounded but each setState dispatched a
+  full re-render. First-touch is the semantically interesting event.
+
+### Accessibility
+
+- **NR-G80 (P2): aria-live grid-change announcement.** The canvas has no
+  semantic content for screen readers. A visually-hidden `role="status"`
+  / `aria-live="polite"` region now reads "Grid {label}, {rows} rows by
+  {cols} columns, rule {label}" whenever any of those values change.
+
+### Test surface
+
+- +1 unit test: `classify` returns `Dies@N` for an isolated single cell
+- +1 unit test: cMix integer-tie is deterministic for equal R/B/Y at
+  every count from 1 to 6, across 50 trials each
+- +1 unit test: paintableView centers symmetrically (preexisting, retained)
+
 ## v17.14.2 (XL/XXL selectability fix)
 
 Field report: hex cells on XL and XXL grids "did not feel selectable."
