@@ -61,7 +61,7 @@ import {
   TB, RULES, birthLUT, survLUT, ageBucket,
   HC6, HS6,
   buildGrid, pixelToOddR, pixelToOddRSnap, cMix, mMix, rng,
-  minZoom, fitView, paintableView,
+  minZoom, fitInsideZoom, fitView, paintableView, clampPan,
   classify, PATS, PAT_KEYS, GRID_SIZES,
   SPEEDS, SPLBL, DENS, cl,
 } from "./lib/hex.js";
@@ -1019,11 +1019,28 @@ export default function App() {
   // NR-G47: viewport changes invalidate the dirty-bbox optimization. The
   // bbox is reset to "full grid" so forceDraw falls back to full render
   // for one frame; the bbox returns to fine-grained tracking immediately.
+  //
+  // NR-G83: every viewport update is clamped against clampPan so the user
+  // cannot pan the grid completely off-screen. We require at least 20% of
+  // the canvas to overlap the grid in both axes, which is enough to give
+  // the user a visible anchor for re-orienting and still permits seeing
+  // distant cells on XXL.
   const applyView = useCallback((updater, commit) => {
     const next = typeof updater === "function" ? updater(vR.current) : updater;
+    const G = getGrid();
+    const cv = cvRef.current;
+    if (G && cv) {
+      const cw = cv.clientWidth, ch = cv.clientHeight;
+      if (cw > 0 && ch > 0) {
+        const clamped = clampPan(
+          next.panX, next.panY, cw, ch, G.GRID_W, G.GRID_H, next.zoom, 0.2
+        );
+        next.panX = clamped.panX;
+        next.panY = clamped.panY;
+      }
+    }
     vR.current = next;
     dirty.current = true;
-    const G = getGrid();
     if (G) {
       const bb = dirtyBBox.current;
       bb.valid = true;
@@ -1864,7 +1881,7 @@ export default function App() {
       const mx = ncx - rect.left, my = ncy - rect.top;
       const panDx = ncx - pinch.current.cx, panDy = ncy - pinch.current.cy;
       const G = getGrid();
-      const mZ = minZoom(rect.width, rect.height, G.GRID_W, G.GRID_H);
+      const mZ = fitInsideZoom(rect.width, rect.height, G.GRID_W, G.GRID_H);
       const nz = cl(v.zoom * ratio, mZ, 80);
       const npx = mx - (mx - v.panX) * (nz / v.zoom) + panDx;
       const npy = my - (my - v.panY) * (nz / v.zoom) + panDy;
@@ -2005,7 +2022,7 @@ export default function App() {
     const onWh = (e) => {
       e.preventDefault();
       const G = getGrid(), rect = getCachedRect(), v = vR.current;
-      const mZ = minZoom(rect.width, rect.height, G.GRID_W, G.GRID_H);
+      const mZ = fitInsideZoom(rect.width, rect.height, G.GRID_W, G.GRID_H);
       if (e.ctrlKey || e.metaKey) {
         const mx = e.clientX - rect.left, my = e.clientY - rect.top;
         let zoomDelta;
@@ -2071,7 +2088,7 @@ export default function App() {
       const v = vR.current;
       const G = getGrid();
       const rect = getCachedRect();
-      const mZ = minZoom(rect.width, rect.height, G.GRID_W, G.GRID_H);
+      const mZ = fitInsideZoom(rect.width, rect.height, G.GRID_W, G.GRID_H);
       const nz = cl(v.zoom * ratio, mZ, 80);
       const npx = anchorX - (anchorX - v.panX) * (nz / v.zoom);
       const npy = anchorY - (anchorY - v.panY) * (nz / v.zoom);
@@ -2452,6 +2469,15 @@ export default function App() {
   // NR-G61: scoped <style> contains only application-specific rules. Fonts
   // are loaded from index.html so we do not pay for an inline @import that
   // re-runs on every render and bypasses preconnect priorities.
+  // NR-G84: Responsive layout with a square canvas frame on laptop /
+  // desktop. On wide viewports (>= 900px) the canvas is centered in a
+  // 1:1 wrapper sized to the smaller of available width and available
+  // height; the surrounding controls flow around it. On narrow viewports
+  // the canvas falls back to filling the available width and uses a
+  // fixed aspect ratio of 4:3 (laptop) or its natural width on phones.
+  //
+  // The aspect-ratio CSS property is supported in every browser >=2021.
+  // We use a min() expression so the square never exceeds either axis.
   const scopedCss = `
     * { box-sizing: border-box; }
     button:focus-visible { outline: 2px solid ${T.accent}; outline-offset: 2px; }
@@ -2470,11 +2496,27 @@ export default function App() {
       );
       z-index: 2;
     }
+    .ghx-canvas-frame {
+      aspect-ratio: 1 / 1;
+      width: min(100%, calc(100vh - 280px));
+      max-width: 100%;
+      max-height: 100%;
+      margin: 0 auto;
+      align-self: center;
+      justify-self: center;
+    }
+    @media (max-width: 900px) {
+      .ghx-canvas-frame {
+        aspect-ratio: 4 / 3;
+        width: 100%;
+      }
+    }
     @media (max-width: 640px) {
       .ghx-header { grid-template-columns: 1fr !important; gap: 6px !important; }
       .ghx-header > .ghx-stats { justify-content: flex-start !important; gap: 10px !important; }
       .ghx-header > .ghx-badges { justify-content: flex-start !important; }
       .ghx-display-title { font-size: 22px !important; }
+      .ghx-canvas-frame { aspect-ratio: auto; width: 100%; height: 100%; }
     }
     @keyframes ghx-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
     .ghx-pulsing { animation: ghx-pulse 600ms ease-in-out infinite; }
@@ -2679,10 +2721,29 @@ export default function App() {
         <Btn
           l="FIT"
           o={() => {
+            // NR-G82: true fit-inside. The whole grid is visible (letter-
+            // boxed on the axis where the canvas overflows). For larger
+            // grids on a square canvas this produces tiny cells, but
+            // that is the user's explicit intent when they press FIT.
+            // Use the "PAINT" button or zoom-in if they want big cells.
             const { cw, ch } = getVD();
             setView(fitView(cw, ch, G.GRID_W, G.GRID_H));
           }}
-          title="Fit grid to viewport"
+          title="Show whole grid (cells may be tiny - use PAINT/Z+ for tap)"
+        />
+        <Btn
+          l="PXR"
+          o={() => {
+            // NR-G82b: paintable reset. Re-runs paintableView for the
+            // current pointer type, snapping back to a zoom where cells
+            // are at least getPaintMinPxR(pointerType) pixels wide.
+            // Bridges the FIT/painting tradeoff: FIT shows everything,
+            // PXR makes everything tappable.
+            const { cw, ch } = getVD();
+            const targetPxR = getPaintMinPxR(lastPointerTypeRef.current);
+            setView(paintableView(cw, ch, G.GRID_W, G.GRID_H, G.HR, targetPxR));
+          }}
+          title="Reset zoom so cells are paintable for current pointer type"
         />
         <Btn
           l="PAN"
@@ -2742,12 +2803,24 @@ export default function App() {
         {" "}rule {RULES[rI].l}.
       </div>
 
+      {/* NR-G84: outer flex container centers the square canvas frame
+          within the available vertical space. The frame itself enforces
+          aspect-ratio: 1 on laptop and 4:3 / fill on smaller screens via
+          the .ghx-canvas-frame CSS class. */}
       <div
-        className="scanlines"
-        aria-busy={isPending ? "true" : "false"}
         style={{
           flex: 1,
           minHeight: 200,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          overflow: "hidden",
+        }}
+      >
+      <div
+        className="scanlines ghx-canvas-frame"
+        aria-busy={isPending ? "true" : "false"}
+        style={{
           position: "relative",
           overflow: "hidden",
           border: T.border,
@@ -2789,13 +2862,14 @@ export default function App() {
           onContextMenu={(e) => e.preventDefault()}
         />
       </div>
+      </div>
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 5 }}>
         <Btn
           l="Z-"
           o={() => {
             const { cw, ch } = getVD();
-            const mZ = minZoom(cw, ch, G.GRID_W, G.GRID_H);
+            const mZ = fitInsideZoom(cw, ch, G.GRID_W, G.GRID_H);
             applyView(v => {
               const mx = cw / 2, my = ch / 2;
               const nz = cl(v.zoom / 1.3, mZ, 80);
@@ -2810,7 +2884,7 @@ export default function App() {
           l="Z+"
           o={() => {
             const { cw, ch } = getVD();
-            const mZ = minZoom(cw, ch, G.GRID_W, G.GRID_H);
+            const mZ = fitInsideZoom(cw, ch, G.GRID_W, G.GRID_H);
             applyView(v => {
               const mx = cw / 2, my = ch / 2;
               const nz = cl(v.zoom * 1.3, mZ, 80);

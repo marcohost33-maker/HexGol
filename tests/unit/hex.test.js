@@ -9,7 +9,7 @@ import {
   RULES, birthLUT, survLUT, ageBucket,
   buildGrid, pixelToOddR, pixelToOddRSnap, pointInHex,
   cMix, mMix, rng,
-  minZoom, fitView, paintableView,
+  minZoom, fitInsideZoom, fitView, paintableView, clampPan,
   classify, PATS,
 } from "../../src/lib/hex.js";
 
@@ -212,16 +212,37 @@ describe("rng", () => {
 });
 
 describe("viewport math", () => {
-  it("minZoom is clamped to >= 0.08", () => {
-    expect(minZoom(100, 100, 1e6, 1e6)).toBeGreaterThanOrEqual(0.08);
+  it("minZoom is clamped to >= 0.04", () => {
+    expect(minZoom(100, 100, 1e6, 1e6)).toBeGreaterThanOrEqual(0.04);
   });
 
-  it("fitView centers the grid", () => {
-    const v = fitView(800, 600, 400, 300);
-    // Grid scaled to canvas should be centered with positive pan.
-    expect(v.zoom).toBeCloseTo(2, 5);
+  // NR-G81 regression: fitInsideZoom (Math.min) and minZoom (Math.max)
+  // diverge whenever the canvas and grid aspect ratios disagree. The FIT
+  // button uses fitInsideZoom; the wheel-zoom floor uses minZoom.
+  it("fitInsideZoom shows the WHOLE grid (Math.min of ratios)", () => {
+    // Grid 1000x500, canvas 800x800.
+    // minZoom = max(800/1000, 800/500) = max(0.8, 1.6) = 1.6 (overflows)
+    // fitInsideZoom = min(800/1000, 800/500) = 0.8 (whole grid fits)
+    const fz = fitInsideZoom(800, 800, 1000, 500);
+    expect(fz).toBeCloseTo(0.8, 5);
+    const mZ = minZoom(800, 800, 1000, 500);
+    expect(mZ).toBeCloseTo(1.6, 5);
+  });
+
+  it("fitInsideZoom guards against zero / negative dimensions", () => {
+    expect(fitInsideZoom(0, 100, 100, 100)).toBeGreaterThan(0);
+    expect(fitInsideZoom(100, 0, 100, 100)).toBeGreaterThan(0);
+    expect(fitInsideZoom(100, 100, 0, 100)).toBeGreaterThan(0);
+    expect(fitInsideZoom(100, 100, 100, 0)).toBeGreaterThan(0);
+  });
+
+  it("fitView centers the grid using true fit-inside (NR-G81)", () => {
+    // Grid 1000x500, canvas 800x800. fit-inside zoom = 0.8.
+    // Grid on screen: 800x400. Centered: panX=0, panY=200.
+    const v = fitView(800, 800, 1000, 500);
+    expect(v.zoom).toBeCloseTo(0.8, 5);
     expect(v.panX).toBeCloseTo(0, 5);
-    expect(v.panY).toBeCloseTo(0, 5);
+    expect(v.panY).toBeCloseTo(200, 5);
   });
 
   it("paintableView falls back to fitView when fit-zoom is already paintable", () => {
@@ -245,6 +266,41 @@ describe("viewport math", () => {
   it("paintableView centers symmetrically on a square grid in a square canvas", () => {
     const v = paintableView(800, 800, 1000, 1000, 2.5, 12);
     expect(v.panX).toBeCloseTo(v.panY, 5);
+  });
+
+  // NR-G83 regression: clampPan must keep at least minVisibleRatio of the
+  // canvas overlapping the grid. Without this the user can pan to a state
+  // where only black is visible and lose their work.
+  describe("clampPan", () => {
+    it("returns the input unchanged when the grid is fully visible", () => {
+      const c = clampPan(50, 50, 800, 600, 400, 300, 1, 0.2);
+      expect(c.panX).toBe(50);
+      expect(c.panY).toBe(50);
+    });
+
+    it("prevents pan from moving the grid off-screen to the right", () => {
+      // Canvas 800w, grid 400 wide at zoom 1 = 400 screen px.
+      // panX=900 would push the grid's left edge at x=900, right edge at
+      // x=1300, both off the canvas. clampPan with r=0.2 keeps right edge
+      // >= 160 (0.2 * 800), so left edge <= 160 - 400... actually the
+      // constraint is panX <= (1-r)*cw = 640. So panX clamps to 640.
+      const c = clampPan(900, 50, 800, 600, 400, 300, 1, 0.2);
+      expect(c.panX).toBeLessThanOrEqual(640);
+    });
+
+    it("prevents pan from moving the grid off-screen to the left", () => {
+      // panX=-500 would push the grid completely off to the left.
+      // Constraint: panX >= r*cw - gwS = 0.2*800 - 400 = -240. Clamp to -240.
+      const c = clampPan(-500, 50, 800, 600, 400, 300, 1, 0.2);
+      expect(c.panX).toBeGreaterThanOrEqual(-240);
+    });
+
+    it("clamps vertical pan symmetrically", () => {
+      const above = clampPan(0, -500, 800, 600, 400, 300, 1, 0.2);
+      const below = clampPan(0, 9000, 800, 600, 400, 300, 1, 0.2);
+      expect(above.panY).toBeGreaterThanOrEqual(0.2 * 600 - 300);
+      expect(below.panY).toBeLessThanOrEqual(0.8 * 600);
+    });
   });
 });
 

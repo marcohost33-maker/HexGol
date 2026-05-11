@@ -118,6 +118,81 @@ All NR-G3..G55 and F01..F19 fixes from prior versions remain intact.
 Code remains ASCII-clean (no smart quotes, no special characters in
 identifiers) and brace-balanced (0 / 0 / 0).
 
+## v17.14.4 (L/XL/XXL paint reliability + square canvas)
+
+Field report: "L, XL and XXL formats do not work - the hex cells cannot be
+painted. The frame around the hex field should be adjusted, preferably
+square, redesign the layout accordingly."
+
+Investigation revealed two distinct issues:
+
+1. The `FIT` button used `minZoom` which is `Math.max(cw/gw, ch/gh)` -
+   that is FILL semantics, not FIT semantics. The grid filled the canvas
+   in one axis and overflowed the other, so pressing FIT cropped the
+   grid. Users had no way to actually see the whole grid.
+2. The canvas wrapper had `flex: 1` so on laptop screens with the
+   toolbar rows taking vertical space, the canvas became wide and short
+   (e.g. 1280x250). Combined with the wide world-space grid (~1050 world
+   units wide for every preset), the cells on L/XL/XXL were stretched
+   horizontally and cramped vertically.
+
+### NR-G81 (P0): true fit-inside semantics
+
+`src/lib/hex.js` now exports two distinct zoom functions:
+- `minZoom`: FILL behavior (Math.max). Kept for code that wants the
+  "smallest zoom at which the canvas is filled by the grid" - no callers
+  remain after v17.14.4 but the export is kept for downstream code.
+- `fitInsideZoom`: FIT behavior (Math.min). The zoom at which the whole
+  grid is visible inside the canvas, with letterboxing.
+
+`fitView` switches to `fitInsideZoom` so it actually fits.
+
+### NR-G82 (P0): FIT button is true fit-inside; PXR button is paintable reset
+
+The FIT button now calls `fitView` (true fit-inside) so users always see
+the whole grid. For grids whose fit-zoom yields below-paintable pxR
+(common on L/XL/XXL in a square canvas), a new PXR button calls
+`paintableView` which snaps to a zoom where cells are at least
+`PAINT_MIN_PXR[pointerType]` pixels wide. The two buttons together cover
+both user intents: "show me everything" and "make cells tappable."
+
+### NR-G83 (P1): pan clamping
+
+`applyView` now clamps the resulting `panX/panY` against `clampPan(...,
+minVisibleRatio=0.2)` so the user cannot drag the grid completely off-
+screen. The constraint keeps at least 20% of the canvas overlapping the
+grid in both axes; users always have a visual anchor to re-orient.
+
+Wheel/pinch/Z+/Z- handlers also switch their zoom floor from `minZoom`
+(FILL) to `fitInsideZoom` (FIT). This lets users zoom out to see the
+whole grid via the wheel, matching the FIT button's reach.
+
+### NR-G84 (P0): square canvas wrapper on laptop
+
+The canvas wrapper now applies a new CSS class `.ghx-canvas-frame` with
+`aspect-ratio: 1 / 1` on viewports >= 900px wide. The frame is centered
+within the available vertical space via flexbox. Below 900px it falls
+back to `4 / 3`; below 640px it disables the constraint entirely (fills
+the available space, as before).
+
+The square frame is sized by `width: min(100%, calc(100vh - 280px))` so
+it never exceeds either axis. The 280px reserve accounts for header +
+toolbars + footer. On a typical 1280x800 laptop the canvas frame
+becomes ~520x520 device-px, which is plenty for paintable XXL cells
+(pxR=12 yields ~500x500 visible world units, or ~70% of the grid).
+
+### Test surface
+
+35 / 35 Vitest specs pass:
+- +1 fitInsideZoom is Math.min of ratios (different from minZoom)
+- +1 fitInsideZoom guards against zero / negative dimensions
+- +1 fitView centers using true fit-inside (200px Y-letterbox for 800x800
+  canvas with 1000x500 grid)
+- +4 clampPan keeps grid mostly visible in 4 directions
+- Existing tests updated for new minZoom floor (0.04 from 0.08)
+
+Production build: 248.95 kB / 79.14 kB gzip on Vite 8 + React 19.
+
 ## v17.14.3 (web-research-driven hardening pass)
 
 A web-research-driven audit (React 19 useTransition guidance, Playwright CI

@@ -1,6 +1,6 @@
 {
   "name": "hexgol",
-  "version": "17.14.3",
+  "version": "17.14.4",
   "private": true,
   "type": "module",
   "description": "GolHex - Hexagonal Game of Life with telemetry pipeline and __TEST__ bridge",
