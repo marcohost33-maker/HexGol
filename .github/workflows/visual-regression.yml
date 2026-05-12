@@ -37,7 +37,7 @@ jobs:
       # includes them but actions/setup-node lays a fresh node_modules so
       # we still need a place for npx playwright to resolve them quickly.
       - name: Cache Playwright browsers
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         id: pw-cache
         with:
           path: ~/.cache/ms-playwright
