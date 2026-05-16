@@ -4,6 +4,11 @@ name: update-snapshots
 # visual change has been merged into App.jsx and the committed baselines
 # need to follow. The job pushes the updated PNGs back to the source
 # branch as a single commit named "chore(snapshots): refresh baselines".
+#
+# We run inside the same Microsoft Playwright Docker image used by
+# visual-regression.yml so the baselines committed here match exactly what
+# CI later compares against. Without this lockstep, snapshots refreshed on
+# a developer laptop would always diff in CI.
 
 on:
   workflow_dispatch:
@@ -20,22 +25,35 @@ jobs:
   refresh:
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    container:
+      image: mcr.microsoft.com/playwright:v1.48.0-noble
+      options: --user 1001:1001
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: ${{ github.event.inputs.branch }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 20
           cache: npm
 
+      - name: Cache Playwright browsers
+        uses: actions/cache@v5
+        id: pw-cache
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-playwright-
+
       - name: Install dependencies
         run: npm ci
 
-      - name: Install Playwright browsers
-        run: npx playwright install --with-deps chromium
+      - name: Install Playwright browsers (skip if cached)
+        if: steps.pw-cache.outputs.cache-hit != 'true'
+        run: npx playwright install chromium
 
       - name: Build production bundle
         run: npm run build
@@ -44,9 +62,11 @@ jobs:
         run: npx playwright test --update-snapshots
         env:
           CI: "true"
+          HOME: /root
 
       - name: Commit refreshed snapshots
         run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           if git diff --quiet -- tests/e2e/__snapshots__; then

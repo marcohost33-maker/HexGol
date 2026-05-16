@@ -32,10 +32,6 @@ updates:
           - "@playwright/*"
           - "@testing-library/*"
           - "jsdom"
-      lint:
-        patterns:
-          - "eslint"
-          - "eslint-*"
 
   - package-ecosystem: github-actions
     directory: "/"

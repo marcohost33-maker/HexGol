@@ -218,6 +218,17 @@ export function pointInHex(dx, dy, r) {
 // =============================================================================
 export function cMix(nR, nB, nY, ci) {
   if (nR + nB + nY === 0) return CR;
+  // NR-G73: integer-tie short-circuit. (nR, nB, nY) ranging over the same
+  // value sums to a vector whose magnitude is mathematically zero (the
+  // three R/B/Y unit vectors are cube roots of unity), but FP rounding
+  // gives a small non-zero magnitude. The original `< 1e-10` check fired
+  // for nR=nB=nY=1 (residual ~1e-32) but only by luck of the rounding -
+  // larger equal counts could accumulate enough error to slip past the
+  // threshold and produce a lattice-dependent winner. Test on integer
+  // equality first; that is the actual semantic we want.
+  if (nR === nB && nB === nY) {
+    return [CR, CB, CY][((ci * 31 + 7) >>> 0) % 3];
+  }
   const sx = nR * cosR + nB * cosB + nY * cosY;
   const sy = nR * sinR + nB * sinB + nY * sinY;
   if (sx * sx + sy * sy < 1e-10) {
@@ -257,28 +268,75 @@ export function rng(seed) {
 
 // =============================================================================
 // Viewport math.
+//
+// minZoom enforces a hard FLOOR on zoom that keeps the canvas filled in at
+// least one dimension (Math.max of ratios). It is the right value to clamp
+// wheel-zoom against - users cannot zoom past it without leaving black
+// gutter around the grid.
+//
+// fitInsideZoom is the SMALLER zoom that ensures the whole grid is visible
+// inside the canvas (Math.min of ratios). It is the right value for the
+// "FIT" button - users expect "fit" to mean "show me the whole grid".
+//
+// minZoom != fitInsideZoom whenever the grid and canvas aspect ratios
+// differ. v17.14.4: the previous FIT button used minZoom (FILL semantics)
+// which silently cropped the grid on every non-square canvas.
 // =============================================================================
 export function minZoom(cw, ch, gw, gh) {
-  return Math.max(cw / gw, ch / gh, 0.08);
+  return Math.max(cw / gw, ch / gh, 0.04);
+}
+
+export function fitInsideZoom(cw, ch, gw, gh) {
+  if (cw <= 0 || ch <= 0 || gw <= 0 || gh <= 0) return 0.04;
+  return Math.max(0.04, Math.min(cw / gw, ch / gh));
 }
 
 export function fitView(cw, ch, gw, gh) {
-  const z = minZoom(cw, ch, gw, gh);
+  // v17.14.4: true fit-inside semantics. The whole grid is visible with
+  // letterboxing on the dimension where it does not fill.
+  const z = fitInsideZoom(cw, ch, gw, gh);
   return { zoom: z, panX: (cw - gw * z) / 2, panY: (ch - gh * z) / 2 };
 }
 
 // paintableView: like fitView but enforces a minimum on-screen hex radius.
 // targetPxR specifies the comfort threshold for the active pointer type.
+// If the fit zoom would yield pxR below the target, we instead zoom in to
+// the paintable level and accept that some of the grid is off-screen.
 export function paintableView(cw, ch, gw, gh, hr, targetPxR) {
-  const fitZ = minZoom(cw, ch, gw, gh);
+  const fitZ = fitInsideZoom(cw, ch, gw, gh);
   const paintZ = targetPxR / hr;
   if (paintZ <= fitZ) return fitView(cw, ch, gw, gh);
   const cx = gw / 2, cy = gh / 2;
   return {
     zoom: paintZ,
     panX: cw / 2 - cx * paintZ,
-    panY: cy * 0 + (ch / 2 - cy * paintZ),
+    panY: ch / 2 - cy * paintZ,
   };
+}
+
+// clampPan keeps at least `minVisibleRatio` of the canvas always showing a
+// part of the grid. Prevents the user from panning the grid completely
+// off-screen, which is the most common "I lost my work" UX failure for
+// pannable canvases. Returns a possibly-adjusted {panX, panY} pair.
+export function clampPan(panX, panY, cw, ch, gw, gh, zoom, minVisibleRatio) {
+  const r = Number.isFinite(minVisibleRatio) ? minVisibleRatio : 0.2;
+  const gwS = gw * zoom;
+  const ghS = gh * zoom;
+  // panX is the screen-space offset of the grid's top-left corner.
+  // Acceptable range: grid-right >= r*cw AND grid-left <= (1-r)*cw.
+  //   grid-right = panX + gwS, grid-left = panX
+  //   => panX + gwS >= r*cw  =>  panX >= r*cw - gwS
+  //   => panX <= (1-r)*cw
+  const minPanX = r * cw - gwS;
+  const maxPanX = (1 - r) * cw;
+  const minPanY = r * ch - ghS;
+  const maxPanY = (1 - r) * ch;
+  let nx = panX, ny = panY;
+  if (nx < minPanX) nx = minPanX;
+  if (nx > maxPanX) nx = maxPanX;
+  if (ny < minPanY) ny = minPanY;
+  if (ny > maxPanY) ny = maxPanY;
+  return { panX: nx, panY: ny };
 }
 
 // =============================================================================

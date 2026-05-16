@@ -61,7 +61,7 @@ import {
   TB, RULES, birthLUT, survLUT, ageBucket,
   HC6, HS6,
   buildGrid, pixelToOddR, pixelToOddRSnap, cMix, mMix, rng,
-  minZoom, fitView, paintableView,
+  minZoom, fitInsideZoom, fitView, paintableView, clampPan,
   classify, PATS, PAT_KEYS, GRID_SIZES,
   SPEEDS, SPLBL, DENS, cl,
 } from "./lib/hex.js";
@@ -799,6 +799,10 @@ export default function App() {
   const dirty  = useRef(true);
   const simStats = useRef({ counter: 0, lastAt: performance.now() });
   const fpsStats = useRef({ count: 0, lastAt: performance.now(), ema: 0 });
+  // NR-G65: simPaused is a hard-pause flag readable by the sim-loop's tick().
+  // The __TEST__ bridge uses it to suspend the sim during deterministic steps
+  // without going through setRunning, which React would batch into a no-op.
+  const simPaused = useRef(false);
   const perfStats = useRef({
     simStepMs: 0,
     renderMs: 0,
@@ -889,12 +893,24 @@ export default function App() {
   }, []);
 
   const history = useRef([]);
-  const getCur = () => alt.current
-    ? { c: cB.current, a: aB.current }
-    : { c: cA.current, a: aA.current };
-  const getNxt = () => alt.current
-    ? { c: cA.current, a: aA.current }
-    : { c: cB.current, a: aB.current };
+  // NR-G68: getCur/getNxt are self-protecting. ensureBufs is idempotent
+  // (short-circuits when buffers match the current grid) so the cost is one
+  // length compare per call, but it eliminates a real crash class: a tap
+  // arriving between changeGridSize() nulling the buffers and the next rAF
+  // forceDraw() reallocating them would otherwise dereference null and
+  // silently break selection on XL/XXL where users switch grids most often.
+  const getCur = () => {
+    ensureBufs();
+    return alt.current
+      ? { c: cB.current, a: aB.current }
+      : { c: cA.current, a: aA.current };
+  };
+  const getNxt = () => {
+    ensureBufs();
+    return alt.current
+      ? { c: cA.current, a: aA.current }
+      : { c: cB.current, a: aB.current };
+  };
 
   const cvRef = useRef(null);
   const ctxR = useRef(null);
@@ -1003,11 +1019,28 @@ export default function App() {
   // NR-G47: viewport changes invalidate the dirty-bbox optimization. The
   // bbox is reset to "full grid" so forceDraw falls back to full render
   // for one frame; the bbox returns to fine-grained tracking immediately.
+  //
+  // NR-G83: every viewport update is clamped against clampPan so the user
+  // cannot pan the grid completely off-screen. We require at least 20% of
+  // the canvas to overlap the grid in both axes, which is enough to give
+  // the user a visible anchor for re-orienting and still permits seeing
+  // distant cells on XXL.
   const applyView = useCallback((updater, commit) => {
     const next = typeof updater === "function" ? updater(vR.current) : updater;
+    const G = getGrid();
+    const cv = cvRef.current;
+    if (G && cv) {
+      const cw = cv.clientWidth, ch = cv.clientHeight;
+      if (cw > 0 && ch > 0) {
+        const clamped = clampPan(
+          next.panX, next.panY, cw, ch, G.GRID_W, G.GRID_H, next.zoom, 0.2
+        );
+        next.panX = clamped.panX;
+        next.panY = clamped.panY;
+      }
+    }
     vR.current = next;
     dirty.current = true;
-    const G = getGrid();
     if (G) {
       const bb = dirtyBBox.current;
       bb.valid = true;
@@ -1203,9 +1236,13 @@ export default function App() {
     dirty.current = true;
   }, []);
 
-  const randomize = useCallback(() => {
+  // NR-G66: accept an optional seed override. The __TEST__ bridge uses this
+  // for one-shot deterministic randomize() without round-tripping through
+  // setSeed -> useEffect -> next render.
+  const randomize = useCallback((seedOverride) => {
     reset();
-    const G = getGrid(), g = rng(seed);
+    const usedSeed = Number.isFinite(seedOverride) ? (seedOverride | 0) : seed;
+    const G = getGrid(), g = rng(usedSeed);
     const { c, a } = getCur();
     const d = DENS[denI];
     for (let i = 0; i < G.N; i++) {
@@ -1271,6 +1308,16 @@ export default function App() {
       stampImg.current = null;
       stampU32.current = null;
       spriteCache.clear();
+      // NR-G74: stampCache is module-scope and survived grid switches.
+      // Stamp images are pure-function-of-pxR, so wrong-grid stamps would
+      // not produce visual artifacts, but the cache held ~800KB of stale
+      // Int16Arrays per session. Clearing on grid change frees them.
+      stampCache.clear();
+      // NR-G75: perfStats counters are unbounded across a session.
+      // Resetting on grid change keeps the clip-hits ratio meaningful and
+      // bounds the values to ~Math.MAX_SAFE_INTEGER never being approached.
+      perfStats.current.clipHits = 0;
+      perfStats.current.fullHits = 0;
       didFit.current = false;
       rectCache.current.rect = null;
       rectCache.current.ts = 0;
@@ -1459,6 +1506,14 @@ export default function App() {
     const tick = () => {
       if (!alive) return;
       const spd = SPEEDS[spR.current];
+      // NR-G65: respect the simPaused hard-pause flag. The bridge's step()
+      // sets it before issuing deterministic steps so the rAF tick that was
+      // already scheduled by setTimeout cannot race ahead and add phantom
+      // generations. A paused tick reschedules itself and yields.
+      if (simPaused.current) {
+        toId = setTimeout(tick, spd <= 16 ? 16 : spd);
+        return;
+      }
       if (spd <= 16) {
         for (let i = 0; i < MAX_STEPS_PER_TICK; i++) step(false);
       } else {
@@ -1471,14 +1526,24 @@ export default function App() {
   }, [running, step]);
 
   useEffect(() => {
+    // NR-G70: explicit cancelAnimationFrame on cleanup. The previous
+    // implementation relied on the loop function checking an "on" flag and
+    // refusing to schedule the next frame - that works but leaves one
+    // already-scheduled frame to drain after unmount/StrictMode-remount.
+    // Cancelling explicitly is the React 19 + StrictMode best practice
+    // (react.dev/reference/react/StrictMode#fixing-bugs-found-by-rerunning-effects).
     let on = true;
+    let rafId = 0;
     const loop = () => {
       if (!on) return;
       if (dirty.current) forceDraw();
-      requestAnimationFrame(loop);
+      rafId = requestAnimationFrame(loop);
     };
-    requestAnimationFrame(loop);
-    return () => { on = false; };
+    rafId = requestAnimationFrame(loop);
+    return () => {
+      on = false;
+      cancelAnimationFrame(rafId);
+    };
   }, [forceDraw]);
 
   useEffect(() => { dirty.current = true; }, [uiTick, view, hov]);
@@ -1582,6 +1647,14 @@ export default function App() {
   }, []);
 
   const pushDiagHistory = useCallback((entry) => {
+    // NR-G77: only first-touch entries enter the history. paintStroke
+    // calls paintAt for every interpolated point in a drag, so without
+    // this guard a single 500-pixel drag at low pxR could fire several
+    // hundred setDiagHistory dispatches per second (the array is capped
+    // but each setState still re-renders the whole App tree). First-touch
+    // is the semantically interesting event; intermediate drag points are
+    // already covered by the LAST TAP detail block above the history.
+    if (!entry.firstTouch) return;
     setDiagHistory(prev => {
       const next = [entry, ...prev];
       if (next.length > DBG_HISTORY_SIZE) next.length = DBG_HISTORY_SIZE;
@@ -1716,6 +1789,15 @@ export default function App() {
     if (!cv) return;
     if (e.button !== 0 && e.button !== undefined) return;
 
+    // NR-G76: invalidate the rect cache at the start of every gesture.
+    // The 500ms time-TTL would otherwise serve a stale rect across a
+    // layout shift (mobile address-bar collapse, virtual keyboard
+    // toggle). Stale rect means stale tap coordinates means stale hex
+    // index. Clearing on every pointerdown is cheap (just nulling a
+    // ref) and removes the race window entirely.
+    rectCache.current.rect = null;
+    rectCache.current.ts = 0;
+
     // NR-G59: track pointer type for selectTool's auto-zoom decision
     lastPointerTypeRef.current = normPointerType(e.pointerType);
 
@@ -1799,7 +1881,7 @@ export default function App() {
       const mx = ncx - rect.left, my = ncy - rect.top;
       const panDx = ncx - pinch.current.cx, panDy = ncy - pinch.current.cy;
       const G = getGrid();
-      const mZ = minZoom(rect.width, rect.height, G.GRID_W, G.GRID_H);
+      const mZ = fitInsideZoom(rect.width, rect.height, G.GRID_W, G.GRID_H);
       const nz = cl(v.zoom * ratio, mZ, 80);
       const npx = mx - (mx - v.panX) * (nz / v.zoom) + panDx;
       const npy = my - (my - v.panY) * (nz / v.zoom) + panDy;
@@ -1940,7 +2022,7 @@ export default function App() {
     const onWh = (e) => {
       e.preventDefault();
       const G = getGrid(), rect = getCachedRect(), v = vR.current;
-      const mZ = minZoom(rect.width, rect.height, G.GRID_W, G.GRID_H);
+      const mZ = fitInsideZoom(rect.width, rect.height, G.GRID_W, G.GRID_H);
       if (e.ctrlKey || e.metaKey) {
         const mx = e.clientX - rect.left, my = e.clientY - rect.top;
         let zoomDelta;
@@ -2006,7 +2088,7 @@ export default function App() {
       const v = vR.current;
       const G = getGrid();
       const rect = getCachedRect();
-      const mZ = minZoom(rect.width, rect.height, G.GRID_W, G.GRID_H);
+      const mZ = fitInsideZoom(rect.width, rect.height, G.GRID_W, G.GRID_H);
       const nz = cl(v.zoom * ratio, mZ, 80);
       const npx = anchorX - (anchorX - v.panX) * (nz / v.zoom);
       const npy = anchorY - (anchorY - v.panY) * (nz / v.zoom);
@@ -2157,7 +2239,31 @@ export default function App() {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }, []);
 
-  // NR-G55 + NR-G62/G63: __TEST__ bridge.
+  // NR-G72: stable __TEST__ bridge via the "useLatest" pattern.
+  //
+  // v17.14's bridge effect had deps [step, randomize, clearAll, gridSizeI,
+  // changeGridSize], so every grid switch tore down and reinstalled the
+  // bridge. Tests that cached `const t = window.__TEST__` at the top of a
+  // page.evaluate ended up with a stale handle whose closures pointed at
+  // the previous render's React state. v17.14.3 stores the latest
+  // callbacks + reactive values in bridgeLatest (a ref updated every
+  // render) and installs the bridge ONCE in a mount-only effect. Methods
+  // dispatch through bridgeLatest at call time, always seeing the
+  // current values.
+  //
+  // Side effect: bridge.ready can be set synchronously (no microtask
+  // hop) because the methods are valid the moment the install commits.
+  // This eliminates the v17.14 race window where __TEST__ was on window
+  // but ready was still false.
+  const bridgeLatest = useRef({});
+  useEffect(() => {
+    bridgeLatest.current = {
+      step, randomize, clearAll, changeGridSize, setSeed, setRI,
+      getGrid, getCur, gridSizeI,
+      telemetry, perfStats, simPaused, vR, ruR, wR, mR, genRef,
+    };
+  });
+
   useEffect(() => {
     if (typeof window === "undefined") return;
     let testMode = false;
@@ -2167,78 +2273,92 @@ export default function App() {
     } catch (e) { /* not a normal URL */ }
     if (!testMode) return;
 
+    let seedFromUrl = 42;
+    try {
+      const url = new URL(window.location.href);
+      const s = parseInt(url.searchParams.get("seed") || "42", 10);
+      seedFromUrl = Number.isFinite(s) ? s : 42;
+    } catch (e) { /* default */ }
+
     const bridge = {
       ready: false,
       version: "v17.14",
-      seed: (() => {
-        try {
-          const url = new URL(window.location.href);
-          const s = parseInt(url.searchParams.get("seed") || "42", 10);
-          return Number.isFinite(s) ? s : 42;
-        } catch (e) { return 42; }
-      })(),
+      seed: seedFromUrl,
       state: () => {
-        const G = getGrid();
-        const { c, a } = getCur();
+        const r = bridgeLatest.current;
+        const G = r.getGrid();
+        const { a } = r.getCur();
         let alive = 0;
         for (let i = 0; i < a.length; i++) if (a[i] === ALIVE_T) alive++;
         return {
-          gen: genRef.current,
+          gen: r.genRef.current,
           alive,
           rows: G.ROWS,
           cols: G.COLS,
-          gridSizeI,
-          ruleI: ruR.current,
-          wrap: wR.current,
-          mix: mR.current,
-          view: { ...vR.current },
+          gridSizeI: r.gridSizeI,
+          ruleI: r.ruR.current,
+          wrap: r.wR.current,
+          mix: r.mR.current,
+          view: { ...r.vR.current },
         };
       },
       step: (n) => {
-        // NR-G63: pause sim before deterministic step, restore after
-        const wasRunning = rR.current;
-        if (wasRunning) setRunning(false);
+        const r = bridgeLatest.current;
+        const wasPaused = r.simPaused.current;
+        r.simPaused.current = true;
         const count = Math.max(1, Math.min(1000, n || 1));
-        for (let i = 0; i < count; i++) step(true);
+        try {
+          for (let i = 0; i < count; i++) r.step(true);
+        } finally {
+          r.simPaused.current = wasPaused;
+        }
         dirty.current = true;
-        if (wasRunning) setRunning(true);
       },
       advanceTime: (ms) => {
+        const r = bridgeLatest.current;
         const stepsApprox = Math.max(1, Math.round((ms || 16.67) / 16.67));
-        const wasRunning = rR.current;
-        if (wasRunning) setRunning(false);
-        for (let i = 0; i < stepsApprox; i++) step(true);
+        const wasPaused = r.simPaused.current;
+        r.simPaused.current = true;
+        try {
+          for (let i = 0; i < stepsApprox; i++) r.step(true);
+        } finally {
+          r.simPaused.current = wasPaused;
+        }
         dirty.current = true;
-        if (wasRunning) setRunning(true);
       },
-      randomize: () => randomize(),
-      clear: () => clearAll(),
+      randomize: (seedOverride) => bridgeLatest.current.randomize(seedOverride),
+      clear: () => bridgeLatest.current.clearAll(),
+      setSeed: (n) => {
+        if (Number.isFinite(n)) bridgeLatest.current.setSeed(n | 0);
+      },
       setRuleset: (i) => {
-        if (Number.isInteger(i) && i >= 0 && i < RULES.length) setRI(i);
+        if (Number.isInteger(i) && i >= 0 && i < RULES.length) {
+          bridgeLatest.current.setRI(i);
+        }
       },
       setGrid: (i) => {
         if (Number.isInteger(i) && i >= 0 && i < GRID_SIZES.length) {
-          changeGridSize(i);
+          bridgeLatest.current.changeGridSize(i);
         }
       },
       telemetry: () => {
-        const t = telemetry.current;
+        const t = bridgeLatest.current.telemetry.current;
         return t.size < TELEMETRY_CAP
           ? t.buffer.slice(0, t.size)
           : [...t.buffer.slice(t.idx), ...t.buffer.slice(0, t.idx)];
       },
-      perfStats: () => ({ ...perfStats.current }),
+      perfStats: () => ({ ...bridgeLatest.current.perfStats.current }),
     };
+    bridge.ready = true;
     window.__TEST__ = bridge;
-    Promise.resolve().then(() => { bridge.ready = true; });
     return () => {
-      // NR-G62: explicit ready=false before teardown so any test that
-      // briefly observes the bridge during unmount sees a stop signal.
       bridge.ready = false;
       try { delete window.__TEST__; }
       catch (e) { window.__TEST__ = undefined; }
     };
-  }, [step, randomize, clearAll, gridSizeI, changeGridSize]);
+    // Empty deps: install ONCE on mount, never tear down until unmount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const onLeave = useCallback((e) => {
     pointerCache.current.delete(e.pointerId);
@@ -2349,6 +2469,15 @@ export default function App() {
   // NR-G61: scoped <style> contains only application-specific rules. Fonts
   // are loaded from index.html so we do not pay for an inline @import that
   // re-runs on every render and bypasses preconnect priorities.
+  // NR-G84: Responsive layout with a square canvas frame on laptop /
+  // desktop. On wide viewports (>= 900px) the canvas is centered in a
+  // 1:1 wrapper sized to the smaller of available width and available
+  // height; the surrounding controls flow around it. On narrow viewports
+  // the canvas falls back to filling the available width and uses a
+  // fixed aspect ratio of 4:3 (laptop) or its natural width on phones.
+  //
+  // The aspect-ratio CSS property is supported in every browser >=2021.
+  // We use a min() expression so the square never exceeds either axis.
   const scopedCss = `
     * { box-sizing: border-box; }
     button:focus-visible { outline: 2px solid ${T.accent}; outline-offset: 2px; }
@@ -2367,11 +2496,27 @@ export default function App() {
       );
       z-index: 2;
     }
+    .ghx-canvas-frame {
+      aspect-ratio: 1 / 1;
+      width: min(100%, calc(100vh - 280px));
+      max-width: 100%;
+      max-height: 100%;
+      margin: 0 auto;
+      align-self: center;
+      justify-self: center;
+    }
+    @media (max-width: 900px) {
+      .ghx-canvas-frame {
+        aspect-ratio: 4 / 3;
+        width: 100%;
+      }
+    }
     @media (max-width: 640px) {
       .ghx-header { grid-template-columns: 1fr !important; gap: 6px !important; }
       .ghx-header > .ghx-stats { justify-content: flex-start !important; gap: 10px !important; }
       .ghx-header > .ghx-badges { justify-content: flex-start !important; }
       .ghx-display-title { font-size: 22px !important; }
+      .ghx-canvas-frame { aspect-ratio: auto; width: 100%; height: 100%; }
     }
     @keyframes ghx-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
     .ghx-pulsing { animation: ghx-pulse 600ms ease-in-out infinite; }
@@ -2576,10 +2721,29 @@ export default function App() {
         <Btn
           l="FIT"
           o={() => {
+            // NR-G82: true fit-inside. The whole grid is visible (letter-
+            // boxed on the axis where the canvas overflows). For larger
+            // grids on a square canvas this produces tiny cells, but
+            // that is the user's explicit intent when they press FIT.
+            // Use the "PAINT" button or zoom-in if they want big cells.
             const { cw, ch } = getVD();
             setView(fitView(cw, ch, G.GRID_W, G.GRID_H));
           }}
-          title="Fit grid to viewport"
+          title="Show whole grid (cells may be tiny - use PAINT/Z+ for tap)"
+        />
+        <Btn
+          l="PXR"
+          o={() => {
+            // NR-G82b: paintable reset. Re-runs paintableView for the
+            // current pointer type, snapping back to a zoom where cells
+            // are at least getPaintMinPxR(pointerType) pixels wide.
+            // Bridges the FIT/painting tradeoff: FIT shows everything,
+            // PXR makes everything tappable.
+            const { cw, ch } = getVD();
+            const targetPxR = getPaintMinPxR(lastPointerTypeRef.current);
+            setView(paintableView(cw, ch, G.GRID_W, G.GRID_H, G.HR, targetPxR));
+          }}
+          title="Reset zoom so cells are paintable for current pointer type"
         />
         <Btn
           l="PAN"
@@ -2617,12 +2781,46 @@ export default function App() {
         />
       </div>
 
+      {/* NR-G80: aria-live region for grid-size announcements. The canvas
+          itself has no semantic content for assistive tech; without an
+          announcement, a screen reader user pressing a grid-size button
+          gets no acknowledgement. The text changes whenever gs changes,
+          which triggers the live region to announce the new dimensions. */}
       <div
-        className="scanlines"
-        aria-busy={isPending ? "true" : "false"}
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        style={{
+          position: "absolute",
+          left: -9999,
+          top: -9999,
+          width: 1,
+          height: 1,
+          overflow: "hidden",
+        }}
+      >
+        Grid {gs.l}, {gs.rows} rows by {gs.cols} columns,
+        {" "}rule {RULES[rI].l}.
+      </div>
+
+      {/* NR-G84: outer flex container centers the square canvas frame
+          within the available vertical space. The frame itself enforces
+          aspect-ratio: 1 on laptop and 4:3 / fill on smaller screens via
+          the .ghx-canvas-frame CSS class. */}
+      <div
         style={{
           flex: 1,
           minHeight: 200,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          overflow: "hidden",
+        }}
+      >
+      <div
+        className="scanlines ghx-canvas-frame"
+        aria-busy={isPending ? "true" : "false"}
+        style={{
           position: "relative",
           overflow: "hidden",
           border: T.border,
@@ -2646,6 +2844,14 @@ export default function App() {
             WebkitTouchCallout: "none",
             WebkitTapHighlightColor: "transparent",
             WebkitUserDrag: "none",
+            // NR-G69: discard taps that arrive while the grid resize is
+            // pending. The transition has not yet committed setGridSizeI,
+            // so any tap would mutate the OLD-sized buffers - those
+            // buffers are reallocated when the transition resolves and
+            // the user's tap is silently lost. Disabling pointer events
+            // for the duration is the standard React 18+ pattern for
+            // useTransition-guarded UI.
+            pointerEvents: isPending ? "none" : "auto",
           }}
           onPointerDown={onPD}
           onPointerMove={onCanvasPM}
@@ -2656,13 +2862,14 @@ export default function App() {
           onContextMenu={(e) => e.preventDefault()}
         />
       </div>
+      </div>
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 5 }}>
         <Btn
           l="Z-"
           o={() => {
             const { cw, ch } = getVD();
-            const mZ = minZoom(cw, ch, G.GRID_W, G.GRID_H);
+            const mZ = fitInsideZoom(cw, ch, G.GRID_W, G.GRID_H);
             applyView(v => {
               const mx = cw / 2, my = ch / 2;
               const nz = cl(v.zoom / 1.3, mZ, 80);
@@ -2677,7 +2884,7 @@ export default function App() {
           l="Z+"
           o={() => {
             const { cw, ch } = getVD();
-            const mZ = minZoom(cw, ch, G.GRID_W, G.GRID_H);
+            const mZ = fitInsideZoom(cw, ch, G.GRID_W, G.GRID_H);
             applyView(v => {
               const mx = cw / 2, my = ch / 2;
               const nz = cl(v.zoom * 1.3, mZ, 80);
