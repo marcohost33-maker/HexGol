@@ -29,18 +29,22 @@ jobs:
       image: mcr.microsoft.com/playwright:v1.60.0-noble
       options: --user 1001:1001
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.0
         with:
           ref: ${{ github.event.inputs.branch }}
           token: ${{ secrets.GITHUB_TOKEN }}
+          # persist-credentials: must stay TRUE here — this workflow pushes
+          # the refreshed snapshots back to the branch, which needs the
+          # checkout-stored credential. The push is the entire point of this
+          # job. zizmor/artipacked is acknowledged as intentional here.
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.0.0
         with:
           node-version: 20
           cache: npm
 
       - name: Cache Playwright browsers
-        uses: actions/cache@v5
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.2
         id: pw-cache
         with:
           path: ~/.cache/ms-playwright
