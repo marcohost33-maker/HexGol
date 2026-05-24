@@ -11,7 +11,7 @@ updates:
       day: monday
       time: "06:00"
       timezone: Etc/UTC
-    # Cooldown (added 2026-05-23) — mitigates fresh-release supply-chain attacks (zizmor/dependabot-cooldown)
+    # Cooldown (added 2026-05-23) - mitigates fresh-release supply-chain attacks (zizmor/dependabot-cooldown)
     cooldown:
       default-days: 7
     open-pull-requests-limit: 8
@@ -43,7 +43,7 @@ updates:
       day: monday
       time: "06:00"
       timezone: Etc/UTC
-    # Cooldown (added 2026-05-23) — mitigates fresh-release supply-chain attacks (zizmor/dependabot-cooldown)
+    # Cooldown (added 2026-05-23) - mitigates fresh-release supply-chain attacks (zizmor/dependabot-cooldown)
     cooldown:
       default-days: 7
     labels:
