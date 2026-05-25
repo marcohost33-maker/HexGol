@@ -1384,6 +1384,7 @@ export default function App() {
     if (manual) saveHist();
     const G = getGrid(), ri = ruR.current;
     const bL = birthLUT[ri], sL = survLUT[ri];
+    const fn = RULES[ri].fn || null;   // WZL/Formel-Regel: ueberschreibt B/S wenn gesetzt
     const NL = wR.current ? G.NLW : G.NLE;
     const { c: cCur, a: aCur } = getCur();
     const { c: cNxt, a: aNxt } = getNxt();
@@ -1433,8 +1434,11 @@ export default function App() {
           }
         }
         const nc = nR + nB + nY;
-        if (cCur[i] && aCur[i] >= ALIVE_T) {
-          if (sL[nc]) {
+        const aliveC = cCur[i] && aCur[i] >= ALIVE_T;
+        const survOK  = fn ? fn(nc, nR, nB, nY, 1, aCur[i]) : sL[nc];
+        const birthOK = fn ? fn(nc, nR, nB, nY, 0, 0)       : bL[nc];
+        if (aliveC) {
+          if (survOK) {
             cNxt[i] = cCur[i];
             aNxt[i] = ALIVE_T;
             pop++;
@@ -1445,7 +1449,7 @@ export default function App() {
             cNxt[i] = cCur[i];
             aNxt[i] = Math.max(0, aCur[i] - FADE);
           }
-        } else if (bL[nc]) {
+        } else if (birthOK) {
           cNxt[i] = mixF(nR, nB, nY, row, col);
           aNxt[i] = ALIVE_T;
           pop++;
