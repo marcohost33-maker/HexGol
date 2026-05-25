@@ -9,8 +9,9 @@ and a deterministic `window.__TEST__` bridge for browser automation.
 
 GolHex is a Carter-Bays hex-topology cellular automaton implemented as a
 single React component over a Canvas2D render path. It supports five grid
-sizes from 40x50 (S) to 200x250 (XXL), 16 birth/survival rules, three brush
-colors with two color-mixing strategies, and a tactile-brutalism UI.
+sizes from 40x50 (S) to 200x250 (XXL), 16 birth/survival rules plus one
+**formula rule** (`WZL`, see below), three brush colors with two color-mixing
+strategies, and a tactile-brutalism UI.
 
 The companion telemetry pipeline subscribes to the browser's
 `PerformanceObserver` for `long-animation-frame`, `longtask`, and `event`
@@ -22,6 +23,17 @@ in the URL. It exposes a small read-only state plus side-effect-free
 actions (`step`, `randomize`, `clear`, `setRuleset`, `setGrid`,
 `telemetry`, `perfStats`) so Playwright tests can drive the simulation
 deterministically without mucking around with canvas pixel hit-testing.
+
+## Rules
+
+16 classic hex birth/survival rules (`B2/S34` … `B1/S245`) plus one **formula
+rule** `WZL` (rule index 16). WZL maps **Watzlawick's five pragmatic axioms of
+communication** onto the hex cell transition: symmetric vs. complementary
+neighbours, relationship-coherence as a birth gate, and cell age as
+"punctuation". The engine supports such formula rules via an optional `fn` on a
+rule entry in `src/lib/hex.js` (`step()` and `classify()` honour it); the
+classic B/S rules are byte-identical to before. Full derivation:
+[`docs/watzlawick-rule.md`](docs/watzlawick-rule.md).
 
 ## Getting started
 
@@ -60,6 +72,7 @@ tests/
   dependabot.yml           - weekly npm + actions update PRs
 docs/
   release-notes-v17.14.md  - this version's hardening list
+  watzlawick-rule.md       - WZL formula-rule: Watzlawick's 5 axioms -> cell rule
 ```
 
 ## URL parameters
