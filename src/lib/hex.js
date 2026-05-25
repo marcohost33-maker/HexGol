@@ -32,7 +32,37 @@ export const TB = [
   { min: 151, max: 199, a: 0.65 },
 ];
 
+// =============================================================================
+// Watzlawick-Regel (WZL): die 5 Axiome der Kommunikation als Zell-Transition.
+// Volle Herleitung Axiome -> Formel -> Regel in docs/watzlawick-rule.md.
+//
+// Eingang pro Zelle: nc = lebende Nachbarn (0..6), aufgeteilt nach Spezies/Farbe
+// nR,nB,nY; alive (1=lebt) und age (0..ALIVE_T) der Zelle selbst.
+//   S = max(nR,nB,nY)  -> symmetrische (gleichartige) Mehrheit          (Axiom 5)
+//   K = nc - S         -> komplementaere (abweichende) Nachbarn          (Axiom 5)
+//   S/nc               -> Beziehungs-Kohaerenz, klassifiziert Inhalt nc  (Axiom 2)
+//   age                -> Interpunktion: etablierte Zelle "setzt" Sequenz (Axiom 3)
+//   analoges age moduliert die digitale Geburt/Survival-Entscheidung      (Axiom 4)
+//   Isolation nc<2 = kommunikativer Kollaps (Stille als Signal)           (Axiom 1)
+// Rueckgabe: true, wenn die abgefragte Aktion eintritt
+//   (alive=1 -> Ueberleben, alive=0 -> Geburt). Reine Funktion.
+// =============================================================================
+export function wzlRule(nc, nR, nB, nY, alive, age) {
+  const S = nR >= nB ? (nR >= nY ? nR : nY) : (nB >= nY ? nB : nY);
+  const K = nc - S;
+  if (alive) {
+    // Interpunktion (Axiom 3/4): etablierte Zelle (hohes Alter) toleriert mehr
+    // Dichte -> obere Schranke +1. Aber nc<2 = Isolation = Kollaps (Axiom 1),
+    // den der Bonus NICHT rettet.
+    const hi = 4 + (age >= ALIVE_T * 0.65 ? 1 : 0);
+    return nc >= 2 && nc <= hi && K <= S;          // Symmetrie >= Komplementaritaet (Axiom 5)
+  }
+  return nc >= 2 && nc <= 3 && S > K && 2 * S >= nc; // Dyade + symm. Mehrheit + Kohaerenz>=0.5 (Axiom 2/5)
+}
+
 // Rule definitions. B = birth counts, S = survival counts.
+// Eintraege mit `fn` nutzen eine Formel-Regel statt der B/S-LUT (B/S dienen
+// dann nur als Anzeige-Label und LUT-Fallback).
 export const RULES = [
   { l: "B2/S34",   B: [2],    S: [3, 4]    },
   { l: "B2/S35",   B: [2],    S: [3, 5]    },
@@ -50,6 +80,7 @@ export const RULES = [
   { l: "B13/S34",  B: [1, 3], S: [3, 4]    },
   { l: "B24/S34",  B: [2, 4], S: [3, 4]    },
   { l: "B1/S245",  B: [1],    S: [2, 4, 5] },
+  { l: "WZL",      B: [2],    S: [2, 3, 4], fn: wzlRule },
 ];
 
 // Pre-computed birth/survival lookup tables - hot-loop sentinel checks.
@@ -357,6 +388,7 @@ export function classify(cells, ruleIdx, maxGen) {
   const cA = new Uint8Array(tN), aA = new Uint8Array(tN);
   const cB = new Uint8Array(tN), aB = new Uint8Array(tN);
   const bL = birthLUT[ruleIdx], sL = survLUT[ruleIdx];
+  const fn = RULES[ruleIdx] && RULES[ruleIdx].fn ? RULES[ruleIdx].fn : null;
   const cr = Math.floor(tR / 2) - 2;
   const cc = Math.floor(tC / 2) - 2;
 
@@ -398,10 +430,13 @@ export function classify(cells, ruleIdx, maxGen) {
         }
       }
       const nc = nR + nB + nY;
-      if (cA[i] && aA[i] >= ALIVE_T) {
-        if (sL[nc]) { cB[i] = cA[i]; aB[i] = ALIVE_T; }
+      const aliveC = cA[i] && aA[i] >= ALIVE_T;
+      const survOK  = fn ? fn(nc, nR, nB, nY, 1, aA[i]) : sL[nc];
+      const birthOK = fn ? fn(nc, nR, nB, nY, 0, 0)     : bL[nc];
+      if (aliveC) {
+        if (survOK) { cB[i] = cA[i]; aB[i] = ALIVE_T; }
         else { cB[i] = cA[i]; aB[i] = Math.max(0, aA[i] - FADE); }
-      } else if (bL[nc]) {
+      } else if (birthOK) {
         cB[i] = cMix(nR, nB, nY, i);
         aB[i] = ALIVE_T;
       } else if (cA[i] && aA[i] > 0) {
