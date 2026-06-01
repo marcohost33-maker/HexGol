@@ -25,16 +25,21 @@ strategies, a **selectable domain frame (circle / rectangle)**, a real-valued
 physics layer (snow / water / Collatz / genetics) and a unitary **HQST**
 quantum tight-binding mode, and a tactile-brutalism UI.
 
-The companion telemetry pipeline subscribes to the browser's
-`PerformanceObserver` for `long-animation-frame`, `longtask`, and `event`
-entry types, accumulates them into a 5,000-entry ring buffer, and exposes
-CSV / JSON download from the diagnostic panel.
+### Real-valued physics + HQST quantum mode
 
-The `window.__TEST__` bridge is activated only when `?test=1` is present
-in the URL. It exposes a small read-only state plus side-effect-free
-actions (`step`, `randomize`, `clear`, `setRuleset`, `setGrid`,
-`telemetry`, `perfStats`) so Playwright tests can drive the simulation
-deterministically without mucking around with canvas pixel hit-testing.
+Beyond the boolean Game-of-Life engine, **Physik (reellwertig)** switches to a
+real-valued field layer: **Schneeflocke** (Reiter snowflake automaton),
+**Wasser** (mass-conserving), **Collatz**, **Genetik** (Mendel/Hardy-Weinberg),
+and **HQST** — a hexagonal tight-binding **time-dependent Schrödinger**
+simulation integrated with **Crank-Nicolson** (Cayley form, norm-conserving /
+unitary). A **TURBO** speed tier computes many generations per frame.
+
+### Rendering
+
+Hybrid Canvas2D renderer: large cells use batched (chunked) hex `Path2D` fills;
+when cells get tiny (XXL / zoomed out, `hr·s < 3.5px`) it switches to a direct
+**ImageData raster** (per-cell pixel blocks) so even a fully-populated 200×250
+field stays at ~60fps.
 
 ## Rules
 
@@ -42,9 +47,8 @@ deterministically without mucking around with canvas pixel hit-testing.
 rule** `WZL` (rule index 16). WZL maps **Watzlawick's five pragmatic axioms of
 communication** onto the hex cell transition: symmetric vs. complementary
 neighbours, relationship-coherence as a birth gate, and cell age as
-"punctuation". The engine supports such formula rules via an optional `fn` on a
-rule entry in `src/lib/hex.js` (`step()` and `classify()` honour it); the
-classic B/S rules are byte-identical to before. Full derivation:
+"punctuation". The classic B/S rules and the WZL formula rule are implemented
+inline in the app component (`src/App.tsx`). Full derivation:
 [`docs/watzlawick-rule.md`](docs/watzlawick-rule.md).
 
 ## Getting started
@@ -70,12 +74,12 @@ The Playwright run starts the production preview automatically.
 
 ```
 src/
-  App.jsx          - main React component (~1600 lines)
-  main.jsx         - React 18 root mount
-  lib/hex.js       - pure functions (hex math, classifier, rng); unit-tested
+  App.tsx          - main React component (~1960 lines, v29L.2)
+  main.jsx         - React root mount
+  lib/sim-core.js  - pure HQST core (applyH, solveCN — Crank-Nicolson); unit-tested
 tests/
-  unit/            - Vitest specs for src/lib/hex.js
-  e2e/             - Playwright specs using __TEST__ bridge
+  unit/            - Vitest specs for src/lib/sim-core.js (CN norm conservation)
+  e2e/             - Playwright smoke spec (functional, no pixel baselines)
 .github/
   workflows/
     unit-tests.yml         - Vitest on push/PR
@@ -91,7 +95,6 @@ docs/
 
 | Parameter | Purpose                                      |
 |-----------|----------------------------------------------|
-| `?test=1` | install `window.__TEST__` bridge             |
 | `?seed=N` | set the deterministic randomize() seed       |
 | `#g=N`    | initial grid size index (0 = S, 4 = XXL)     |
 | `#r=N`    | initial rule index                           |
