@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from "react";
+import { applyH, solveCN } from "./lib/sim-core.js"; // HQST-Kern (unit-getestet)
 // =============================================================================
 // GolHex v29L.3b - Hexagonal Game of Life (Forschungsstation)
 // Coworker Research / Coworkerz - 2026-05-31
@@ -531,44 +532,9 @@ function stepWater(w, NL, C, buf) {
 // im Integrationsschema. So lassen sich Verfahren vergleichen (siehe
 // test_solver_abstraction.mjs: euler driftet, rk4 driftet schwach, cn unitaer).
 // SOLVERS-Registry am Komponentenrand fuer die UI.
-function applyH(re, im, NL, J, V, hRe, hIm) {
-  const n = re.length;
-  for (let i = 0; i < n; i++) {
-    const b = i * 6; let sre = 0, sim = 0;
-    for (let k = 0; k < 6; k++) { const j = NL[b + k]; if (j >= 0) { sre += re[j]; sim += im[j]; } }
-    hRe[i] = -J * sre + V * re[i]; hIm[i] = -J * sim + V * im[i];
-  }
-}
-// Crank-Nicolson (unitaer, Default): (I + i*a*H) x = b, Fixpunkt-Iteration.
-// Konvergenz garantiert, wenn der Spektralradius a*||H|| < 1 (||H|| ~ 6*J fuer
-// das Hex-Tight-Binding). Bei Bedarf mehr Iterationen; Konvergenz wird geprueft
-// statt still am Cap abzuschneiden (vgl. arXiv gr-qc/9909026: nicht-monotone
-// Konvergenz der iterierten CN-Methode kann sonst instabil werden).
-function solveCN(re, im, NL, J, V, dt, reBuf, imBuf, work) {
-  const n = re.length, a = dt / 2;
-  const bRe = work.bRe, bIm = work.bIm, hRe = work.hRe, hIm = work.hIm;
-  applyH(re, im, NL, J, V, hRe, hIm);
-  for (let i = 0; i < n; i++) { bRe[i] = re[i] + a * hIm[i]; bIm[i] = im[i] - a * hRe[i]; }
-  let xRe = reBuf, xIm = imBuf;
-  for (let i = 0; i < n; i++) { xRe[i] = bRe[i]; xIm[i] = bIm[i]; }
-  // PERF-FIX (2026-06-01): Felder sind Float32 (~1e-7 Rausch-Boden). Die alte
-  // Schwelle 1e-10 war UNTER diesem Boden -> Fixpunkt konvergierte NIE -> jedes
-  // Step lief alle 60 Iterationen (~150ms/Step, HQST gedeckelt auf ~6 Gen/s).
-  // Float32-gerechte Schwelle 2e-6 wird bei a*||H||=0.225 in ~10 Iter erreicht
-  // (0.225^10 ~ 3e-7) -> ~5x schneller, Genauigkeit fuer Visualisierung unveraendert.
-  const MAXIT = 60, TOL = 2e-6; let conv = false;
-  for (let it = 0; it < MAXIT; it++) {
-    applyH(xRe, xIm, NL, J, V, hRe, hIm);
-    let maxd = 0;
-    for (let i = 0; i < n; i++) {
-      const nxRe = bRe[i] + a * hIm[i], nxIm = bIm[i] - a * hRe[i];
-      const d = Math.abs(nxRe - xRe[i]) + Math.abs(nxIm - xIm[i]); if (d > maxd) maxd = d;
-      xRe[i] = nxRe; xIm[i] = nxIm;
-    }
-    if (maxd < TOL) { conv = true; break; }
-  }
-  return conv; // false signalisiert Nicht-Konvergenz (Parameter zu gross)
-}
+// applyH (Tight-Binding-Operator) + solveCN (Crank-Nicolson, unitaer) leben jetzt
+// in src/lib/sim-core.js (Single Source, unit-getestet auf Norm-Erhaltung) und
+// werden oben importiert. solveEuler/solveRK4 unten nutzen das importierte applyH.
 // Euler (explizit): schnell, NICHT normerhaltend - fuer Vergleichszwecke.
 function solveEuler(re, im, NL, J, V, dt, reBuf, imBuf, work) {
   const n = re.length, hRe = work.hRe, hIm = work.hIm;
