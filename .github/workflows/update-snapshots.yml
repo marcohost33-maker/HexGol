@@ -75,10 +75,13 @@ jobs:
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          if git diff --quiet -- tests/e2e/__snapshots__; then
+          # git add ZUERST, dann diff --cached: erkennt auch NEUE (untracked)
+          # Baselines. Das alte `git diff --quiet` sah nur getrackte Aenderungen
+          # -> neue Baselines wurden nie committet (Bootstrap war unmoeglich). Fix 2026-06-01.
+          git add tests/e2e/__snapshots__
+          if git diff --cached --quiet; then
             echo "No snapshot changes detected"
             exit 0
           fi
-          git add tests/e2e/__snapshots__
           git commit -m "chore(snapshots): refresh baselines"
           git push origin "HEAD:${TARGET_BRANCH}"
