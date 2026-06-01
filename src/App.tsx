@@ -711,6 +711,15 @@ function geneColor(g) {
 }
 
 // =============================================================================
+// ImageData-Raster-Helfer (Perf, 2026-06-01). Bei winzigen Zellen (XXL/rausgezoomt)
+// bringt ein Hexagon-Pfad nichts — direkte Pixel-Block-Writes in ein Uint32-ImageData
+// sind ~50x schneller als tausende Path2D-fills (web-belegt: putImageData > path-fill;
+// in-Lineage bewiesen in GolHex v30). RGBA little-endian: 0xAABBGGRR.
+const BG_PACK = ((255 << 24) | (8 << 16) | (6 << 8) | 2) >>> 0; // T.bg #020608
+function packRGB(r, g, b) { return ((255 << 24) | (b << 16) | (g << 8) | r) >>> 0; }
+function parsePack(str) { const m = String(str).match(/\d+/g); return (m && m.length >= 3) ? packRGB(+m[0], +m[1], +m[2]) : BG_PACK; }
+
+// =============================================================================
 // Coworkerz-Standard: plattform-ehrliches Schliessen (✕ -> Zentrale / Fenster).
 // Aus einem Launcher (Zentrale) im selben Tab geoeffnet -> Verlauf zurueck; sonst
 // window.close() (Electron/PWA) mit ehrlichem Browser-Tab-Fallback. Kein hardcodierter Pfad.
@@ -791,6 +800,10 @@ export default function GolHex() {
   const fBufImRef = useRef(new Float32Array(N));
   const fRecRef = useRef(new Uint8Array(N));
   const hqstWorkRef = useRef(mkHqstWork(N));
+  // ImageData-Raster (Perf): wiederverwendetes ImageData + precomputed Welt-Zentren.
+  const rasterImgRef = useRef(null);
+  const cellCxRef = useRef(new Float32Array(N));
+  const cellCyRef = useRef(new Float32Array(N));
   const tickRef = useRef(0);
   const neighRef = useRef(buildNeighbors(R, C, "box"));
   const dirtyRef = useRef(true);
@@ -827,6 +840,11 @@ export default function GolHex() {
     fRecRef.current = new Uint8Array(N);
     hqstWorkRef.current = mkHqstWork(N);
     neighRef.current = buildNeighbors(R, C, frameShape);
+    // Welt-Zentren je Zelle (einmal pro Grid) fuer den ImageData-Raster-Fast-Path.
+    { const cx = new Float32Array(N), cy = new Float32Array(N);
+      for (let i = 0; i < N; i++) { const ctr = hexCenter((i / C) | 0, i % C, HR); cx[i] = ctr.x; cy[i] = ctr.y; }
+      cellCxRef.current = cx; cellCyRef.current = cy; }
+    rasterImgRef.current = null; // bei Grid-Wechsel ImageData neu anlegen
     undoRef.current = []; tickRef.current = 0; setGen(0);
     histRef.current = []; statsRef.current = { births: 0, deaths: 0 };
     setStats({ pop: 0, cnt: [0,0,0,0,0,0,0,0,0,0,0,0,0], density: 0, births: 0, deaths: 0, sps: 0, hist: [] });
@@ -998,6 +1016,62 @@ export default function GolHex() {
     loopStepRef.current += 1;
   }, []);
 
+  // --- ImageData-Raster-Fast-Path (winzige Zellen / XXL) ---------------------
+  // Direkte Pixel-Block-Writes statt Path2D-Hexe: O(Pixel) flach, unabhaengig von
+  // der Zahl aktiver Zellen. Loest XXL-Vollfeld (z.B. Snow), wo der Chunked-Path
+  // noch ~3fps brachte. Hex-Form ist bei <~3.5px/Zelle ohnehin nicht aufgeloest.
+  const drawRaster = useCallback(() => {
+    const canvas = canvasRef.current; if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    const dpr = window.devicePixelRatio || 1;
+    const Wc = canvas.width, Hc = canvas.height;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    if (!rasterImgRef.current || rasterImgRef.current.width !== Wc || rasterImgRef.current.height !== Hc) rasterImgRef.current = ctx.createImageData(Wc, Hc);
+    const img = rasterImgRef.current, d32 = new Uint32Array(img.data.buffer);
+    d32.fill(BG_PACK);
+    const g = gridRef.current, hr = g.hr;
+    const { s, tx, ty } = viewRef.current;
+    const CX = cellCxRef.current, CY = cellCyRef.current;
+    const half = Math.max(0, Math.floor(hr * s * dpr * 0.72));
+    const plot = (px, py, packed) => {
+      let y0 = py - half, y1 = py + half, x0 = px - half, x1 = px + half;
+      if (y0 < 0) y0 = 0; if (y1 >= Hc) y1 = Hc - 1; if (x0 < 0) x0 = 0; if (x1 >= Wc) x1 = Wc - 1;
+      for (let yy = y0; yy <= y1; yy++) { const row = yy * Wc; for (let xx = x0; xx <= x1; xx++) d32[row + xx] = packed; }
+    };
+    if (simRef.current === "rval") {
+      const rule = rvalRef.current, fld = fieldRef.current, fim = fieldImRef.current;
+      if (rule === "genes") {
+        const gp = { [G_AA]: parsePack(geneColor(G_AA)), [G_Aa]: parsePack(geneColor(G_Aa)), [G_aa]: parsePack(geneColor(G_aa)) };
+        for (let i = 0; i < fld.length; i++) { const gv = fld[i]; if (!gv || !gp[gv]) continue; plot(Math.round((CX[i] * s + tx) * dpr), Math.round((CY[i] * s + ty) * dpr), gp[gv]); }
+      } else {
+        const BUCKETS = 24; let thresh = 0, vmax = 0;
+        if (rule === "snow") thresh = 0.02; else if (rule === "water") thresh = 0.01; else if (rule === "hqst") thresh = 1e-5; else thresh = 1.0001;
+        if (rule === "hqst") { for (let i = 0; i < fld.length; i++) { const p = fld[i] * fld[i] + fim[i] * fim[i]; if (p > vmax) vmax = p; } if (vmax < 1e-12) vmax = 1; }
+        const bcol = new Array(BUCKETS);
+        for (let bi = 0; bi < BUCKETS; bi++) { let repV; if (rule === "collatz") repV = Math.pow(2, (bi + 0.5) / BUCKETS * 30); else if (rule === "hqst") repV = (bi + 0.5) / BUCKETS * vmax; else repV = (bi + 0.5) / (BUCKETS - 1); bcol[bi] = parsePack(rule === "collatz" ? collatzColor(repV) : rvalColor(repV, rule)); }
+        for (let i = 0; i < fld.length; i++) {
+          let v = fld[i];
+          if (rule === "hqst") { v = fld[i] * fld[i] + fim[i] * fim[i]; if (v < thresh) continue; }
+          else if (rule === "collatz") { if (v <= 1) continue; }
+          else if (v < thresh) continue;
+          let bi;
+          if (rule === "collatz") bi = Math.min(BUCKETS - 1, Math.floor(Math.log2(v) / 30 * BUCKETS));
+          else if (rule === "hqst") bi = Math.min(BUCKETS - 1, Math.floor(Math.min(1, v / vmax) * (BUCKETS - 1)));
+          else bi = Math.min(BUCKETS - 1, Math.floor(Math.min(1, v) * (BUCKETS - 1)));
+          plot(Math.round((CX[i] * s + tx) * dpr), Math.round((CY[i] * s + ty) * dpr), bcol[bi]);
+        }
+      }
+    } else {
+      const col = colorRef.current, packed = {};
+      for (const cc of ALLCOL) { const a = COLA[cc]; packed[cc] = packRGB(a[0], a[1], a[2]); }
+      for (let i = 0; i < col.length; i++) { const cc = col[i]; if (!cc) continue; plot(Math.round((CX[i] * s + tx) * dpr), Math.round((CY[i] * s + ty) * dpr), packed[cc]); }
+    }
+    ctx.putImageData(img, 0, 0);
+    ctx.setTransform(dpr * s, 0, 0, dpr * s, dpr * tx, dpr * ty);
+    drawFrame(ctx, s);
+    dirtyRef.current = false;
+  }, []);
+
   // --- Render ---------------------------------------------------------------
   const draw = useCallback(() => {
     const canvas = canvasRef.current; if (!canvas) return;
@@ -1006,6 +1080,10 @@ export default function GolHex() {
     const Wc = canvas.width, Hc = canvas.height;
     const { s, tx, ty } = viewRef.current;
     const g = gridRef.current; const hr = g.hr, r0 = g.rows, c0 = g.cols;
+
+    // Hybrid: winzige Zellen (XXL/rausgezoomt) -> ImageData-Raster (flach, 60fps);
+    // grosse Zellen (S/M/L) -> schoene Hex-Pfade (chunked).
+    if (hr * s < 3.5) { drawRaster(); return; }
 
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.fillStyle = T.bg; ctx.fillRect(0, 0, Wc, Hc);
