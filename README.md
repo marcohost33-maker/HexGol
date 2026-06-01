@@ -1,9 +1,19 @@
 # GolHex
 
-Hexagonal Game of Life with telemetry pipeline, Safari trackpad support,
-and a deterministic `window.__TEST__` bridge for browser automation.
+Hexagonal Game of Life **plus a real-valued physics layer** (Schneeflocke,
+Wasser, Collatz, Genetik) and a norm-conserving **quantum tight-binding
+simulation (HQST)** — single React component over a Canvas2D render path.
 
-> v17.14 - Coworker Research / Coworkerz - 2026-05-07
+> **v29.0 (v29L.2)** - Coworker Research / Coworkerz - 2026-06-01
+
+> **Migration 2026-06-01 (v19.1 → v29L.2):** Dieses Repo wurde von der v19-
+> Telemetrie-/`__TEST__`-Bridge-Linie auf die feature-reiche Drive-Linie
+> **v29L.2** gehoben (kanonisch). Neu: waehlbarer **Rahmen Kreis/Rechteck**
+> (Domaenen-Maske), **reellwertige Physik** + **HQST** (Crank-Nicolson, unitaer),
+> Topologie-Kopplung (Torus/RP2), **TURBO**-Tempo. Der alte `window.__TEST__`-
+> Bridge entfiel; die e2e-Suite ist jetzt ein funktionaler Smoke-Test
+> (`tests/e2e/smoke.spec.ts`, keine Pixel-Baselines). `src/lib/hex.js` + Unit-
+> Tests bleiben als unabhaengige Topologie-Bibliothek erhalten (Cleanup-Follow-up).
 
 ## What this is
 
@@ -11,7 +21,9 @@ GolHex is a Carter-Bays hex-topology cellular automaton implemented as a
 single React component over a Canvas2D render path. It supports five grid
 sizes from 40x50 (S) to 200x250 (XXL), 16 birth/survival rules plus one
 **formula rule** (`WZL`, see below), three brush colors with two color-mixing
-strategies, and a tactile-brutalism UI.
+strategies, a **selectable domain frame (circle / rectangle)**, a real-valued
+physics layer (snow / water / Collatz / genetics) and a unitary **HQST**
+quantum tight-binding mode, and a tactile-brutalism UI.
 
 The companion telemetry pipeline subscribes to the browser's
 `PerformanceObserver` for `long-animation-frame`, `longtask`, and `event`
