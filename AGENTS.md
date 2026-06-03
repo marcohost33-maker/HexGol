@@ -1,8 +1,8 @@
 ---
 name: hexgol-agents-md
 description: AI coding agent instructions for GolHex (hexagonal Game of Life)
-version: "1.1"
-last_updated: 2026-05-29
+version: "1.2"
+last_updated: 2026-06-03
 priority_when_in_conflict: 1
 ---
 
@@ -93,6 +93,18 @@ npm run test:e2e:update   # refresh Playwright snapshots (use deliberately)
   Dependabot bump them via PR; don't hand-edit SHAs.
 - **Docs:** `README.md` documents the rule set and controls; keep it current
   when rules or hooks change.
+
+## Branch & PR conventions (agents)
+
+- **One agent = one branch prefix:** `claude/<task>` (Claude Code), `codex/<task>`
+  (OpenAI Codex), `bot/<task>` (CI/automation). Human-led work: `feat|fix|docs/<task>`.
+- **Agent output opens as a Draft PR** and stays draft until Definition-of-Done is
+  verified; then mark ready.
+- **Label agent PRs:** `agent:claude` / `agent:codex` / `agent:bot`.
+- **Auto-merge over manual merge:** enable `gh pr merge --auto --squash` once required
+  checks exist; a second concurrent PR must rebase on the updated main.
+- **No concurrent agent pushes** to the same repo: serialize, or split work by branch
+  namespace and let auto-merge order the merges.
 
 ## §3 Don't
 
