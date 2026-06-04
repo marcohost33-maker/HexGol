@@ -4,16 +4,23 @@ Hexagonal Game of Life **plus a real-valued physics layer** (Schneeflocke,
 Wasser, Collatz, Genetik) and a norm-conserving **quantum tight-binding
 simulation (HQST)** — single React component over a Canvas2D render path.
 
-> **v29.0 (v29L.2)** - Coworker Research / Coworkerz - 2026-06-01
+> **v31.0** - Coworker Research / Coworkerz - 2026-06-04
 
-> **Migration 2026-06-01 (v19.1 → v29L.2):** Dieses Repo wurde von der v19-
-> Telemetrie-/`__TEST__`-Bridge-Linie auf die feature-reiche Drive-Linie
-> **v29L.2** gehoben (kanonisch). Neu: waehlbarer **Rahmen Kreis/Rechteck**
-> (Domaenen-Maske), **reellwertige Physik** + **HQST** (Crank-Nicolson, unitaer),
-> Topologie-Kopplung (Torus/RP2), **TURBO**-Tempo. Der alte `window.__TEST__`-
-> Bridge entfiel; die e2e-Suite ist jetzt ein funktionaler Smoke-Test
-> (`tests/e2e/smoke.spec.ts`, keine Pixel-Baselines). `src/lib/hex.js` + Unit-
-> Tests bleiben als unabhaengige Topologie-Bibliothek erhalten (Cleanup-Follow-up).
+> **Re-Konvergenz 2026-06-04 (v29L.3b + v31 → v31.0):** Die Produktlinie
+> (Drive-`golhex v31`) und die Repo-Linie (v29L.3b mit `sim-core.js`-Extraktion +
+> ImageData-Raster-Fast-Path) wurden wieder zusammengefuehrt. **v31 fuehrt** als
+> `src/App.tsx`-Basis; die Repo-Deltas wurden nachgezogen. Neu in v31 ggue.
+> v29L.2: zwei zusaetzliche **Rahmenformen Hexagon/Dreieck** (kubische
+> Koordinaten), TORUS-Korrektur (nur Box kachelt; Circle antipodal RP2;
+> Hexagon/Dreieck berandet), **inkrementelles Neuzeichnen** + **Touch-Haertung**
+> (s.u.). Nachgezogene Repo-Deltas: HQST-Kern in `src/lib/sim-core.js`,
+> Hex-Wuerfelgeometrie in `src/lib/hex-geom.js` (beide unit-getestet, Single
+> Source), **ImageData-Raster-Fast-Path** (Vollredraw winziger Zellen),
+> **TURBO**-Tempo, Coworkerz-Schliessen-Button.
+>
+> Build-Fix: `index.html` ist wieder der Vite-Entry (`/src/main.jsx`); seit PR#31
+> war ein eingefrorenes Inline-Bundle eingecheckt, sodass `npm run build` die
+> `src/`-Aenderungen nicht mehr buendelte.
 
 ## What this is
 
@@ -21,9 +28,37 @@ GolHex is a Carter-Bays hex-topology cellular automaton implemented as a
 single React component over a Canvas2D render path. It supports five grid
 sizes from 40x50 (S) to 200x250 (XXL), 16 birth/survival rules plus one
 **formula rule** (`WZL`, see below), three brush colors with two color-mixing
-strategies, a **selectable domain frame (circle / rectangle)**, a real-valued
-physics layer (snow / water / Collatz / genetics) and a unitary **HQST**
-quantum tight-binding mode, and a tactile-brutalism UI.
+strategies, a **selectable domain frame (rectangle / circle / hexagon /
+triangle)**, a real-valued physics layer (snow / water / Collatz / genetics)
+and a unitary **HQST** quantum tight-binding mode, and a tactile-brutalism UI.
+
+### Domain frames + topology
+
+Four frame shapes define the simulation domain (cells outside are permanent
+walls); each picks the largest inscribed shape that fills the hex field:
+
+| Frame | Geometry | Torus coupling |
+|-------|----------|----------------|
+| **Rechteck** (box) | full grid | periodic wrap (the only shape that tiles the plane cleanly) |
+| **Kreis** (circle) | largest inscribed disc | antipodal identification = real projective plane (RP²) |
+| **Hexagon** | exact regular hexagon via cube-coord hex distance (`hexDist ≤ r`); 6 corners are `r` steps along the 6 cube directions, derived from the mask (corner-BBox == mask-BBox, verified) | bounded (no wrap) |
+| **Dreieck** (triangle) | equilateral, point-up, via three half-plane sign tests | bounded (no wrap) |
+
+The hexagon outline and mask share one source of truth
+(`src/lib/hex-geom.js`); the cell count is an exact centered-hexagonal number
+`1 + 3r(r+1)` (unit-tested in `tests/unit/hex-geom.test.js`).
+
+### Touch / pointer controls
+
+- **Canvas + sliders** use `touch-action: none` and a non-passive `touchmove`
+  listener so painting / pan / pinch-zoom don't scroll the page; plain vertical
+  scroll outside those elements is passed through (`touch-action: pan-y` +
+  `overscroll-behavior: contain` on the root).
+- **Wheel / trackpad-pinch zoom** is proportional (exponential), with the
+  `ctrlKey` trackpad-pinch gesture handled smoothly (Figma/tldraw/Excalidraw
+  pattern) via a non-passive `wheel` listener.
+- All buttons meet the **WCAG 2.2 ≥44px** touch-target size with a visible
+  keyboard focus ring; reduced-motion is respected.
 
 ### Real-valued physics + HQST quantum mode
 
@@ -73,13 +108,16 @@ The Playwright run starts the production preview automatically.
 ## Project layout
 
 ```
+index.html         - Vite entry (loads /src/main.jsx)
 src/
-  App.tsx          - main React component (~1960 lines, v29L.2)
+  App.tsx          - main React component (~2200 lines, v31)
   main.jsx         - React root mount
   lib/sim-core.js  - pure HQST core (applyH, solveCN — Crank-Nicolson); unit-tested
+  lib/hex-geom.js  - pure hex cube-coord geometry (oddRToCube/cubeToOddR/hexDist/CUBE_DIRS); unit-tested
 tests/
-  unit/            - Vitest specs for src/lib/sim-core.js (CN norm conservation)
-  e2e/             - Playwright smoke spec (functional, no pixel baselines)
+  unit/            - Vitest: sim-core.test.js (CN norm conservation + convergence flag),
+                     hex-geom.test.js (hexagon frame == mask, centered-hex number)
+  e2e/             - Playwright smoke + visual baselines (life random, XXL circle frame)
 .github/
   workflows/
     unit-tests.yml         - Vitest on push/PR

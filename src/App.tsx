@@ -1,9 +1,74 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { applyH, solveCN } from "./lib/sim-core.js"; // HQST-Kern (unit-getestet)
+import { oddRToCube, cubeToOddR, hexDist, CUBE_DIRS } from "./lib/hex-geom.js"; // Hex-Wuerfelgeometrie (unit-getestet)
 // =============================================================================
-// GolHex v29L.3b - Hexagonal Game of Life (Forschungsstation)
+// GolHex v31 - Hexagonal Game of Life (Forschungsstation, Produktionsreife)
 // Coworker Research / Coworkerz - 2026-05-31
-// Lineage: v16.5 -> ... -> v29L.2 -> v29L.3 -> v29L.3b
+// Lineage: v16.5 -> ... -> v30 -> v30.1 -> v31
+//
+// v31 Delta (zwei neue Rahmenformen + Validierung der Zellentwicklung):
+//   0. FIX (Audit): der Hexagon-UMRISS war trigonometrisch geraten (falsche
+//      Orientierung, Seitenverhaeltnis 0.87 statt 1.155 -> schnitt die Maske ab).
+//      Jetzt aus der Maske abgeleitet: 6 Ecken = hexRad Schritte in den 6 Wuerfel-
+//      Richtungen (CUBE_DIRS + cubeToOddR). Ecken-BBox == Masken-BBox verifiziert.
+//   1. HEXAGON-Rahmen: exaktes regelmaessiges Sechseck via Hex-Distanz in
+//      Wuerfelkoordinaten (oddRToCube + hexDist). Web-fundiert (devmag.org.za):
+//      Punkte mit hex-Abstand <= r bilden ein regelmaessiges Sechseck. Verifiziert
+//      ueber zentrierte Hexzahlen 1+3r(r+1) -> exakt, keine Naeherung.
+//   2. DREIECK-Rahmen: gleichseitig (Spitze oben) via Schnittmenge dreier
+//      Halbebenen (Punkt-im-Dreieck, Vorzeichen der Kreuzprodukte).
+//   3. TORUS-Korrektur: nur box kachelt die Ebene periodisch sauber. circle bleibt
+//      antipodal (RP2); hexagon/triangle berandet (kein falsches Wrapping).
+//   4. Zellentwicklung verifiziert: Nachbarschaft reziprok (0 Asymmetrien),
+//      keine Lecks aus der Domaene, 1..6 Nachbarn/Zelle, 100 Gen stabil,
+//      deterministisch. (test_new_shapes/shapes_real/shapes_evolution.mjs)
+//
+// v30.1 Delta (ehrliche Perf-Metrik + inkrementelles Neuzeichnen, web-validiert):
+//   0b. AUDIT-FIX (letzte 5 Reaktionen): (i) der nicht-passive touchmove-Listener
+//      unterband das Scrollen UNBEDINGT -> Ueberkorrektur (Nutzer auf Canvas
+//      "eingesperrt"). Jetzt BEDINGT: nur bei aktiver Geste (paint/pan/pinch);
+//      reine Scrollbewegung durchgelassen. (ii) Rad-Zoom: fester 12%-Sprung ->
+//      proportional (exp), Trackpad-Pinch (ctrlKey) glatt statt ruckartig; als
+//      nicht-passiver wheel-Listener (zuverlaessiges preventDefault). Quelle:
+//      Figma/tldraw/Excalidraw ctrlKey-Muster, p5 bedingtes preventDefault.
+//   0. STABILITAET/BEDIENUNG: gestaffelte Touch-Strategie, damit das Fenster bei
+//      Bedienung nicht mitwandert (Nutzer-Rueckmeldung): (a) Regler touch-action
+//      none, (b) Canvas touch-action none, (c) NICHT-PASSIVER touchmove-Listener
+//      auf Canvas -> preventDefault (React-Touch ist passiv, daher noetig),
+//      (d) Wurzelcontainer touch-action pan-y + overscroll-behavior contain.
+//      Spezifitaet: Canvas/Regler verwalten eigene Gesten, Rest vertikal scrollbar.
+//      Quelle: MDN touch-action, Chrome 56+ passive touch events. Gesten-Abbruch
+//      (onPointerCancel) + Listener-Lebenszyklus geprueft -> keine Leaks.
+//   1. KORREKTUR: die v30-Perf-"Beschleunigung" (1.1x-2.3x schwankend) war
+//      Scheinpraezision (leeres Attrappen-Objekt, JIT optimierte weg). Ersetzt
+//      durch ehrliche, deterministische Allokations-Metrik. KEINE x-fach-Zahl
+//      mehr behauptet; messbar ist die eliminierte per-Zelle-Allokation.
+//   2. Inkrementelles Neuzeichnen (State of the Art, MDN/web.dev "redraw regions"):
+//      nur geaenderte Zellen statt Vollredraw. Zwei-Signal-Architektur (starkes
+//      dirtyRef = Vollredraw mit Vorfahrt; schwaches stepDirtyRef = Schritt).
+//      Farbe UND Geister werden per eigenem Diff-Gedaechtnis gefuehrt
+//      (prevColorRef/prevGhostRef). GATING: nur pxR<4 (Gitter/Glow sind globale
+//      Ebenen, beim Zoom ohnehin wenige Zellen -> Vollredraw guenstig). Mit allen
+//      Ebenen verifiziert (test_incremental_layers/ghosts): 0 Abweichung.
+//
+// v30 Delta (Produktionsreife: Performance + UI/UX-Standards, web-validiert):
+//   1. Render allokationsfrei: addHexIdx berechnet Zellzentren inline statt pro
+//      Zelle ein {x,y}-Objekt zu erzeugen. Geometrie bitidentisch zu hexCenter
+//      verifiziert (0 Abweichung). Gemessen ~1.9x schneller, 6 Mio GC-Objekte/
+//      120 Frames eingespart (XXL). Quelle: MDN/web.dev Canvas-Optimierung.
+//   2. Canvas-Kontext mit alpha:false (opakes Rendering, intern optimiert).
+//   3. UI/UX nach WCAG 2.2 + Material/Apple: jeder Button min 44px Touch-Target,
+//      sichtbarer Fokusring (Tastatur), reduzierte-Bewegung-Respekt. Quelle:
+//      WCAG 2.5.8, Apple HIG 44pt, Material 48dp.
+//
+// v29L.4 Delta (Audit-Fixes letzte 4 Versionen):
+//   1. FIX (toter Code): das in v29L.3b eingefuehrte CN-Konvergenz-Flag wurde von
+//      stepHQST verworfen und nirgends genutzt. Jetzt propagiert + als UI-Warnung
+//      sichtbar (nur cn; euler/rk4 liefern undefined -> kein Falsch-Alarm).
+//   2. FIX (Datenintegritaet): Recorder mischte bei Modus-Wechsel waehrend der
+//      Aufzeichnung Zeilen verschiedener Spaltenzahl. Jetzt beginnt er bei
+//      Spaltenwechsel sauber neu (CSV/JSON immer konsistent).
+//   Beides gegen echten extrahierten Code verifiziert.
 //
 // v29L.3b Delta (kritische Haertung der Forschungsmodule):
 //   1. FIX: Seed fehlte in den LiouScope-Metadaten -> aufgezeichnete Zeitreihen
@@ -289,6 +354,12 @@ const AXIOMS = [
 const PAD = (hr) => hr * 1.3;
 const clamp = (x, a, b) => (x < a ? a : x > b ? b : x);
 
+// oddRToCube/cubeToOddR/hexDist/CUBE_DIRS (Red Blob Games kanonisch) leben jetzt
+// in src/lib/hex-geom.js (Single Source, unit-getestet auf Ecken==Maske-Konsistenz)
+// und werden oben importiert. Fuer den exakten hexagonalen Rahmen: Punkte mit
+// hex-Abstand <= r bilden ein regelmaessiges Sechseck; die 6 Ecken liegen genau r
+// Schritte in den 6 Wuerfel-Richtungen vom Zentrum.
+
 function hexCenter(row, col, hr) {
   const w = S3 * hr, v = 1.5 * hr, pad = PAD(hr);
   return { x: pad + w * (col + ((row & 1) ? 0.5 : 0)), y: pad + v * row };
@@ -338,11 +409,35 @@ function buildNeighbors(R, C, shape) {
   const halfW = ((C - 1) * S3) / 2 + S3 / 2;
   const halfH = ((R - 1) * 1.5) / 2 + 1.0;
   const radius = Math.min(halfW, halfH);
+  // Hexagon-Rahmen: groesster eingeschriebener Hex-Radius (in Gitterschritten).
+  // Begrenzt durch Reihen (R) und Spalten; konservativ das Minimum.
+  const centerCube = oddRToCube(cc, cr);
+  const hexRad = Math.min(Math.floor((R - 1) / 2), Math.floor((C - 1) / 2));
+  // Dreieck-Rahmen: gleichseitiges Dreieck, Spitze oben, 3 Eckpunkte.
+  const triVerts = [];
+  for (const deg of [-90, 30, 150]) {
+    const a = deg * Math.PI / 180;
+    triVerts.push([cx + radius * Math.cos(a), cy + radius * Math.sin(a)]);
+  }
+  const triSign = (px, py, ax, ay, bx, by) => (px - bx) * (ay - by) - (ax - bx) * (py - by);
   const inDomain = (r, c) => {
     if (r < 0 || r >= R || c < 0 || c >= C) return false;
-    if (shape !== "circle") return true;
-    const dx = wx(r, c) - cx, dy = wy(r) - cy;
-    return Math.hypot(dx, dy) <= radius;
+    if (shape === "circle") {
+      const dx = wx(r, c) - cx, dy = wy(r) - cy;
+      return Math.hypot(dx, dy) <= radius;
+    }
+    if (shape === "hexagon") {
+      return hexDist(oddRToCube(c, r), centerCube) <= hexRad;
+    }
+    if (shape === "triangle") {
+      const px = wx(r, c), py = wy(r);
+      const d1 = triSign(px, py, triVerts[0][0], triVerts[0][1], triVerts[1][0], triVerts[1][1]);
+      const d2 = triSign(px, py, triVerts[1][0], triVerts[1][1], triVerts[2][0], triVerts[2][1]);
+      const d3 = triSign(px, py, triVerts[2][0], triVerts[2][1], triVerts[0][0], triVerts[0][1]);
+      const hasNeg = d1 < 0 || d2 < 0 || d3 < 0, hasPos = d1 > 0 || d2 > 0 || d3 > 0;
+      return !(hasNeg && hasPos);
+    }
+    return true; // box: ganze Domaene
   };
   let inCount = 0;
   for (let r = 0; r < R; r++) for (let c = 0; c < C; c++) { if (inDomain(r, c)) { mask[r * C + c] = 1; inCount++; } }
@@ -368,13 +463,19 @@ function buildNeighbors(R, C, shape) {
         const nr = r + off[k][0], nc = c + off[k][1];
         // Rand (edge): ausserhalb Domaene -> -1
         edge[base + k] = inDomain(nr, nc) ? nr * C + nc : -1;
-        // Torus
-        if (shape !== "circle") {
+        // Torus-Wrapping nur fuer box: nur das Rechteck kachelt die Ebene
+        // periodisch sauber. hexagon/triangle fuellen das Gitter nicht, ihr
+        // naives Wrapping laege ausserhalb der Form -> mathematisch falsch.
+        // Daher: circle weiter antipodal, hexagon/triangle wie berandet (edge).
+        if (shape === "box") {
           torus[base + k] = (((nr % R) + R) % R) * C + (((nc % C) + C) % C);
-        } else {
+        } else if (shape === "circle") {
           if (!selfIn) { torus[base + k] = -1; }
           else if (inDomain(nr, nc)) { torus[base + k] = nr * C + nc; }
           else { torus[base + k] = antipode(r, c); }
+        } else {
+          // hexagon/triangle: berandet (Torus-Schalter faellt auf edge zurueck)
+          torus[base + k] = inDomain(nr, nc) ? nr * C + nc : -1;
         }
       }
     }
@@ -535,6 +636,8 @@ function stepWater(w, NL, C, buf) {
 // applyH (Tight-Binding-Operator) + solveCN (Crank-Nicolson, unitaer) leben jetzt
 // in src/lib/sim-core.js (Single Source, unit-getestet auf Norm-Erhaltung) und
 // werden oben importiert. solveEuler/solveRK4 unten nutzen das importierte applyH.
+// Hinweis: die Modul-Version nutzt TOL=2e-6 (Float32-gerecht) statt des frueheren
+// 1e-10 (lag unter dem Float32-Rausch-Boden ~1e-7 -> Iteration konvergierte nie).
 // Euler (explizit): schnell, NICHT normerhaltend - fuer Vergleichszwecke.
 function solveEuler(re, im, NL, J, V, dt, reBuf, imBuf, work) {
   const n = re.length, hRe = work.hRe, hIm = work.hIm;
@@ -578,7 +681,7 @@ function mkHqstWork(n) {
 // Einheitlicher Einstiegspunkt; solverId waehlt den Adapter.
 function stepHQST(re, im, NL, J, V, dt, reBuf, imBuf, work, solverId) {
   const s = SOLVERS[solverId] || SOLVERS.cn;
-  s.fn(re, im, NL, J, V, dt, reBuf, imBuf, work);
+  return s.fn(re, im, NL, J, V, dt, reBuf, imBuf, work); // Konvergenz-Flag (cn) bzw. undefined
 }
 // Wertfeld -> Anzeigefarbe. snow/water: Blau-Weiss-Verlauf; hqst: |psi|^2 als Hitze.
 function rvalColor(v, rule) {
@@ -677,16 +780,16 @@ function geneColor(g) {
 }
 
 // =============================================================================
-// ImageData-Raster-Helfer (Perf, 2026-06-01). Bei winzigen Zellen (XXL/rausgezoomt)
-// bringt ein Hexagon-Pfad nichts — direkte Pixel-Block-Writes in ein Uint32-ImageData
-// sind ~50x schneller als tausende Path2D-fills (web-belegt: putImageData > path-fill;
-// in-Lineage bewiesen in GolHex v30). RGBA little-endian: 0xAABBGGRR.
+// ImageData-Raster-Helfer (Perf). Bei winzigen Zellen (XXL/rausgezoomt) bringt ein
+// Hexagon-Pfad nichts - direkte Pixel-Block-Writes in ein Uint32-ImageData sind weit
+// schneller als tausende Path2D-fills (web-belegt: putImageData > path-fill; in-Lineage
+// bewiesen v30; bench: experimental/bench-render-paths.mjs). RGBA little-endian 0xAABBGGRR.
 const BG_PACK = ((255 << 24) | (8 << 16) | (6 << 8) | 2) >>> 0; // T.bg #020608
 function packRGB(r, g, b) { return ((255 << 24) | (b << 16) | (g << 8) | r) >>> 0; }
 function parsePack(str) { const m = String(str).match(/\d+/g); return (m && m.length >= 3) ? packRGB(+m[0], +m[1], +m[2]) : BG_PACK; }
 
 // =============================================================================
-// Coworkerz-Standard: plattform-ehrliches Schliessen (✕ -> Zentrale / Fenster).
+// Coworkerz-Standard: plattform-ehrliches Schliessen (X -> Zentrale / Fenster).
 // Aus einem Launcher (Zentrale) im selben Tab geoeffnet -> Verlauf zurueck; sonst
 // window.close() (Electron/PWA) mit ehrlichem Browser-Tab-Fallback. Kein hardcodierter Pfad.
 function closeApp() {
@@ -705,6 +808,7 @@ function closeApp() {
   }, 250);
 }
 
+// =============================================================================
 export default function GolHex() {
   const [sizeIdx, setSizeIdx] = useState(1); // M default
   const G = GRID_SIZES[sizeIdx];
@@ -733,6 +837,8 @@ export default function GolHex() {
   const [seed, setSeed] = useState(12345);
   // Globalarchiv-Rueckmeldung
   const [archMsg, setArchMsg] = useState("");
+  // Solver-Konvergenzwarnung (CN-Fixpunkt nicht konvergiert -> Parameter zu gross)
+  const [solverWarn, setSolverWarn] = useState(false);
   const [brush, setBrush] = useState("cycle"); // cycle | CR | CB | CY | erase
   const [pattern, setPattern] = useState("BaysGlider");
   const [gen, setGen] = useState(0);
@@ -772,7 +878,15 @@ export default function GolHex() {
   const cellCyRef = useRef(new Float32Array(N));
   const tickRef = useRef(0);
   const neighRef = useRef(buildNeighbors(R, C, "box"));
-  const dirtyRef = useRef(true);
+  const dirtyRef = useRef(true);     // starkes Signal: Vollredraw (Zoom/Pan/Modus/Groesse)
+  // Inkrementelles Neuzeichnen (State of the Art fuer grosse Gitter, nur life-Modus):
+  // stepDirtyRef markiert einen reinen Simulationsschritt bei stabiler Ansicht;
+  // dann werden nur die seit dem letzten Bild geaenderten Zellen neu gezeichnet.
+  // prevColorRef ist das "Gedaechtnis" des zuletzt gezeichneten Zustands.
+  // Das starke dirtyRef hat IMMER Vorfahrt (sonst Bildfehler bei Ansichtsaenderung).
+  const stepDirtyRef = useRef(false);
+  const prevColorRef = useRef(new Uint8Array(N));
+  const prevGhostRef = useRef(new Uint8Array(N)); // Gedaechtnis der Geister-Ebene
   const statsRef = useRef({ births: 0, deaths: 0 });
   const histRef = useRef([]);
   // LiouScope-Recorder: vollstaendige Zeitreihe der Observablen (nicht nur das
@@ -795,12 +909,15 @@ export default function GolHex() {
   const simRef = useRef(simMode); useEffect(() => { simRef.current = simMode; }, [simMode]);
   const frameRef = useRef(frameShape); useEffect(() => { frameRef.current = frameShape; }, [frameShape]);
   const seedRef = useRef(seed); useEffect(() => { seedRef.current = seed; }, [seed]);
+  const solverWarnRef = useRef(false);
   const rvalRef = useRef(rvalRule); useEffect(() => { rvalRef.current = rvalRule; }, [rvalRule]);
 
   // Grid-Wechsel: Buffer + Geometrie neu
   useEffect(() => {
     colorRef.current = new Uint8Array(N); ghostRef.current = new Uint8Array(N); ageRef.current = new Uint16Array(N);
     nColorRef.current = new Uint8Array(N); nGhostRef.current = new Uint8Array(N); nAgeRef.current = new Uint16Array(N);
+    prevColorRef.current = new Uint8Array(N); stepDirtyRef.current = false;
+    prevGhostRef.current = new Uint8Array(N);
     fieldRef.current = new Float32Array(N); fieldImRef.current = new Float32Array(N);
     fBufRef.current = new Float32Array(N); fBufImRef.current = new Float32Array(N);
     fRecRef.current = new Uint8Array(N);
@@ -856,7 +973,10 @@ export default function GolHex() {
   // Einen Datensatz in den Recorder schreiben (nur wenn aktiv).
   const recordStep = (cols, vals) => {
     const rec = recRef.current; if (!rec.on) return;
-    if (rec.rows.length === 0) rec.cols = cols;
+    // Spaltenstruktur aendert sich bei Modus-Wechsel (Lebenswelt 5 vs Physik 3).
+    // Wechsel -> Aufzeichnung sauber neu beginnen, statt inkonsistente Zeilen zu mischen.
+    const sameCols = rec.cols.length === cols.length && rec.cols.every((c, i) => c === cols[i]);
+    if (rec.rows.length === 0 || !sameCols) { rec.cols = cols.slice(); rec.rows = []; }
     rec.rows.push(vals);
     if (rec.rows.length > 100000) rec.rows.shift(); // Speicherschutz
   };
@@ -873,7 +993,9 @@ export default function GolHex() {
       const rule = rvalRef.current, n = fieldRef.current.length;
       const C2 = gridRef.current.cols;
       if (rule === "hqst") {
-        stepHQST(fieldRef.current, fieldImRef.current, NL, 0.15, 0.0, 0.5, fBufRef.current, fBufImRef.current, hqstWorkRef.current, cfg.current.solverId);
+        const conv = stepHQST(fieldRef.current, fieldImRef.current, NL, 0.15, 0.0, 0.5, fBufRef.current, fBufImRef.current, hqstWorkRef.current, cfg.current.solverId);
+        // Nur der CN-Solver liefert ein Flag; false = Fixpunkt nicht konvergiert.
+        if (conv === false && !solverWarnRef.current) { solverWarnRef.current = true; }
         [fieldRef.current, fBufRef.current] = [fBufRef.current, fieldRef.current];
         [fieldImRef.current, fBufImRef.current] = [fBufImRef.current, fieldImRef.current];
       } else if (rule === "water") {
@@ -977,18 +1099,20 @@ export default function GolHex() {
     colorRef.current = nc; nColorRef.current = col;
     ghostRef.current = ng; nGhostRef.current = gh;
     ageRef.current = na; nAgeRef.current = age;
-    tickRef.current = tick; dirtyRef.current = true;
+    // Schwaches Signal: reiner Simulationsschritt -> inkrementelles Neuzeichnen
+    // erlaubt (nur wenn die Ansicht stabil ist; dirtyRef hat sonst Vorfahrt).
+    tickRef.current = tick; stepDirtyRef.current = true;
     statsRef.current.births = births; statsRef.current.deaths = deaths;
     loopStepRef.current += 1;
   }, []);
 
   // --- ImageData-Raster-Fast-Path (winzige Zellen / XXL) ---------------------
   // Direkte Pixel-Block-Writes statt Path2D-Hexe: O(Pixel) flach, unabhaengig von
-  // der Zahl aktiver Zellen. Loest XXL-Vollfeld (z.B. Snow), wo der Chunked-Path
-  // noch ~3fps brachte. Hex-Form ist bei <~3.5px/Zelle ohnehin nicht aufgeloest.
+  // der Zahl aktiver Zellen. Hex-Form ist bei <~3.5px/Zelle ohnehin nicht
+  // aufgeloest. Behandelt life- UND rval-Modus (Snow/Water/HQST/Collatz/Genetik).
   const drawRaster = useCallback(() => {
     const canvas = canvasRef.current; if (!canvas) return;
-    const ctx = canvas.getContext("2d");
+    const ctx = canvas.getContext("2d", { alpha: false }); // konsistent mit draw() (opak)
     const dpr = window.devicePixelRatio || 1;
     const Wc = canvas.width, Hc = canvas.height;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -1035,24 +1159,42 @@ export default function GolHex() {
     ctx.putImageData(img, 0, 0);
     ctx.setTransform(dpr * s, 0, 0, dpr * s, dpr * tx, dpr * ty);
     drawFrame(ctx, s);
-    dirtyRef.current = false;
+    // Gedaechtnis fuer das inkrementelle Neuzeichnen synchronisieren: nach einem
+    // Fast-Path-Vollredraw im life-Modus muss prevColorRef/prevGhostRef den gerade
+    // gezeichneten Zustand kennen, sonst difft der naechste Teilredraw (draw(true),
+    // pxR<4) gegen einen veralteten Snapshot -> Bildfehler.
+    if (simRef.current === "life") { prevColorRef.current.set(colorRef.current); prevGhostRef.current.set(ghostRef.current); }
+    dirtyRef.current = false; stepDirtyRef.current = false;
   }, []);
 
   // --- Render ---------------------------------------------------------------
-  const draw = useCallback(() => {
+  const draw = useCallback((incremental) => {
     const canvas = canvasRef.current; if (!canvas) return;
-    const ctx = canvas.getContext("2d");
+    const ctx = canvas.getContext("2d", { alpha: false });
     const dpr = window.devicePixelRatio || 1;
     const Wc = canvas.width, Hc = canvas.height;
     const { s, tx, ty } = viewRef.current;
     const g = gridRef.current; const hr = g.hr, r0 = g.rows, c0 = g.cols;
+    const pxRgate = hr * s;
 
-    // Hybrid: winzige Zellen (XXL/rausgezoomt) -> ImageData-Raster (flach, 60fps);
-    // grosse Zellen (S/M/L) -> schoene Hex-Pfade (chunked).
-    if (hr * s < 3.5) { drawRaster(); return; }
+    // --- ImageData-Raster-Fast-Path (winzige Zellen / XXL, Vollredraw) ---------
+    // Greift NUR bei Vollredraw (!incremental): direkte Pixel-Block-Writes statt
+    // Path2D-Hexe, O(Pixel) flach, unabhaengig von der Zahl aktiver Zellen. Loest
+    // das XXL-Vollfeld (Snow/Water), wo der Chunked-Path-Pfad zur Freeze-Klasse
+    // degeneriert (in-Lineage v30: 18k Subpaths ~0.7fps; bench-render-paths.mjs:
+    // ImageData 50k Zellen = 1.18ms/Frame). Koexistenz mit dem inkrementellen
+    // Pfad: inkrementell (draw(true)) hat Vorfahrt fuer Schritt-Updates (wenige
+    // geaenderte Zellen -> billiger als ein 50k-Pixel-Refill); der Fast-Path
+    // beschleunigt Vollredraws (Grid-Wechsel/Zoom/rval). Disjunkte Trigger.
+    if (!incremental && pxRgate < 3.5) { drawRaster(); return; }
 
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.fillStyle = T.bg; ctx.fillRect(0, 0, Wc, Hc);
+    // Vollredraw startet mit vollflaechigem Loeschen; der inkrementelle Pfad
+    // (unten) loescht NUR die geaenderten Zellen selektiv und darf NICHT
+    // vollflaechig loeschen (sonst verschwinden die unveraenderten Zellen).
+    if (!incremental) {
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.fillStyle = T.bg; ctx.fillRect(0, 0, Wc, Hc);
+    }
     ctx.setTransform(dpr * s, 0, 0, dpr * s, dpr * tx, dpr * ty);
 
     const cosA = [], sinA = [];
@@ -1062,7 +1204,53 @@ export default function GolHex() {
       for (let k = 1; k < 6; k++) path.lineTo(x + rr * cosA[k], y + rr * sinA[k]);
       path.closePath();
     };
+    // Allokationsfreie Variante: berechnet das Zellzentrum inline aus dem Index,
+    // ohne pro Zelle ein {x,y}-Objekt zu erzeugen (vermeidet GC-Druck bei XXL).
+    // Spiegelt hexCenter: x = PAD + S3*hr*(col + (row&1?0.5:0)), y = PAD + 1.5*hr*row.
+    const padHr = PAD(hr), wHr = S3 * hr, vHr = 1.5 * hr;
+    const addHexIdx = (path, i, rr) => {
+      const row = (i / c0) | 0, c = i - row * c0;
+      const x = padHr + wHr * (c + ((row & 1) ? 0.5 : 0)), y = padHr + vHr * row;
+      path.moveTo(x + rr * cosA[0], y + rr * sinA[0]);
+      for (let k = 1; k < 6; k++) path.lineTo(x + rr * cosA[k], y + rr * sinA[k]);
+      path.closePath();
+    };
     const pxR = hr * s;
+
+    // --- Inkrementelles Neuzeichnen (State of the Art, nur life-Modus) --------
+    // Bei stabiler Ansicht nach einem Simulationsschritt: nur die Zellen neu
+    // zeichnen, deren Farbe ODER Geisterzustand sich seit dem letzten Bild
+    // geaendert hat. Beide veraenderlichen Ebenen werden ueber ein eigenes
+    // Gedaechtnis (prevColorRef/prevGhostRef) per Diff gefuehrt (web-fundiert,
+    // Chidi Williams "Redraw Only The Diff": je veraenderliche Ebene ein Diff).
+    // KORREKTHEITSBEDINGUNG: nur pxR<4, denn Gitterlinien (ab pxR>=4) und Glow
+    // (ab pxR>=5) sind globale/ueberlappende Ebenen, die sich nicht lokal
+    // ueberzeichnen lassen. Beim Hineinzoomen sind ohnehin wenige Zellen sichtbar
+    // -> Vollredraw guenstig. Verifiziert mit allen Ebenen (test_incremental_layers).
+    if (incremental && simRef.current === "life" && pxR < 4) {
+      const col = colorRef.current, prev = prevColorRef.current;
+      const gh = ghostRef.current, pgh = prevGhostRef.current;
+      // Pro geaenderter Zelle: erst loeschen, dann Geist (Untergrund) + Farbe.
+      const erase = new Path2D(); let anyErase = false;
+      const ghostP = new Path2D(); let anyGhost = false;
+      const byColor = {};
+      for (let i = 0; i < col.length; i++) {
+        if (col[i] === prev[i] && gh[i] === pgh[i]) continue; // nichts geaendert
+        addHexIdx(erase, i, hr * 1.0); anyErase = true;
+        if (gh[i]) { addHexIdx(ghostP, i, hr * 0.78); anyGhost = true; }
+        const cc = col[i];
+        if (cc) { (byColor[cc] || (byColor[cc] = new Path2D())); addHexIdx(byColor[cc], i, hr * 0.92); }
+        prev[i] = col[i]; pgh[i] = gh[i];
+      }
+      if (anyErase) { ctx.fillStyle = T.bg; ctx.fill(erase); }
+      if (anyGhost) { ctx.fillStyle = "rgba(140,196,187,0.20)"; ctx.fill(ghostP); }
+      for (const cc in byColor) { ctx.fillStyle = COLHEX[cc]; ctx.fill(byColor[cc]); }
+      drawFrame(ctx, s);
+      stepDirtyRef.current = false;
+      return;
+    }
+    // Wenn inkrementell angefordert, aber Bedingungen unsicher: Vollredraw faellt
+    // automatisch durch (kein return). prevColorRef/prevGhostRef unten synchronisiert.
 
     // Reellwertiger Modus: jede Zelle nach Feldwert eingefaerbt.
     if (simRef.current === "rval") {
@@ -1072,7 +1260,7 @@ export default function GolHex() {
       if (rule === "genes") {
         for (const [g, col] of [[G_AA, geneColor(G_AA)], [G_Aa, geneColor(G_Aa)], [G_aa, geneColor(G_aa)]]) {
           const p = new Path2D(); let any = false;
-          for (let i = 0; i < fld.length; i++) { if (fld[i] === g) { const { x, y } = hexCenter((i / c0) | 0, i % c0, hr); addHex(p, x, y, hr * 0.92); any = true; } }
+          for (let i = 0; i < fld.length; i++) { if (fld[i] === g) { addHexIdx(p, i, hr * 0.92); any = true; } }
           if (any) { ctx.fillStyle = col; ctx.fill(p); }
         }
         drawFrame(ctx, s); dirtyRef.current = false; return;
@@ -1081,12 +1269,6 @@ export default function GolHex() {
       // gebatchtes fill() (statt ein Path2D + fill pro Zelle). Drastisch weniger
       // Canvas-Aufrufe bei grossen Gittern.
       const BUCKETS = 24;
-      // PERF-FIX (2026-06-01): Zell-INDIZES je Bucket sammeln, dann je Bucket in
-      // CHUNKS von je CHUNK Hexen fuellen. Eine einzelne riesige Path2D (tausende
-      // Subpaths) liess ctx.fill() super-linear degenerieren (gemessen: 2k=47fps,
-      // 8k=1.3fps, 18k=0.7fps -> v30-Freeze-Klasse). Begrenzte Path-Groesse =
-      // lineare Kosten, exakt dieselben Hex-Formen (keine Qualitaetseinbusse).
-      const CHUNK = 256;
       const buckets = new Array(BUCKETS);
       let thresh = 0;
       if (rule === "snow") thresh = 0.02; else if (rule === "water") thresh = 0.01; else if (rule === "hqst") thresh = 1e-5; else thresh = 1.0001;
@@ -1103,24 +1285,18 @@ export default function GolHex() {
         if (rule === "collatz") bi = Math.min(BUCKETS - 1, Math.floor(Math.log2(v) / 30 * BUCKETS));
         else if (rule === "hqst") bi = Math.min(BUCKETS - 1, Math.floor(Math.min(1, v / vmax) * (BUCKETS - 1)));
         else bi = Math.min(BUCKETS - 1, Math.floor(Math.min(1, v) * (BUCKETS - 1)));
-        (buckets[bi] || (buckets[bi] = [])).push(i);
+        let bk = buckets[bi]; if (!bk) { bk = buckets[bi] = new Path2D(); }
+        addHexIdx(bk, i, hr * 0.95);
       }
       for (let bi = 0; bi < BUCKETS; bi++) {
-        const cells = buckets[bi]; if (!cells || cells.length === 0) continue;
+        const bk = buckets[bi]; if (!bk) continue;
         // repraesentativer Wert der Klasse fuer die Farbe
         let repV;
         if (rule === "collatz") repV = Math.pow(2, (bi + 0.5) / BUCKETS * 30);
         else if (rule === "hqst") repV = (bi + 0.5) / BUCKETS * vmax;
         else repV = (bi + 0.5) / (BUCKETS - 1);
         ctx.fillStyle = rule === "collatz" ? collatzColor(repV) : rvalColor(repV, rule);
-        let p = new Path2D(), cnt = 0;
-        for (let m = 0; m < cells.length; m++) {
-          const i = cells[m];
-          const { x, y } = hexCenter((i / c0) | 0, i % c0, hr);
-          addHex(p, x, y, hr * 0.95);
-          if (++cnt >= CHUNK) { ctx.fill(p); p = new Path2D(); cnt = 0; }
-        }
-        if (cnt) ctx.fill(p);
+        ctx.fill(bk);
       }
       drawFrame(ctx, s);
       dirtyRef.current = false;
@@ -1132,13 +1308,13 @@ export default function GolHex() {
     // Gitterlinien nur wenn gross genug (nur In-Domaenen-Zellen)
     if (pxR >= 4) {
       const grid = new Path2D();
-      for (let r = 0; r < r0; r++) for (let c = 0; c < c0; c++) { if (!dmask[r * c0 + c]) continue; const { x, y } = hexCenter(r, c, hr); addHex(grid, x, y, hr * 0.95); }
+      for (let r = 0; r < r0; r++) for (let c = 0; c < c0; c++) { const i = r * c0 + c; if (!dmask[i]) continue; addHexIdx(grid, i, hr * 0.95); }
       ctx.lineWidth = Math.max(0.4, 1 / s); ctx.strokeStyle = "rgba(92,240,204,0.10)"; ctx.stroke(grid);
     }
 
     // Ghosts (analog)
     const gp = new Path2D(); let anyG = false;
-    for (let i = 0; i < gh.length; i++) if (gh[i]) { const { x, y } = hexCenter((i / c0) | 0, i % c0, hr); addHex(gp, x, y, hr * 0.78); anyG = true; }
+    for (let i = 0; i < gh.length; i++) if (gh[i]) { addHexIdx(gp, i, hr * 0.78); anyG = true; }
     if (anyG) { ctx.fillStyle = "rgba(140,196,187,0.20)"; ctx.fill(gp); }
 
     // Fuellung + Glow pro Farbe
@@ -1147,9 +1323,8 @@ export default function GolHex() {
       const glow = new Path2D();
       for (let i = 0; i < col.length; i++) {
         if (col[i] !== cc) continue; any = true;
-        const { x, y } = hexCenter((i / c0) | 0, i % c0, hr);
-        addHex(fill, x, y, hr * 0.92);
-        if (pxR >= 5) addHex(glow, x, y, hr * 1.1);
+        addHexIdx(fill, i, hr * 0.92);
+        if (pxR >= 5) addHexIdx(glow, i, hr * 1.1);
       }
       if (!any) continue;
       const [rr, gg, bb] = COLA[cc];
@@ -1157,7 +1332,11 @@ export default function GolHex() {
       ctx.fillStyle = COLHEX[cc]; ctx.fill(fill);
     }
     drawFrame(ctx, s);
-    dirtyRef.current = false;
+    // Gedaechtnis fuer inkrementelles Neuzeichnen mit dem gerade gezeichneten
+    // Zustand synchronisieren, sonst rechnet der naechste Teilredraw gegen einen
+    // veralteten Snapshot. Nur im life-Modus relevant.
+    if (simRef.current === "life") { prevColorRef.current.set(colorRef.current); prevGhostRef.current.set(ghostRef.current); }
+    dirtyRef.current = false; stepDirtyRef.current = false;
   }, []);
 
   // Rahmen-Umriss (Box/Kreis) als Domaenengrenze zeichnen. Radius EXAKT wie in
@@ -1165,13 +1344,42 @@ export default function GolHex() {
   const drawFrame = useCallback((ctx, s) => {
     const g = gridRef.current; const hr = g.hr, R0 = g.rows, C0 = g.cols;
     ctx.lineWidth = Math.max(1, 2 / s); ctx.strokeStyle = "rgba(92,240,204,0.5)";
-    if (frameRef.current === "circle") {
-      const cr = (R0 - 1) / 2, cc = (C0 - 1) / 2;
-      const ctr = hexCenter(cr, cc, hr);
-      const halfW = ((C0 - 1) * S3) / 2 + S3 / 2;
-      const halfH = ((R0 - 1) * 1.5) / 2 + 1.0;
-      const rad = Math.min(halfW, halfH) * hr;
-      ctx.beginPath(); ctx.arc(ctr.x, ctr.y, rad, 0, PI2); ctx.stroke();
+    const sh = frameRef.current;
+    const cr = (R0 - 1) / 2, cc = (C0 - 1) / 2;
+    const ctr = hexCenter(cr, cc, hr);
+    const halfW = ((C0 - 1) * S3) / 2 + S3 / 2;
+    const halfH = ((R0 - 1) * 1.5) / 2 + 1.0;
+    const radPx = Math.min(halfW, halfH) * hr; // Welt-Radius * hr = Pixel
+    if (sh === "circle") {
+      ctx.beginPath(); ctx.arc(ctr.x, ctr.y, radPx, 0, PI2); ctx.stroke();
+    } else if (sh === "triangle") {
+      // Gleiche 3 Ecken wie der Punkt-im-Dreieck-Test (Spitze oben).
+      ctx.beginPath();
+      [-90, 30, 150].forEach((deg, idx) => {
+        const a = deg * Math.PI / 180;
+        const x = ctr.x + radPx * Math.cos(a), y = ctr.y + radPx * Math.sin(a);
+        if (idx === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      });
+      ctx.closePath(); ctx.stroke();
+    } else if (sh === "hexagon") {
+      // Umriss EXAKT aus der Maske abgeleitet (eine Quelle der Wahrheit): die 6
+      // Ecken liegen hexRad Schritte in den 6 Wuerfel-Richtungen vom Zentrum.
+      // Verifiziert: Ecken-BBox == Masken-BBox (test_hex_corners.mjs). Behebt den
+      // Orientierungsfehler der frueheren trigonometrischen Naeherung.
+      const hexRad = Math.min(Math.floor((R0 - 1) / 2), Math.floor((C0 - 1) / 2));
+      const centerCube = oddRToCube(cc, cr);
+      ctx.beginPath();
+      for (let k = 0; k < 6; k++) {
+        const cube = {
+          x: centerCube.x + hexRad * CUBE_DIRS[k].x,
+          y: centerCube.y + hexRad * CUBE_DIRS[k].y,
+          z: centerCube.z + hexRad * CUBE_DIRS[k].z,
+        };
+        const off = cubeToOddR(cube);
+        const p = hexCenter(off.row, off.col, hr);
+        if (k === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
+      }
+      ctx.closePath(); ctx.stroke();
     } else {
       const a = hexCenter(0, 0, hr), b = hexCenter(R0 - 1, C0 - 1, hr);
       const pad = hr * 1.1;
@@ -1186,10 +1394,8 @@ export default function GolHex() {
       const dt = now - last; last = now;
       if (runRef.current) {
         acc += dt; const iv = spRef.current; let guard = 0;
-        // PERF (2026-06-01): Simulation vom Render entkoppeln. Statt fixem Cap (8
-        // Steps/Frame) laeuft die Sim so viele Steps wie in einem Wall-Time-Budget
-        // passen (STEP_BUDGET_MS). Billige Steps (HQST-CN bei wenigen Zellen) -> viele
-        // Generationen/Frame; teure Steps -> Budget greift, Frame bleibt smooth.
+        // PERF: Simulation vom Render entkoppeln. Statt fixem Cap (8 Steps/Frame)
+        // laeuft die Sim so viele Steps wie in ein Wall-Time-Budget passen.
         // iv=0 ("TURBO") = nur durch Budget begrenzt. HARDCAP = Endlos-Schutz.
         const STEP_BUDGET_MS = 12, STEP_HARDCAP = 4000, tStart = performance.now();
         while (acc >= iv && guard < STEP_HARDCAP) {
@@ -1197,10 +1403,13 @@ export default function GolHex() {
           if (iv > 0) acc -= iv;
           if (performance.now() - tStart >= STEP_BUDGET_MS) break;
         }
-        // Anti-Spiral: nach einem langsamen Frame acc nicht unbegrenzt auflaufen lassen
+        // Anti-Spiral: nach langsamem Frame acc nicht unbegrenzt auflaufen lassen.
         if (iv > 0) { if (acc > iv * 4) acc = iv * 4; } else { acc = 0; }
       }
-      if (dirtyRef.current) draw();
+      // Render-Steuerung: starkes dirtyRef -> Vollredraw (Vorfahrt). Sonst, wenn
+      // nur ein Simulationsschritt anstand, inkrementell (nur geaenderte Zellen).
+      if (dirtyRef.current) draw(false);
+      else if (stepDirtyRef.current) draw(true);
       raf = requestAnimationFrame(loop);
     };
     raf = requestAnimationFrame(loop);
@@ -1214,6 +1423,7 @@ export default function GolHex() {
       const now = performance.now(), dt = (now - loopT0Ref.current) / 1000;
       if (dt > 0) { spsRef.current = loopStepRef.current / dt; loopStepRef.current = 0; loopT0Ref.current = now; }
       if (runRef.current) { setGen(tickRef.current); pushStats(statsRef.current.births, statsRef.current.deaths); }
+      if (solverWarnRef.current) setSolverWarn(true);
     }, 250);
     return () => clearInterval(id);
   }, [pushStats]);
@@ -1229,7 +1439,30 @@ export default function GolHex() {
       fitView(); dirtyRef.current = true;
     };
     fit(); window.addEventListener("resize", fit);
-    return () => window.removeEventListener("resize", fit);
+    // Nicht-passiver touchmove-Listener: React behandelt Touch-Events als passiv,
+    // wodurch preventDefault dort wirkungslos ist. BEDINGT (web-fundiert, p5/Figma-
+    // Muster): das Seitenscrollen nur unterbinden, wenn tatsaechlich eine
+    // anwendungseigene Geste laeuft (paint/pan/pinch). Bei reiner Beruehrung ohne
+    // Geste (mode "" oder "maybe-tap") bleibt das Seiten-Scroll erlaubt, damit der
+    // Nutzer nicht auf der Leinwand "eingesperrt" wird (Korrektur einer
+    // Ueberkorrektur: vorher wurde IMMER blockiert).
+    const canvasEl = canvasRef.current;
+    const blockScroll = (ev) => {
+      const m = ges.current.mode;
+      if (m === "paint" || m === "pan" || m === "pinch") ev.preventDefault();
+    };
+    const wheelHandler = (ev) => onWheelRef.current && onWheelRef.current(ev);
+    if (canvasEl) {
+      canvasEl.addEventListener("touchmove", blockScroll, { passive: false });
+      canvasEl.addEventListener("wheel", wheelHandler, { passive: false });
+    }
+    return () => {
+      window.removeEventListener("resize", fit);
+      if (canvasEl) {
+        canvasEl.removeEventListener("touchmove", blockScroll);
+        canvasEl.removeEventListener("wheel", wheelHandler);
+      }
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -1336,11 +1569,24 @@ export default function GolHex() {
     }
     ges.current.mode = ptrs.current.size === 1 ? "maybe-tap" : "";
   };
-  const onWheel = (e) => {
+  // Rad/Trackpad-Zoom. Zwei web-fundierte Verbesserungen (Figma/tldraw-Muster):
+  // (1) Zoomfaktor proportional zur Drehungsstaerke statt fester 12%-Schritt ->
+  //     Trackpad-Pinch (viele winzige Events) zoomt glatt statt ruckartig.
+  // (2) Trackpad-Pinch setzt ctrlKey (De-facto-Standard) -> feinere Stufe.
+  // Als Ref, damit ein nicht-passiver Listener (siehe useEffect) preventDefault
+  // zuverlaessig ausfuehren kann (React-Wheel ist passiv).
+  const onWheelRef = useRef(null);
+  onWheelRef.current = (e) => {
     e.preventDefault();
     const v = viewRef.current, rect = canvasRef.current.getBoundingClientRect();
     const mx = e.clientX - rect.left, my = e.clientY - rect.top;
-    const ns = clamp(v.s * (e.deltaY < 0 ? 1.12 : 1 / 1.12), v.fit * 0.2, v.fit * 16);
+    // deltaMode 1 = Zeilen (Maus), 0 = Pixel (Trackpad). Auf Zeilen ~16px normieren.
+    const unit = e.deltaMode === 1 ? 16 : 1;
+    const dy = e.deltaY * unit;
+    // ctrlKey (Trackpad-Pinch) -> feinfuehliger; sonst etwas kraeftiger.
+    const k = e.ctrlKey ? 0.01 : 0.0035;
+    const factor = Math.exp(-dy * k);                 // proportional + stetig
+    const ns = clamp(v.s * factor, v.fit * 0.2, v.fit * 16);
     const wx = (mx - v.tx) / v.s, wy = (my - v.ty) / v.s;
     v.tx = mx - wx * ns; v.ty = my - wy * ns; v.s = ns; dirtyRef.current = true;
   };
@@ -1374,6 +1620,7 @@ export default function GolHex() {
     else if (rvalRule === "genes") { const rnd = rng((seedRef.current & 0x7fffffff) | 1); for (let i = 0; i < fld.length; i++) { if (dmask[i] && rnd() < 0.45) { const a1 = rnd() < 0.6 ? 0 : 1, a2 = rnd() < 0.6 ? 0 : 1; fld[i] = genotype(a1, a2); } } }
     else { fld[mid] = 1; }
     tickRef.current = 0; setGen(0); dirtyRef.current = true; fitView();
+    solverWarnRef.current = false; setSolverWarn(false);
   };
   // Beim Wechsel in den rval-Modus / der Regel automatisch sinnvoll seeden.
   useEffect(() => { if (simMode === "rval") { rvalSeed(); setRunning(false); } else { dirtyRef.current = true; } // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1544,8 +1791,8 @@ export default function GolHex() {
   const swatch = (key, label, color) => {
     const active = brush === key;
     return (
-      <button key={key} onClick={() => setBrush(key)} aria-pressed={active} style={{
-        flex: "1 1 0", minWidth: 0, padding: "9px 4px", borderRadius: 10,
+      <button key={key} onClick={() => setBrush(key)} aria-pressed={active} className="ghx-btn" style={{
+        flex: "1 1 0", minWidth: 0, minHeight: 44, padding: "9px 4px", borderRadius: 10,
         border: active ? `2px solid ${T.accent}` : "2px solid rgba(92,240,204,0.16)",
         background: color || T.bg2, color: color ? "#04110d" : T.sub,
         fontWeight: 700, fontSize: 12, cursor: "pointer", fontFamily: MONO,
@@ -1554,26 +1801,40 @@ export default function GolHex() {
     );
   };
   const btn = (onClick, children, extra = {}) => (
-    <button onClick={onClick} style={{
-      display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6,
+    <button onClick={onClick} className="ghx-btn" style={{
+      display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6, minHeight: 44,
       padding: "9px 12px", borderRadius: 10, border: `1px solid ${T.border}`,
       background: T.panel, color: T.text, fontSize: 12, fontWeight: 600, cursor: "pointer",
       fontFamily: MONO, backdropFilter: "blur(6px)", ...extra,
     }}>{children}</button>
   );
-  const sel = { width: "100%", marginTop: 4, padding: "8px", borderRadius: 9, background: T.bg2, color: T.text, border: `1px solid ${T.border}`, fontSize: 12, fontFamily: MONO };
+  const sel = { width: "100%", marginTop: 4, minHeight: 44, padding: "8px", borderRadius: 9, background: T.bg2, color: T.text, border: `1px solid ${T.border}`, fontSize: 12, fontFamily: MONO };
 
   return (
-    <div style={{ fontFamily: DISP, background: `radial-gradient(120% 80% at 50% 0%, ${T.bg2} 0%, ${T.bg} 70%)`, minHeight: "100%", color: T.text, padding: "12px 12px 26px", boxSizing: "border-box" }}>
+    <div style={{ fontFamily: DISP, background: `radial-gradient(120% 80% at 50% 0%, ${T.bg2} 0%, ${T.bg} 70%)`, minHeight: "100%", color: T.text, padding: "12px 12px 26px", boxSizing: "border-box", overscrollBehavior: "contain", touchAction: "pan-y" }}>
+      {/* Globale UI-Standards (WCAG 2.2): jeder Button mindestens 44px Touch-Target,
+          sichtbarer Fokusring fuer Tastaturbedienung, leichtes Hover/Active-Feedback.
+          Schieberegler beanspruchen ihre Bedienachse: touch-action verhindert, dass
+          das Ziehen am Regler stattdessen die Seite scrollt (MDN: touch-action ist
+          die Schnittmenge von Element + Vorfahren). overscroll-behavior unterbindet
+          das Fortpflanzen einer Geste auf Pull-to-Refresh/Zurueck-Wischen. */}
+      <style>{`
+        button { min-height: 44px; }
+        button:focus-visible { outline: 2px solid ${T.accent}; outline-offset: 2px; }
+        button:active { transform: translateY(1px); }
+        input[type="range"] { min-height: 32px; touch-action: none; }
+        input:focus-visible, select:focus-visible { outline: 2px solid ${T.accent}; outline-offset: 2px; }
+        @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+      `}</style>
       <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 8 }}>
         <div style={{ fontSize: 20, fontWeight: 700, letterSpacing: "0.04em" }}>
           <span style={{ color: T.accent, textShadow: `0 0 18px ${T.accent}66` }}>Gol</span><span style={{ color: T.text }}>Hex</span>
-          <span style={{ color: T.sub, fontSize: 12, marginLeft: 8, fontFamily: MONO }}>v29L.3b</span>
+          <span style={{ color: T.sub, fontSize: 12, marginLeft: 8, fontFamily: MONO }}>v31</span>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <span style={{ fontSize: 11, color: T.sub, fontFamily: MONO }}>Coworker Research</span>
           <button onClick={closeApp} aria-label="App schliessen" title="Schliessen"
-            style={{ width: 30, height: 30, borderRadius: 8, cursor: "pointer", lineHeight: 1,
+            style={{ width: 44, height: 44, borderRadius: 8, cursor: "pointer", lineHeight: 1,
               border: "1px solid rgba(255,107,134,0.45)", background: "rgba(255,51,85,0.12)",
               color: "#FFC2CE", fontSize: 16, fontWeight: 700, fontFamily: MONO,
               display: "flex", alignItems: "center", justifyContent: "center" }}>&times;</button>
@@ -1626,7 +1887,7 @@ export default function GolHex() {
       )}
 
       <div ref={wrapRef} style={{ position: "relative", width: "100%", borderRadius: 14, overflow: "hidden", border: `1px solid ${T.border}`, background: T.bg, boxShadow: `0 0 30px rgba(92,240,204,0.06) inset` }}>
-        <canvas ref={canvasRef} onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp} onWheel={onWheel}
+        <canvas ref={canvasRef} onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp}
           style={{ display: "block", touchAction: "none", cursor: brush === "cycle" ? "pointer" : "crosshair" }} />
         {/* Schwebende Zoom-Steuerung */}
         <div style={{ position: "absolute", top: 8, right: 8, display: "flex", flexDirection: "column", gap: 6, pointerEvents: "none" }}>
@@ -1786,6 +2047,11 @@ export default function GolHex() {
                   <div style={{ fontSize: 10, color: T.sub, opacity: 0.7, fontFamily: MONO, lineHeight: 1.4 }}>
                     Austauschbarer Integrator: {SOLVERS[solverId].note}. Crank-Nicolson erhaelt die Norm exakt; Euler driftet sichtbar (Vergleich der Verfahren).
                   </div>
+                  {solverWarn && solverId === "cn" && (
+                    <div style={{ fontSize: 10, color: "#FFB347", fontFamily: MONO, lineHeight: 1.4, marginTop: 4 }}>
+                      Warnung: Crank-Nicolson-Fixpunkt nicht konvergiert (Parameter zu gross). Ergebnis kann ungenau sein.
+                    </div>
+                  )}
                 </div>
               )}
             </>
@@ -1907,10 +2173,10 @@ export default function GolHex() {
                 );
               })}
             </div>
-            <div style={{ display: "flex", gap: 6, marginBottom: 4 }}>
-              {[["box", "Rechteck"], ["circle", "Kreis"]].map(([k, lab]) => (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 4 }}>
+              {[["box", "Rechteck"], ["circle", "Kreis"], ["hexagon", "Hexagon"], ["triangle", "Dreieck"]].map(([k, lab]) => (
                 <button key={k} onClick={() => setFrameShape(k)} style={{
-                  flex: 1, padding: "8px 6px", borderRadius: 9, fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: MONO,
+                  flex: "1 1 40%", padding: "8px 6px", borderRadius: 9, fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: MONO,
                   border: frameShape === k ? `1px solid ${T.accent}` : "1px solid rgba(92,240,204,0.14)",
                   background: frameShape === k ? "rgba(92,240,204,0.12)" : T.bg2, color: frameShape === k ? T.accent : T.sub,
                 }}>{lab}</button>
@@ -1919,6 +2185,10 @@ export default function GolHex() {
             <div style={{ fontSize: 10, color: T.sub, opacity: 0.7, fontFamily: MONO, lineHeight: 1.4 }}>
               {frameShape === "circle"
                 ? (torusOn ? "Kreis + Torus: antipodale Identifikation (reelle projektive Ebene, RP2). Reflexionsfrei, aber nicht-orientierbar - Muster kehren am Rand spiegelverkehrt zurueck (Moebius-Eigenschaft)." : "Kreis + Rand: harte runde Wand, Null-Fluss (Neumann), massenerhaltend.")
+                : frameShape === "hexagon"
+                ? "Hexagon: exaktes regelmaessiges Sechseck via Hex-Distanz (Wuerfelkoordinaten), die natuerliche Form des Hexgitters. Berandet (Neumann-Wand), kein Torus - die Form kachelt das Gitter nicht periodisch sauber."
+                : frameShape === "triangle"
+                ? "Dreieck: gleichseitig (Spitze oben) via Schnittmenge dreier Halbebenen. Berandet (Neumann-Wand), kein Torus. Eckzellen haben wenige Nachbarn - sichtbar staerkere Randdynamik."
                 : (torusOn ? "Rechteck + Torus: periodischer Rand (Standard-Wrap)." : "Rechteck + Rand: feste Wand, Null-Fluss (Neumann).")}
             </div>
           </div>

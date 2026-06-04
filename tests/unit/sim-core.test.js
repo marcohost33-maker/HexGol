@@ -43,4 +43,32 @@ describe("HQST sim-core", () => {
     const w = makeWork(N), rb = new Float32Array(N), ib = new Float32Array(N);
     expect(solveCN(re, im, NL, 1, 0, 0.1, rb, ib, w)).toBe(true);
   });
+
+  // Portiert aus "golhex test cn robust.js" (Drive). Prueft das Konvergenz-Flag
+  // der Fixpunkt-Iteration auf einem 24x24-Hexgitter (periodisch, 6 Nachbarn).
+  // Konvergenzbedingung: Spektralradius a*||H|| < 1, a=dt/2, ||H|| ~ 6*J.
+  // Float64 hier -> Rausch-Boden << TOL=2e-6, daher exakte Konvergenzaussage.
+  describe("cn robust (portiert): Konvergenz-Flag (echtes hexNL)", () => {
+    const R = 24, C = 24, N = R * C;
+    function hexNL() {
+      const T = new Int32Array(N * 6);
+      const odd = [[-1, 0], [-1, 1], [0, -1], [0, 1], [1, 0], [1, 1]];
+      const ev = [[-1, -1], [-1, 0], [0, -1], [0, 1], [1, -1], [1, 0]];
+      for (let r = 0; r < R; r++) { const o = (r & 1) ? odd : ev;
+        for (let c = 0; c < C; c++) { const b = (r * C + c) * 6;
+          for (let k = 0; k < 6; k++) { const nr = r + o[k][0], nc = c + o[k][1];
+            T[b + k] = (((nr % R) + R) % R) * C + (((nc % C) + C) % C); } } }
+      return T;
+    }
+    const NL = hexNL();
+    function run(J, dt) {
+      const re = new Float64Array(N), im = new Float64Array(N); re[(R >> 1) * C + (C >> 1)] = 1;
+      const rb = new Float64Array(N), ib = new Float64Array(N);
+      const w = { bRe: new Float64Array(N), bIm: new Float64Array(N), hRe: new Float64Array(N), hIm: new Float64Array(N) };
+      return solveCN(re, im, NL, J, 0, dt, rb, ib, w);
+    }
+    it("J=0.15 dt=0.5 (a*||H||~=0.225): konvergiert -> true", () => { expect(run(0.15, 0.5)).toBe(true); });
+    it("J=0.15 dt=1.0 (a*||H||~=0.45): konvergiert -> true", () => { expect(run(0.15, 1.0)).toBe(true); });
+    it("J=0.5 dt=2.0 (a*||H||~=3.0 > 1, kritisch): meldet Nicht-Konvergenz -> false", () => { expect(run(0.5, 2.0)).toBe(false); });
+  });
 });
