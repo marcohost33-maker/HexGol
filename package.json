@@ -1,9 +1,9 @@
 {
   "name": "hexgol",
-  "version": "29.1.0",
+  "version": "31.0.0",
   "private": true,
   "type": "module",
-  "description": "GolHex - Hexagonal Game of Life with telemetry pipeline and __TEST__ bridge",
+  "description": "GolHex - Hexagonal Game of Life (v31) with real-valued physics + unitary HQST quantum mode",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
