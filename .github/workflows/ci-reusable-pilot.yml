@@ -1,0 +1,20 @@
+# B3-Pilot Node-Typ (2026-06-04): zentrale Reusable-CI aus coworkerz-ci, ADDITIV
+# neben unit-tests.yml (kein Ersatz, kein BP-Touch). SHA-gepinnt.
+name: ci-reusable-pilot
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    uses: marcohost33-maker/coworkerz-ci/.github/workflows/ci-node.yml@69d3bae0bd54792f499b01c1b6e1e8f6b452742b
+    with:
+      node-version: "22"
+      test-command: "npm test"
+      build-command: "npm run build"
