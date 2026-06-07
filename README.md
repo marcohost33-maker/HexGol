@@ -71,6 +71,28 @@ new colour. Cancel by tapping outside the ring (or releasing without a pick).
   appear in the canvas visual baselines. Behaviour is covered by
   `tests/e2e/longpress-colorwheel.spec.ts`.
 
+### One-page mobile layout (AP-4)
+
+On a narrow portrait viewport (`max-width: 767px`, e.g. a phone) the UI collapses
+to a **single screen with no scrolling**: a compact header (title + close), the
+**canvas filling the maximum available area** (flex-grow), and a fixed **core
+bar** — *Start/Pause · Schritt · Random · Leeren · Menü*. Everything else lives in
+a **bottom sheet** opened by *Menü* (brush/colours, statistics, boundary mode,
+worker toggle, speed, Watzlawick axioms, rule/size/pattern, LiouScope recorder,
+Globalarchiv snapshot). **No function is removed or made unreachable** — only
+progressively disclosed.
+
+- On viewports `≥768px` (desktop) the full control column stays inline (no sheet),
+  so nothing changes for desktop use or the desktop e2e/visual baselines.
+- The close button (`×`, *App schliessen*) — Coworkerz back/close requirement —
+  stays visible in the viewport at all times (`closeApp()`: `history.back()` in a
+  launcher tab, else `window.close()` with an honest browser-tab fallback).
+- Uses `100dvh` + `viewport-fit=cover` + `env(safe-area-inset-*)` for notch/home
+  indicator. Canvas and the colour wheel set `user-select: none` +
+  `-webkit-touch-callout: none` so a long-press never triggers text selection or
+  the iOS callout. Covered by `tests/e2e/mobile-onepage.spec.ts` (mobile project,
+  390×844).
+
 ### Domain frames + topology
 
 Four frame shapes define the simulation domain (cells outside are permanent
@@ -153,7 +175,10 @@ npm run test:watch   # vitest in watch mode
 npm run test:e2e     # Playwright + visual baselines
 ```
 
-The Playwright run starts the production preview automatically.
+The Playwright run starts the production preview automatically. It has two
+projects: **`chromium`** (desktop, 1280×800 — functional + visual baselines) and
+**`mobile`** (390×844 — the AP-4 one-page layout proof, `mobile-onepage.spec.ts`).
+Run one with `npm run test:e2e -- --project=mobile`.
 
 ## Project layout
 

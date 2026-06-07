@@ -310,6 +310,29 @@ export default function GolHex() {
   const [watzOnly, setWatzOnly] = useState(false);
   const [ruleSrc, setRuleSrc] = useState("tot"); // "tot" totalistisch | "int" isotrop-nicht-totalistisch
   const [showLegend, setShowLegend] = useState(false);
+  // AP-4: 1-Seiten-Mobile-Layout. "compact" = schmaler Hochkant-Viewport (Handy):
+  //   Canvas fuellt die Flaeche, Kern-Controls bleiben als feste Leiste sichtbar,
+  //   ALLE Sekundaer-Controls wandern in ein einklappbares Bottom-Sheet (Menue).
+  //   Auf breiteren Viewports (Desktop, >=768px) ist alles weiterhin inline
+  //   sichtbar (kein Desktop-Regress; bestehende e2e laufen bei 1280 weiter).
+  // SSR-/Test-sicher: matchMedia kann fehlen -> Fallback "nicht compact".
+  const [compact, setCompact] = useState(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return false;
+    return window.matchMedia("(max-width: 767px)").matches;
+  });
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return;
+    const mq = window.matchMedia("(max-width: 767px)");
+    const onChange = () => setCompact(mq.matches);
+    onChange();
+    // addEventListener (modern) mit addListener-Fallback (aeltere Safari).
+    if (mq.addEventListener) { mq.addEventListener("change", onChange); return () => mq.removeEventListener("change", onChange); }
+    mq.addListener(onChange); return () => mq.removeListener(onChange);
+  }, []);
+  // Bottom-Sheet (nur im compact-Modus relevant): Default geschlossen, damit die
+  // Startansicht eine Seite ohne Scroll ist (Canvas + Kern-Leiste + Schliessen).
+  const [sheetOpen, setSheetOpen] = useState(false);
+  useEffect(() => { compactRef.current = compact; }, [compact]);
   // Farbmodus: "quad" = QuadLife-farbinvariant (State of the Art),
   //            "mix" = subtraktiver Hue-Mix, "drift" = Verfaerben (experimentell)
   const [colorMode, setColorMode] = useState("quad");
@@ -322,6 +345,7 @@ export default function GolHex() {
   // Haupt-Thread-Pfad (inkl. aller Gesten/Path2D-Detail/inkrementell) unveraendert
   // laeuft. Ist OffscreenCanvas nicht verfuegbar (alte Browser/Safari), bleibt der
   // Schalter ausgeblendet und der Main-Thread-Pfad ist der Fallback.
+  const compactRef = useRef(false);
   const [workerSupported] = useState(() => supportsOffscreenWorker());
   const [workerMode, setWorkerMode] = useState(false);
   const [canvasKey, setCanvasKey] = useState(0); // transferControlToOffscreen ist
@@ -369,6 +393,7 @@ export default function GolHex() {
   const viewRef = useRef({ s: 1, tx: 0, ty: 0, fit: 1 });
   const canvasRef = useRef(null);
   const wrapRef = useRef(null);
+  const refitRef = useRef(null); // AP-4: aktuelle fit()-Funktion (Layout-Reflow-Refit)
   const undoRef = useRef([]);
 
   const cfg = useRef({ ruleIdx, torusOn, ax, a5, R, C, watzOnly, ruleSrc });
@@ -421,6 +446,25 @@ export default function GolHex() {
     sysT: sysTheory, sysSp: sysSetpoint, bcMode: boundaryMode, openSys,
   }), [ruleIdx, torusOn, ax, colorMode, a5, watzOnly, ruleSrc, solverId, sysTheory, sysSetpoint, boundaryMode, openSys]);
 
+  // AP-4: einheitliche Canvas-CSS-Groesse fuer ALLE Pfade (Main + Worker, Init +
+  // Resize). Im compact-Modus (Handy, 1-Seiten-Layout) fuellt die Canvas die reale
+  // Flaeche des flex-grow-Wrappers (groesstmoegliche Leinwand). Auf Desktop bleibt
+  // die bewaehrte Formel min(innerHeight*0.5, 540) -> Desktop-Canvas-Masse und damit
+  // die Visual-Baselines (bei 1280x800) bit-stabil. Untergrenze 160px verhindert
+  // eine 0px-Canvas, falls der Wrapper waehrend eines Layout-Frames noch nicht
+  // gemessen ist.
+  const canvasCssSize = () => {
+    const wrap = wrapRef.current;
+    const cw = wrap ? wrap.clientWidth : (canvasRef.current ? canvasRef.current.clientWidth : 300);
+    let ch;
+    if (compactRef.current && wrap) {
+      ch = Math.max(160, Math.round(wrap.clientHeight));
+    } else {
+      ch = Math.min(Math.round(window.innerHeight * 0.5), 540);
+    }
+    return { cw, ch };
+  };
+
   // AP-1 Worker-Lebenszyklus: spinnt den OffscreenCanvas-Worker hoch, wenn
   // workerMode aktiv (nur moeglich wenn feature-detektiert). transferControlToOffscreen
   // ist je Canvas-Element irreversibel -> canvasKey erzwingt ein frisches Element
@@ -433,9 +477,7 @@ export default function GolHex() {
     try {
       // Canvas-Pixelmasse vor dem Transfer sicherstellen (fit() laeuft sonst erst spaeter).
       const dpr = window.devicePixelRatio || 1;
-      const wrap = wrapRef.current;
-      const cw = wrap ? wrap.clientWidth : canvas.clientWidth;
-      const ch = Math.min(Math.round(window.innerHeight * 0.5), 540);
+      const { cw, ch } = canvasCssSize();
       canvas.style.width = cw + "px"; canvas.style.height = ch + "px";
       canvas.width = Math.round(cw * dpr); canvas.height = Math.round(ch * dpr);
       const off = canvas.transferControlToOffscreen();
@@ -1029,7 +1071,7 @@ export default function GolHex() {
     const fit = () => {
       const canvas = canvasRef.current, wrap = wrapRef.current; if (!canvas || !wrap) return;
       const dpr = window.devicePixelRatio || 1;
-      const cw = wrap.clientWidth, ch = Math.min(Math.round(window.innerHeight * 0.5), 540);
+      const { cw, ch } = canvasCssSize();
       // Worker aktiv: die Canvas-Kontrolle liegt off-main-thread; Groesse NICHT
       // direkt setzen (wuerfe InvalidStateError) -> per postMessage an den Worker.
       if (workerActiveRef.current && workerRef.current) {
@@ -1046,6 +1088,7 @@ export default function GolHex() {
       } catch { return; }
       fitView(); dirtyRef.current = true;
     };
+    refitRef.current = fit; // AP-4: fuer Layout-Reflow-Refit (compact/sheet) abrufbar
     fit(); window.addEventListener("resize", fit);
     // Nicht-passiver touchmove-Listener: React behandelt Touch-Events als passiv,
     // wodurch preventDefault dort wirkungslos ist. BEDINGT (web-fundiert, p5/Figma-
@@ -1075,6 +1118,15 @@ export default function GolHex() {
     // (transferControlToOffscreen ist irreversibel) -> Listener neu binden.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canvasKey]);
+
+  // AP-4: Layout-Reflow-Refit. Wenn der Viewport zwischen compact/Desktop wechselt
+  // oder das Bottom-Sheet auf-/zugeht, aendert sich die verfuegbare Canvas-Flaeche.
+  // rAF stellt sicher, dass der Browser das neue Flex-Layout schon gemessen hat,
+  // bevor wir die Canvas-Pixelmasse neu setzen.
+  useEffect(() => {
+    const id = requestAnimationFrame(() => { refitRef.current && refitRef.current(); });
+    return () => cancelAnimationFrame(id);
+  }, [compact, sheetOpen]);
 
   function fitView() {
     const canvas = canvasRef.current; if (!canvas) return;
@@ -1528,37 +1580,11 @@ export default function GolHex() {
   );
   const sel = { width: "100%", marginTop: 4, minHeight: 44, padding: "8px", borderRadius: 9, background: T.bg2, color: T.text, border: `1px solid ${T.border}`, fontSize: 12, fontFamily: MONO };
 
-  return (
-    <div style={{ fontFamily: DISP, background: `radial-gradient(120% 80% at 50% 0%, ${T.bg2} 0%, ${T.bg} 70%)`, minHeight: "100%", color: T.text, padding: "12px 12px 26px", boxSizing: "border-box", overscrollBehavior: "contain", touchAction: "pan-y" }}>
-      {/* Globale UI-Standards (WCAG 2.2): jeder Button mindestens 44px Touch-Target,
-          sichtbarer Fokusring fuer Tastaturbedienung, leichtes Hover/Active-Feedback.
-          Schieberegler beanspruchen ihre Bedienachse: touch-action verhindert, dass
-          das Ziehen am Regler stattdessen die Seite scrollt (MDN: touch-action ist
-          die Schnittmenge von Element + Vorfahren). overscroll-behavior unterbindet
-          das Fortpflanzen einer Geste auf Pull-to-Refresh/Zurueck-Wischen. */}
-      <style>{`
-        button { min-height: 44px; }
-        button:focus-visible { outline: 2px solid ${T.accent}; outline-offset: 2px; }
-        button:active { transform: translateY(1px); }
-        input[type="range"] { min-height: 32px; touch-action: none; }
-        input:focus-visible, select:focus-visible { outline: 2px solid ${T.accent}; outline-offset: 2px; }
-        @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
-      `}</style>
-      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 8 }}>
-        <div style={{ fontSize: 20, fontWeight: 700, letterSpacing: "0.04em" }}>
-          <span style={{ color: T.accent, textShadow: `0 0 18px ${T.accent}66` }}>Gol</span><span style={{ color: T.text }}>Hex</span>
-          <span style={{ color: T.sub, fontSize: 12, marginLeft: 8, fontFamily: MONO }}>v31</span>
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <span style={{ fontSize: 11, color: T.sub, fontFamily: MONO }}>Coworker Research</span>
-          <button onClick={closeApp} aria-label="App schliessen" title="Schliessen"
-            style={{ width: 44, height: 44, borderRadius: 8, cursor: "pointer", lineHeight: 1,
-              border: "1px solid rgba(255,107,134,0.45)", background: "rgba(255,51,85,0.12)",
-              color: "#FFC2CE", fontSize: 16, fontWeight: 700, fontFamily: MONO,
-              display: "flex", alignItems: "center", justifyContent: "center" }}>&times;</button>
-        </div>
-      </div>
-
+  // AP-4: Pinsel-/Farbblock als benannter Knoten. Auf Desktop sitzt er ueber der
+  // Leinwand (wie bisher); im compact-Modus wandert er ins Bottom-Sheet, damit die
+  // Leinwand oben die volle Flaeche bekommt. Inhalt + alle Handler unveraendert.
+  const brushBlock = (
+    <>
       {simMode === "life" && (<>
       <div style={{ fontSize: 11, color: T.sub, marginBottom: 4, fontFamily: MONO, letterSpacing: "0.03em" }}>
         PINSEL &middot; Zyklus-Tap: leer &rarr; blau &rarr; rot &rarr; gelb &rarr; leer
@@ -1608,8 +1634,67 @@ export default function GolHex() {
           <b style={{ color: T.accent }}>{rvalRule === "snow" ? "Schneeflocke" : rvalRule === "water" ? "Wasser" : "HQST-Welle"}</b> &mdash; reellwertige Physik. Start/Pause steuert die Zeitentwicklung, "Neu initialisieren" setzt den Anfangszustand.
         </div>
       )}
+    </>
+  );
 
-      <div ref={wrapRef} style={{ position: "relative", width: "100%", borderRadius: 14, overflow: "hidden", border: `1px solid ${T.border}`, background: T.bg, boxShadow: `0 0 30px rgba(92,240,204,0.06) inset` }}>
+  return (
+    <div style={compact
+      ? {
+          // AP-4: 1-Seiten-Mobile-Shell. Volle (dynamische) Viewport-Hoehe, kein
+          // Seiten-Scroll: Header (fix) + Leinwand (flex, max) + Kern-Leiste (fix).
+          // safe-area-insets fuer Notch/Home-Indicator (viewport-fit=cover, index.html).
+          fontFamily: DISP, background: `radial-gradient(120% 80% at 50% 0%, ${T.bg2} 0%, ${T.bg} 70%)`,
+          color: T.text, boxSizing: "border-box", height: "100dvh", overflow: "hidden",
+          display: "flex", flexDirection: "column",
+          paddingTop: "max(8px, env(safe-area-inset-top))",
+          paddingLeft: "max(8px, env(safe-area-inset-left))",
+          paddingRight: "max(8px, env(safe-area-inset-right))",
+          paddingBottom: "max(8px, env(safe-area-inset-bottom))",
+          overscrollBehavior: "contain", touchAction: "pan-y",
+        }
+      : { fontFamily: DISP, background: `radial-gradient(120% 80% at 50% 0%, ${T.bg2} 0%, ${T.bg} 70%)`, minHeight: "100%", color: T.text, padding: "12px 12px 26px", boxSizing: "border-box", overscrollBehavior: "contain", touchAction: "pan-y" }
+    }>
+      {/* Globale UI-Standards (WCAG 2.2): jeder Button mindestens 44px Touch-Target,
+          sichtbarer Fokusring fuer Tastaturbedienung, leichtes Hover/Active-Feedback.
+          Schieberegler beanspruchen ihre Bedienachse: touch-action verhindert, dass
+          das Ziehen am Regler stattdessen die Seite scrollt (MDN: touch-action ist
+          die Schnittmenge von Element + Vorfahren). overscroll-behavior unterbindet
+          das Fortpflanzen einer Geste auf Pull-to-Refresh/Zurueck-Wischen.
+          AP-4 PR#44-Auflage (3): user-select:none + -webkit-touch-callout:none auf
+          Leinwand UND Farbrad -> kein Text-/Bild-Markieren oder iOS-Callout beim
+          langen Druck (Long-Press-Geste sauber, kein nativer Selektions-Konflikt). */}
+      <style>{`
+        button { min-height: 44px; }
+        button:focus-visible { outline: 2px solid ${T.accent}; outline-offset: 2px; }
+        button:active { transform: translateY(1px); }
+        input[type="range"] { min-height: 32px; touch-action: none; }
+        input:focus-visible, select:focus-visible { outline: 2px solid ${T.accent}; outline-offset: 2px; }
+        @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+        .ghx-canvas, .ghx-canvas canvas, [data-testid="color-wheel"] {
+          -webkit-user-select: none; user-select: none;
+          -webkit-touch-callout: none;
+        }
+      `}</style>
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 8 }}>
+        <div style={{ fontSize: 20, fontWeight: 700, letterSpacing: "0.04em" }}>
+          <span style={{ color: T.accent, textShadow: `0 0 18px ${T.accent}66` }}>Gol</span><span style={{ color: T.text }}>Hex</span>
+          <span style={{ color: T.sub, fontSize: 12, marginLeft: 8, fontFamily: MONO }}>v31</span>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <span style={{ fontSize: 11, color: T.sub, fontFamily: MONO }}>Coworker Research</span>
+          <button onClick={closeApp} aria-label="App schliessen" title="Schliessen"
+            style={{ width: 44, height: 44, borderRadius: 8, cursor: "pointer", lineHeight: 1,
+              border: "1px solid rgba(255,107,134,0.45)", background: "rgba(255,51,85,0.12)",
+              color: "#FFC2CE", fontSize: 16, fontWeight: 700, fontFamily: MONO,
+              display: "flex", alignItems: "center", justifyContent: "center" }}>&times;</button>
+        </div>
+      </div>
+
+      {/* AP-4: Pinsel-/Farbblock auf Desktop ueber der Leinwand; im compact-Modus
+          steckt er stattdessen im Bottom-Sheet (s. unten). */}
+      {!compact && brushBlock}
+
+      <div ref={wrapRef} className="ghx-canvas" style={{ position: "relative", width: "100%", flex: compact ? "1 1 0" : "none", minHeight: compact ? 0 : undefined, borderRadius: compact ? 0 : 14, overflow: "hidden", border: compact ? "none" : `1px solid ${T.border}`, background: T.bg, boxShadow: compact ? "none" : `0 0 30px rgba(92,240,204,0.06) inset` }}>
         <canvas key={canvasKey} ref={canvasRef} onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp}
           onContextMenu={(e) => e.preventDefault()}
           style={{ display: "block", touchAction: "none", cursor: brush === "cycle" ? "pointer" : "crosshair" }} />
@@ -1667,6 +1752,60 @@ export default function GolHex() {
           </div>
         </div>
       </div>
+
+      {/* AP-4: Kern-Leiste (nur compact). Bleibt immer sichtbar, kein Scroll noetig.
+          Start/Pause, Schritt, Random, Leeren (rot) + Menue oeffnet das Bottom-Sheet
+          mit ALLEN Sekundaer-Controls (nichts entfernt, nur eingeklappt). */}
+      {compact && (
+        <div style={{ flexShrink: 0, display: "flex", gap: 6, paddingTop: 8, paddingBottom: 2, alignItems: "stretch" }}>
+          {btn(() => setRunning((r) => !r), running ? "Pause" : "Start", { flex: "1 1 0", background: running ? "rgba(255,51,85,0.16)" : "rgba(92,240,204,0.14)", borderColor: running ? "rgba(255,51,85,0.4)" : T.accent, color: running ? "#FFC2CE" : T.accent, fontWeight: 700 })}
+          {btn(doStep, "Schritt", { flex: "1 1 0" })}
+          {btn(doRandom, "Random", { flex: "1 1 0" })}
+          {btn(doClear, "Leeren", { flex: "1 1 0", color: "#FFB3C0", borderColor: "rgba(255,51,85,0.28)" })}
+          <button onClick={() => setSheetOpen((v) => !v)} aria-expanded={sheetOpen} aria-controls="ghx-sheet"
+            style={{ flex: "1 1 0", minHeight: 44, borderRadius: 10, cursor: "pointer", fontFamily: MONO, fontSize: 12, fontWeight: 700,
+              border: `1px solid ${sheetOpen ? T.accent : T.border}`, background: sheetOpen ? "rgba(92,240,204,0.14)" : T.panel, color: sheetOpen ? T.accent : T.text }}>
+            {sheetOpen ? "Schliessen" : "Menue"}
+          </button>
+        </div>
+      )}
+
+      {/* AP-4: Bottom-Sheet (compact) — haelt ALLE Sekundaer-Controls. Default zu.
+          Auf Desktop kein Sheet: derselbe Inhalt steht inline (kein Regress; e2e bei
+          1280 finden alle Controls direkt). Der Sheet-Backdrop schliesst bei Tipp.
+          ANTI-REGRESSION: jede bisherige Funktion ist hier weiterhin erreichbar. */}
+      {compact && sheetOpen && (
+        <div onClick={() => setSheetOpen(false)} aria-hidden="true"
+          style={{ position: "fixed", inset: 0, zIndex: 40, background: "rgba(2,6,8,0.55)" }} />
+      )}
+      <div
+        id="ghx-sheet"
+        role={compact ? "dialog" : undefined}
+        aria-label={compact ? "Weitere Steuerung" : undefined}
+        style={compact
+          ? {
+              position: "fixed", left: 0, right: 0, bottom: 0, zIndex: 41,
+              maxHeight: "82dvh", overflowY: "auto",
+              padding: "10px 12px max(14px, env(safe-area-inset-bottom))",
+              background: T.bg2, borderTop: `1px solid ${T.border}`,
+              borderTopLeftRadius: 16, borderTopRightRadius: 16,
+              boxShadow: "0 -8px 30px rgba(0,0,0,0.5)",
+              transform: sheetOpen ? "translateY(0)" : "translateY(100%)",
+              transition: "transform .2s ease", overscrollBehavior: "contain",
+              visibility: sheetOpen ? "visible" : "hidden",
+            }
+          : { display: "contents" }
+        }>
+      {compact && (
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, fontFamily: MONO, color: T.accent, letterSpacing: "0.04em" }}>STEUERUNG</div>
+          <button onClick={() => setSheetOpen(false)} aria-label="Menue schliessen"
+            style={{ width: 44, height: 36, borderRadius: 8, cursor: "pointer", fontFamily: MONO, fontWeight: 700,
+              border: `1px solid ${T.border}`, background: T.panel, color: T.text }}>v</button>
+        </div>
+      )}
+      {/* AP-4: im compact-Modus steht der Pinsel-/Farbblock hier im Sheet. */}
+      {compact && brushBlock}
 
       {/* Statistik-Karte */}
       <div style={{ margin: "8px 0", padding: "10px 12px", borderRadius: 12, border: `1px solid ${T.border}`, background: T.panel, backdropFilter: "blur(6px)", fontFamily: MONO }}>
@@ -2128,6 +2267,7 @@ export default function GolHex() {
         Pinsel Zyklus: ein Tap schaltet weiter (leer&rarr;blau&rarr;rot&rarr;gelb&rarr;leer), ein Finger pant. Blau/Rot/Gelb/Leer: Tap und Ziehen malen.
         Zwei Finger oder Rad = Zoom (jetzt bis 0.2x rausgezoomt), Fit zentriert. Regelquelle "Nur Watzlawick" deaktiviert die B/S-Rulesets.
       </div>
+      </div>{/* /AP-4 Sekundaer-Container (Bottom-Sheet bei compact, display:contents bei Desktop) */}
     </div>
   );
 }
