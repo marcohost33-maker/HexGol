@@ -76,6 +76,16 @@ when cells get tiny (XXL / zoomed out, `hr·s < 3.5px`) it switches to a direct
 **ImageData raster** (per-cell pixel blocks) so even a fully-populated 200×250
 field stays at ~60fps.
 
+**OffscreenCanvas worker (Stufe 1, opt-in).** A *Worker (Beta)* toggle (visible
+only when the browser supports `OffscreenCanvas` + `transferControlToOffscreen` +
+`Worker` — fail-closed feature detection) moves the simulation step **and** the
+raster render off the main thread via `transferControlToOffscreen`, keeping the
+UI thread free for input. Default **off**: the proven main-thread path is the
+fallback for old/Safari browsers and for the gesture/Path2D-detail/incremental
+paths. The engine and raster code are shared (one source of truth) between the
+main thread (`src/App.tsx`) and the worker (`src/worker/render-worker.js`) via
+`src/lib/sim-engine.js` + `src/lib/raster-render.js`.
+
 ## Rules
 
 16 classic hex birth/survival rules (`B2/S34` … `B1/S245`) plus one **formula
