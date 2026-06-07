@@ -294,6 +294,11 @@ export default function GolHex() {
   // Hierarchie + progressive disclosure, web-fundiert).
   const [showMoreColors, setShowMoreColors] = useState(false);
   const [brush, setBrush] = useState("cycle"); // cycle | CR | CB | CY | erase
+  // AP-3: Long-Press-Farbrad. Hold ~500 ms ohne Bewegung > Touch-Slop oeffnet ein
+  // radiales 12-Farb-Rad um den Druckpunkt; Auswahl faerbt die Zelle SOFORT und
+  // setzt die aktive Pinselfarbe (Marco-Entscheid M-3 "Beides"). null = geschlossen.
+  // {x,y} = Druckpunkt in CSS-Pixeln relativ zum Canvas-Wrapper; idx = getroffene Zelle.
+  const [wheel, setWheel] = useState(null);
   const [pattern, setPattern] = useState("BaysGlider");
   const [gen, setGen] = useState(0);
   const [stats, setStats] = useState({ pop: 0, cnt: [0,0,0,0,0,0,0,0,0,0,0,0,0], density: 0, births: 0, deaths: 0, sps: 0, hist: [] });
@@ -1085,6 +1090,48 @@ export default function GolHex() {
   // --- Pointer / Gesten -----------------------------------------------------
   const ptrs = useRef(new Map());
   const ges = useRef({ mode: "", startDist: 0, startS: 1, lastMid: null, moved: 0, lastCell: -1, down: null });
+  // AP-3 Long-Press (web-fundiert: B4 ~500 ms Hold + Touch-Slop). Ein Timer pro
+  // Single-Pointer-Down; jede Bewegung > LONG_PRESS_SLOP oder ein zweiter Finger
+  // (Pinch) oder ein frueher Pointerup bricht ihn ab (kein Rad beim Pan/Zoom/Tap).
+  const LONG_PRESS_MS = 500, LONG_PRESS_SLOP = 8; // px Toleranz (Compose/MAUI-Konvention)
+  const lpTimer = useRef(null);
+  const lpOrigin = useRef(null); // {x,y} CSS-Pixel relativ Canvas-Wrapper beim Press
+  const wheelRef = useRef(wheel); useEffect(() => { wheelRef.current = wheel; }, [wheel]);
+  const clearLongPress = () => { if (lpTimer.current) { clearTimeout(lpTimer.current); lpTimer.current = null; } lpOrigin.current = null; };
+  // Sicherheit: haengender Long-Press-Timer beim Unmount aufraeumen (kein Leak).
+  useEffect(() => () => { if (lpTimer.current) { clearTimeout(lpTimer.current); lpTimer.current = null; } }, []);
+  // Rad oeffnen: Druckpunkt -> Zelle bestimmen, Rad zentriert auf dem Druckpunkt.
+  const openWheel = (clientX, clientY) => {
+    const wrap = wrapRef.current, canvas = canvasRef.current;
+    if (!wrap || !canvas) return;
+    const wrect = wrap.getBoundingClientRect();
+    const { wx, wy } = toWorld(clientX, clientY);
+    const idx = pixelToOddR(wx, wy, HR, R, C);
+    setWheel({ x: clientX - wrect.left, y: clientY - wrect.top, idx });
+  };
+  // Auswahl: gewaehlte Farbe (State-ID 1..12) faerbt die Zelle SOFORT + wird neue
+  // Pinselfarbe (M-3 "Beides"). Danach Rad schliessen; direkt weitermalen moeglich.
+  const pickWheelColor = (stateId) => {
+    const w = wheelRef.current; if (!w) { setWheel(null); return; }
+    const idx = w.idx;
+    if (idx >= 0) {
+      pushUndo();
+      if (simRef.current === "rval") {
+        // rval-Modus: Farbe steuert keinen reellen Wert -> Zelle setzen (regelabhaengig)
+        // und Pinsel auf die Farbe stellen (wirkt im booleschen Modus).
+        const fld = fieldRef.current, fim = fieldImRef.current, rule = rvalRef.current;
+        if (rule === "snow" || rule === "water" || rule === "hqst") { fld[idx] = 1; if (rule === "hqst") fim[idx] = 0; }
+        else if (rule === "collatz") fld[idx] = 27;
+        else if (rule === "genes") fld[idx] = G_Aa;
+      } else {
+        colorRef.current[idx] = stateId; ageRef.current[idx] = 1; ghostRef.current[idx] = 0;
+      }
+      dirtyRef.current = true; syncWorkerState(); updatePop();
+    }
+    setBrush(stateId); brushRef.current = stateId; // aktive Pinselfarbe wechseln
+    setWheel(null);
+  };
+  const cancelWheel = () => setWheel(null);
 
   const toWorld = (cx, cy) => {
     const rect = canvasRef.current.getBoundingClientRect();
@@ -1115,25 +1162,73 @@ export default function GolHex() {
   };
   const paintCell = (idx, isTap) => {
     if (idx < 0) return;
-    if (simRef.current === "rval") { paintRval(idx); return; }
+    if (simRef.current === "rval") { paintRval(idx); syncWorkerState(); return; }
     const col = colorRef.current, b = brushRef.current;
     if (b === "cycle") { if (isTap) { const ci = CYCLE.indexOf(col[idx]); col[idx] = CYCLE[(ci + 1) % 4]; ageRef.current[idx] = col[idx] ? 1 : 0; } }
     else if (b === "erase") { col[idx] = C0; ageRef.current[idx] = 0; }
     else { col[idx] = b; ageRef.current[idx] = 1; }
     ghostRef.current[idx] = 0; dirtyRef.current = true;
+    syncWorkerState();
+  };
+  // Worker-Pfad: der OffscreenCanvas-Worker (AP-1) haelt eigene Zustands-Arrays
+  // (per Transfer uebernommen). Eingabe-Aenderungen aus dem Main-Thread
+  // (Paint/Farbrad/Reset/Undo) muessen ihm explizit nachgereicht werden, sonst
+  // zeigt der Worker den alten Zustand. Wir senden den vollen Zustand (slice-Kopie,
+  // KEIN Transfer -> Main behaelt seine Arrays) ueber die schon vorhandene
+  // "state"-Bruecke des Workers (render-worker.js). Im Main-Thread-Pfad
+  // (Worker inaktiv) ist das ein No-Op.
+  const syncWorkerState = () => {
+    const w = workerRef.current;
+    if (!w || !workerActiveRef.current) return;
+    w.postMessage({
+      type: "state", tick: tickRef.current,
+      col: colorRef.current.slice().buffer, gh: ghostRef.current.slice().buffer, age: ageRef.current.slice().buffer,
+      fld: fieldRef.current.slice().buffer, fim: fieldImRef.current.slice().buffer,
+    });
   };
 
   const onDown = (e) => {
-    e.currentTarget.setPointerCapture?.(e.pointerId);
+    try { e.currentTarget.setPointerCapture?.(e.pointerId); } catch { /* synthetische Events / nicht aktive Pointer: ignorieren */ }
     ptrs.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    // Bei offenem Rad faengt das Overlay die Klicks (Auswahl/Ausserhalb) ab; ein
+    // erneutes Down auf der Leinwand soll das Rad NICHT zugleich neu starten.
+    if (wheelRef.current) return;
     if (ptrs.current.size === 1) {
       ges.current.moved = 0; ges.current.down = { x: e.clientX, y: e.clientY }; ges.current.lastCell = -1;
+      // AP-3: Long-Press-Timer fuer JEDEN Single-Pointer-Down starten (Maus + Touch,
+      // einheitlich ueber Pointer Events, B5). Bewegung/zweiter Finger/frueher Up
+      // bricht ihn ab; feuert er, oeffnet sich das Farbrad und das Painting wird
+      // zurueckgenommen (kein versehentlicher Strich vor dem Rad).
+      clearLongPress();
+      lpOrigin.current = { x: e.clientX, y: e.clientY };
+      const ox = e.clientX, oy = e.clientY;
+      lpTimer.current = setTimeout(() => {
+        lpTimer.current = null;
+        // Nur oeffnen, wenn die Geste nicht inzwischen zu Pan/Pinch wurde.
+        if (ptrs.current.size !== 1) return;
+        const m = ges.current.mode;
+        if (m === "pan" || m === "pinch") return;
+        if (ges.current.moved > LONG_PRESS_SLOP) return;
+        // Falls schon gemalt wurde (Farb-/Erase-/rval-Pinsel malt sofort beim Down),
+        // diesen einen Strich rueckgaengig machen -> Long-Press hat Vorrang.
+        if (ges.current.mode === "paint") {
+          const u = undoRef.current.pop();
+          if (u) {
+            if (u.rval) { fieldRef.current.set(u.fld); fieldImRef.current.set(u.fim); }
+            else colorRef.current.set(u);
+            dirtyRef.current = true; syncWorkerState();
+          }
+        }
+        ges.current.mode = "wheel-open"; // weiteres Painting/Pan unterdruecken
+        openWheel(ox, oy);
+      }, LONG_PRESS_MS);
       if (brushRef.current !== "cycle" || simRef.current === "rval") {
         pushUndo();
         const { wx, wy } = toWorld(e.clientX, e.clientY);
         const idx = pixelToOddR(wx, wy, HR, R, C); paintCell(idx, false); ges.current.lastCell = idx; ges.current.mode = "paint"; updatePop();
       } else ges.current.mode = "maybe-tap";
     } else if (ptrs.current.size === 2) {
+      clearLongPress(); // zweiter Finger = Pinch, kein Long-Press
       const p = [...ptrs.current.values()];
       ges.current.mode = "pinch"; ges.current.startDist = Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y);
       ges.current.startS = viewRef.current.s; ges.current.lastMid = { x: (p[0].x + p[1].x) / 2, y: (p[0].y + p[1].y) / 2 };
@@ -1142,6 +1237,14 @@ export default function GolHex() {
   const onMove = (e) => {
     if (!ptrs.current.has(e.pointerId)) return;
     const prev = ptrs.current.get(e.pointerId); ptrs.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    // Rad offen: laufende Pointer-Moves auf der Leinwand ignorieren (das Overlay
+    // steuert die Auswahl); kein Pan/Paint im Hintergrund.
+    if (ges.current.mode === "wheel-open" || wheelRef.current) return;
+    // AP-3: Bewegung > Touch-Slop bricht den Long-Press ab (Drag/Pan-Abgrenzung, B4).
+    if (lpTimer.current && lpOrigin.current) {
+      const d = Math.hypot(e.clientX - lpOrigin.current.x, e.clientY - lpOrigin.current.y);
+      if (d > LONG_PRESS_SLOP) clearLongPress();
+    }
     if (ptrs.current.size >= 2 && ges.current.mode === "pinch") {
       const p = [...ptrs.current.values()];
       const dist = Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y);
@@ -1167,6 +1270,10 @@ export default function GolHex() {
   };
   const onUp = (e) => {
     const was = ptrs.current.size; ptrs.current.delete(e.pointerId);
+    clearLongPress(); // Loslassen bricht einen noch laufenden Long-Press-Timer ab
+    // Rad bereits offen (Long-Press hat gefeuert): das Loslassen schliesst das Rad
+    // NICHT und malt NICHT -> der Nutzer waehlt im Overlay aus oder tippt ausserhalb.
+    if (ges.current.mode === "wheel-open") { ges.current.mode = ptrs.current.size === 1 ? "maybe-tap" : ""; return; }
     if (was === 1) {
       if (ges.current.mode === "maybe-tap" && ges.current.moved <= 6) {
         pushUndo(); const { wx, wy } = toWorld(e.clientX, e.clientY); paintCell(pixelToOddR(wx, wy, HR, R, C), true); updatePop();
@@ -1504,7 +1611,48 @@ export default function GolHex() {
 
       <div ref={wrapRef} style={{ position: "relative", width: "100%", borderRadius: 14, overflow: "hidden", border: `1px solid ${T.border}`, background: T.bg, boxShadow: `0 0 30px rgba(92,240,204,0.06) inset` }}>
         <canvas key={canvasKey} ref={canvasRef} onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp}
+          onContextMenu={(e) => e.preventDefault()}
           style={{ display: "block", touchAction: "none", cursor: brush === "cycle" ? "pointer" : "crosshair" }} />
+        {/* AP-3: Long-Press-Farbrad. Radiale 12-Farb-Auswahl, zentriert auf dem
+            Druckpunkt; deckt die Leinwand mit einem Abbruch-Layer (Tipp ausserhalb
+            schliesst ohne Auswahl). Erscheint NUR bei aktivem Long-Press -> nicht
+            Teil der Canvas-Baselines (Rad ist sonst unsichtbar). */}
+        {wheel && (
+          <div
+            data-testid="color-wheel"
+            onPointerDown={(e) => { e.stopPropagation(); }}
+            onClick={cancelWheel}
+            style={{ position: "absolute", inset: 0, zIndex: 30, touchAction: "none", cursor: "pointer" }}
+          >
+            {ALLCOL.map((c, i) => {
+              const ang = (i / 12) * PI2 - Math.PI / 2; // CR (Rot) oben, im Uhrzeigersinn
+              const RAD = 76; // Radius des Rads in CSS-Pixeln
+              const cx = wheel.x + RAD * Math.cos(ang);
+              const cy = wheel.y + RAD * Math.sin(ang);
+              return (
+                <button
+                  key={c}
+                  data-color-state={c}
+                  aria-label={`Farbe ${NAME[c]}`}
+                  title={NAME[c]}
+                  onClick={(e) => { e.stopPropagation(); pickWheelColor(c); }}
+                  onPointerUp={(e) => { e.stopPropagation(); pickWheelColor(c); }}
+                  style={{
+                    position: "absolute", left: cx - 17, top: cy - 17, width: 34, height: 34,
+                    borderRadius: "50%", background: COLHEX[c], border: "2px solid rgba(255,255,255,0.85)",
+                    boxShadow: "0 2px 8px rgba(0,0,0,0.55)", cursor: "pointer", padding: 0, touchAction: "none",
+                  }}
+                />
+              );
+            })}
+            {/* Mitte: Abbruch-Markierung (zeigt den Druckpunkt; Tipp ausserhalb bricht ab) */}
+            <div style={{
+              position: "absolute", left: wheel.x - 9, top: wheel.y - 9, width: 18, height: 18,
+              borderRadius: "50%", border: "2px solid rgba(255,255,255,0.6)",
+              background: "rgba(6,15,18,0.55)", pointerEvents: "none",
+            }} />
+          </div>
+        )}
         {/* Schwebende Zoom-Steuerung */}
         <div style={{ position: "absolute", top: 8, right: 8, display: "flex", flexDirection: "column", gap: 6, pointerEvents: "none" }}>
           {[["+", () => zoom(1.3)], ["\u2212", () => zoom(1 / 1.3)], ["\u2316", () => fitView()]].map(([lab, fn], i) => (

@@ -50,6 +50,27 @@ Safety (fail-closed, honest, no silent crash):
   CA (Game of Life) is the primary path for the maximal sizes. (Performance
   numbers are measured separately by Data, not asserted here.)
 
+### Long-press colour wheel (AP-3)
+
+A **long press** (hold ~500 ms with movement below an 8 px touch-slop) on a hex
+cell opens a **radial 12-colour wheel** centred on the press point. Selecting a
+colour does **both** (Marco decision M-3): it colours the pressed cell
+immediately **and** switches the active brush colour, so you keep painting in the
+new colour. Cancel by tapping outside the ring (or releasing without a pick).
+
+- Works with **mouse** (long click) and **touch**, unified through Pointer
+  Events; the native context menu is suppressed so a touch long-press / right
+  click never pops the OS menu.
+- **Gesture-conflict resolution** (web-validated, B4/B5): a fast swipe past the
+  slop, a second finger (pinch), or an early release all cancel the long-press —
+  so pan/zoom/paint behave exactly as before; the wheel is purely additive.
+- In the OffscreenCanvas-worker path (AP-1) the colour change is pushed to the
+  worker via the existing `state` postMessage bridge (`syncWorkerState`), so the
+  off-main-thread render reflects the new cell colour too.
+- The wheel is only visible during an active long-press, so it does **not**
+  appear in the canvas visual baselines. Behaviour is covered by
+  `tests/e2e/longpress-colorwheel.spec.ts`.
+
 ### Domain frames + topology
 
 Four frame shapes define the simulation domain (cells outside are permanent
