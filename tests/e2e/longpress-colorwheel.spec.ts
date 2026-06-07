@@ -127,9 +127,13 @@ test.describe("GolHex AP-3 Long-Press-Farbrad", () => {
     await page.goto("/");
     await page.waitForTimeout(400);
 
-    // Vorzustand: Pinsel = "Zyklus" (Default). Das Swatch "Rot" ist NICHT aktiv.
-    const rotSwatch = page.getByRole("button", { name: "Rot", pressed: true });
+    // v33: die Pinsel-Swatches leben im Tab 1 (Farben). Vorzustand pruefen, Panel
+    // wieder schliessen (Long-Press passiert auf der freien Leinwand, kein Overlay).
+    await page.getByRole("button", { name: "Tab 1 Farben" }).click();
+    await page.waitForTimeout(250);
     await expect(page.getByRole("button", { name: "Rot" }).first()).toHaveAttribute("aria-pressed", "false");
+    await page.getByRole("button", { name: "Tab 1 Farben" }).click(); // Panel zu
+    await page.waitForTimeout(200);
 
     await pointerDownOnCanvas(page, 220, 160, "touch");
     await page.waitForTimeout(650);
@@ -143,8 +147,10 @@ test.describe("GolHex AP-3 Long-Press-Farbrad", () => {
 
     // Rad geschlossen.
     await expect(wheel).toHaveCount(0);
-    // aktive Pinselfarbe ist jetzt Rot (Swatch aria-pressed=true) -> direkt weitermalen.
-    await expect(rotSwatch).toBeVisible();
+    // aktive Pinselfarbe ist jetzt Rot: Tab 1 oeffnen, Swatch aria-pressed=true.
+    await page.getByRole("button", { name: "Tab 1 Farben" }).click();
+    await page.waitForTimeout(250);
+    await expect(page.getByRole("button", { name: "Rot", pressed: true })).toBeVisible();
     expect(errors).toEqual([]);
   });
 
@@ -179,7 +185,9 @@ test.describe("GolHex AP-3 Long-Press-Farbrad", () => {
     // Auf den Overlay-Hintergrund tippen (nicht auf einen Farb-Button) -> schliesst.
     await wheel.click({ position: { x: 5, y: 5 } });
     await expect(wheel).toHaveCount(0);
-    // Pinsel unveraendert: "Zyklus" weiterhin aktiv.
+    // Pinsel unveraendert: "Zyklus" weiterhin aktiv (v33: Swatch im Tab 1).
+    await page.getByRole("button", { name: "Tab 1 Farben" }).click();
+    await page.waitForTimeout(250);
     await expect(page.getByRole("button", { name: "Zyklus" })).toHaveAttribute("aria-pressed", "true");
     expect(errors).toEqual([]);
   });
@@ -199,6 +207,9 @@ test.describe("GolHex AP-3 Long-Press-Farbrad", () => {
     // CB (Blau) = State-ID 9 -> Auswahl.
     await wheel.locator('button[data-color-state="9"]').click();
     await expect(wheel).toHaveCount(0);
+    // v33: Swatch im Tab 1 (Farben) verifizieren.
+    await page.getByRole("button", { name: "Tab 1 Farben" }).click();
+    await page.waitForTimeout(250);
     await expect(page.getByRole("button", { name: "Blau", pressed: true })).toBeVisible();
     expect(errors).toEqual([]);
   });
@@ -208,11 +219,15 @@ test.describe("GolHex AP-3 Long-Press-Farbrad", () => {
     await page.goto("/");
     await page.waitForTimeout(400);
 
-    // Worker aktivieren (Chromium: Feature da, fail-closed). Sim+Render off-main.
+    // v33: Worker-Schalter im Tab 3 (Hex-Regeln). Aktivieren, Panel wieder schliessen
+    // (Long-Press passiert auf der freien Leinwand).
+    await page.getByRole("button", { name: "Tab 3 Hex-Regeln" }).click();
+    await page.waitForTimeout(250);
     const toggle = page.getByRole("button", { name: /Worker (AN|AUS) \(Beta\)/ });
     await expect(toggle).toBeVisible();
     await toggle.click();
     await expect(toggle).toHaveText(/Worker AN \(Beta\)/);
+    await page.getByRole("button", { name: "Tab 3 Hex-Regeln" }).click(); // Panel zu
     await page.waitForTimeout(400);
 
     // Long-Press im Worker-Modus -> Auswahl. Der Main-Thread muss den neuen
@@ -229,7 +244,11 @@ test.describe("GolHex AP-3 Long-Press-Farbrad", () => {
     await expect(wheel).toBeVisible();
     await wheel.locator('button[data-color-state="5"]').click(); // CY (Gelb) = 5
     await expect(wheel).toHaveCount(0);
+    // v33: Swatch im Tab 1 (Farben) verifizieren.
+    await page.getByRole("button", { name: "Tab 1 Farben" }).click();
+    await page.waitForTimeout(250);
     await expect(page.getByRole("button", { name: "Gelb", pressed: true })).toBeVisible();
+    await page.getByRole("button", { name: "Tab 1 Farben" }).click(); // Panel wieder zu
 
     // Worker rendert weiter ohne Fehler (state-Update verarbeitet).
     await page.waitForTimeout(300);

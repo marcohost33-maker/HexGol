@@ -19,6 +19,9 @@ test.describe("GolHex AP-2 max sizes", () => {
 
     await page.goto("/");
     await page.waitForTimeout(400);
+    // v33: Groesse/Rahmen + Speicher-Hinweis leben im Tab 3 (Hex-Regeln) — oeffnen.
+    await page.getByRole("button", { name: "Tab 3 Hex-Regeln" }).click();
+    await page.waitForTimeout(250);
 
     const sizeSel = page.locator("select").nth(1);
     await expect(sizeSel).toContainText("5XL");
@@ -40,6 +43,9 @@ test.describe("GolHex AP-2 max sizes", () => {
 
     await page.goto("/");
     await page.waitForTimeout(400);
+    // v33: Groesse/Rahmen + Speicher-Hinweis leben im Tab 3 (Hex-Regeln) — oeffnen.
+    await page.getByRole("button", { name: "Tab 3 Hex-Regeln" }).click();
+    await page.waitForTimeout(250);
 
     const sizeSel = page.locator("select").nth(1);
     // index 5=3XL(90k), 6=4XL(160k), 7=5XL(250k) — jede Stufe baut das Grid.
@@ -58,6 +64,9 @@ test.describe("GolHex AP-2 max sizes", () => {
 
     await page.goto("/");
     await page.waitForTimeout(400);
+    // v33: Rahmen + Kreis-Radius leben im Tab 3 (Hex-Regeln) — oeffnen.
+    await page.getByRole("button", { name: "Tab 3 Hex-Regeln" }).click();
+    await page.waitForTimeout(250);
 
     await page.getByRole("button", { name: "Kreis", exact: true }).click();
     await page.waitForTimeout(300);

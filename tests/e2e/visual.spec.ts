@@ -18,8 +18,13 @@ test.describe("GolHex v29L.2 visual baselines", () => {
   test("XXL + Kreis-Rahmen (ImageData-Raster-Pfad, statisch)", async ({ page }) => {
     await page.goto("/");
     await page.waitForTimeout(500);
+    // v33: Groesse + Rahmen liegen im Tab 3 (Hex-Regeln). Auswahl treffen, dann
+    // Panel schliessen (Overlay wuerde sonst die Canvas-Baseline ueberdecken).
+    await page.getByRole("button", { name: "Tab 3 Hex-Regeln" }).click();
+    await page.waitForTimeout(250);
     await page.locator("select").nth(1).selectOption("4"); // XXL
     await page.getByRole("button", { name: "Kreis", exact: true }).click();
+    await page.getByRole("button", { name: "Tab 3 Hex-Regeln" }).click(); // Panel zu
     await page.waitForTimeout(600);
     await expect(page.locator("canvas")).toHaveScreenshot("xxl-circle-frame.png");
   });
