@@ -76,9 +76,9 @@ new colour. Cancel by tapping outside the ring (or releasing without a pick).
 The UI is a **single screen with no scrolling** on phone and desktop alike:
 
 1. **Top bar (52px):** four content tabs — *1 Farben · 2 Formen · 3 Hex-Regeln ·
-   4 Physik* — plus right-aligned action icons *📷 Snapshot* (disabled placeholder)
-   and *💾 Speichern* (**functional, PR-C** — opens the save-state panel) and
-   *✕ App schliessen*.
+   4 Physik* — plus right-aligned action icons *📷 Snapshot* (**functional, PR-D**
+   — share or download an image of the field) and *💾 Speichern*
+   (**functional, PR-C** — opens the save-state panel) and *✕ App schliessen*.
    Tabs **3/4** open as an **overlay over the field**; tabs **1/2** open the
    **left drawer** (PR-B, see below). Tapping the active tab again closes it.
 2. **Field maximal:** the canvas fills the space between the top bar and the stats
@@ -111,6 +111,27 @@ The UI is a **single screen with no scrolling** on phone and desktop alike:
   It is **distinct from Undo/Redo**: clearing, Random, or placing a figure/stamp
   resets the Urzustand slot (the next Play captures a fresh one). The button is
   disabled until a Urzustand exists.
+
+### v33 (PR-D): snapshot — share or download an image of the field
+
+- **📷 Snapshot** captures the visible field canvas and, in **one tap**, opens the
+  system **share sheet** (Web Share API **Level 2**) or, if file sharing is
+  unavailable, triggers a **download** — no intermediate dialog. The flow is
+  `canvas.toBlob` → `File` → `navigator.canShare({files})` ? `navigator.share(...)`
+  : `<a download>` + `ObjectURL` (revoked after the click). The share call runs
+  inside the same user-gesture handler (iOS requirement). PNG (lossless — CA grids).
+- **Download filename:** `golhex_<YYYY-MM-DD>_gen<N>.png`.
+- **Watermark (optional, toggleable).** A small `GolHex · Gen N · <rule B/S>` label
+  is drawn on a *copy* of the canvas (the live field is never touched); the
+  checkbox in the snapshot status line turns it off.
+- **Robustness:** `toBlob` null-guard (fails closed, no silent empty file), busy-flag
+  against double-taps, large canvases stay responsive (`toBlob` is async). The pure
+  helpers (`src/lib/snapshot.js`: filename/label builders + share-vs-download
+  dispatcher) are unit-tested; e2e covers both the download path (PNG magic bytes)
+  and the share path (stubbed `navigator.share`, asserting a PNG `File[]`).
+- **iOS reality-anchor:** Web-Share-of-files on iOS Safari is historically fragile
+  (verified only on a real device per `EVALUATION_STRATEGY §8`). The download
+  fallback guarantees the feature works even where share is unavailable.
 
 > Live physics (`rval`) save is intentionally out of scope here — those fields are
 > `Float32`, which needs its own format; the save/load/export path covers the
