@@ -21,6 +21,10 @@ import {
   idbPut, idbGet, idbList, idbDelete, idbRename,
   SAVE_FILE_EXT, AUTOSAVE_KEY,
 } from "./lib/savestate.js";
+// v33 PR-D: Canvas-Snapshot teilen (Web Share L2 + Download-Fallback).
+import {
+  buildSnapshotFilename, buildWatermarkLabel, canvasToBlob, shareOrDownloadBlob,
+} from "./lib/snapshot.js";
 // Re-Export der von den Unit-Tests importierten Engine-Funktionen, damit die
 // bestehenden Test-Importpfade (tests/unit/*.test.js -> "../../src/App.tsx")
 // unveraendert weiterlaufen (PR#41-Kontrakt, named exports, export-only).
@@ -300,6 +304,10 @@ export default function GolHex() {
   const [saveName, setSaveName] = useState("");
   const [saveSlots, setSaveSlots] = useState([]); // [{key, meta}]
   const [saveMsg, setSaveMsg] = useState("");
+  // v33 PR-D: Snapshot-Status + dezentes Wasserzeichen-Label (abschaltbar).
+  const [snapMsg, setSnapMsg] = useState("");
+  const [snapWatermark, setSnapWatermark] = useState(true);
+  const snapBusyRef = useRef(false); // Doppelklick-Schutz waehrend toBlob/share
   const fileInputRef = useRef(null); // versteckter <input type=file> fuer Import
   // Solver-Konvergenzwarnung (CN-Fixpunkt nicht konvergiert -> Parameter zu gross)
   const [solverWarn, setSolverWarn] = useState(false);
@@ -1779,6 +1787,71 @@ export default function GolHex() {
     };
     reader.readAsText(file); ev.target.value = "";
   };
+
+  // v33 PR-D: aktuelle Regel als Kurzlabel (B/S oder rval-Name) — identische
+  // Logik wie der Statistik-Regel-Chip, hier auch vor dem Render abrufbar.
+  const currentRuleLabel = () => {
+    if (simMode === "rval") {
+      return rvalRule === "snow" ? "Schnee" : rvalRule === "water" ? "Wasser"
+        : rvalRule === "hqst" ? "HQST" : rvalRule === "collatz" ? "Collatz" : "Gene";
+    }
+    if (watzOnly) return "B2,3/S1-5";
+    const r = (ruleSrc === "int" ? INT_RULES : RULES)[ruleIdx];
+    return r ? `B${r.B.join("")}/S${r.S.join("")}` : "—";
+  };
+
+  // v33 PR-D: aktuellen Feld-Canvas als PNG teilen (Web Share L2) oder
+  // herunterladen (Fallback). v1 exportiert den SICHTBAREN Canvas (Viewport-
+  // Ausschnitt) — ausreichend fuer einen Teil-Schnappschuss; ein Voll-Feld-
+  // Offscreen-Render in Original-Aufloesung ist als Folge-PR notiert (XXL-Raster).
+  // Das share() laeuft im selben Klick-Handler-Zweig (iOS-Geste; toBlob ist async,
+  // der nachgelagerte share-Call bleibt im User-aktivierten Kontext, iOS 15+).
+  const shareCanvasImage = async () => {
+    if (snapBusyRef.current) return;
+    const src = canvasRef.current;
+    if (!src) { setSnapMsg("Snapshot: keine Leinwand gefunden."); return; }
+    snapBusyRef.current = true;
+    setSnapMsg("Snapshot wird erstellt …");
+    try {
+      // Optionales Wasserzeichen: auf eine Kopie zeichnen, damit der Live-Canvas
+      // unberuehrt bleibt (kein Flackern im Spielfeld).
+      let target = src;
+      if (snapWatermark) {
+        const off = document.createElement("canvas");
+        off.width = src.width; off.height = src.height;
+        const octx = off.getContext("2d");
+        if (octx) {
+          octx.drawImage(src, 0, 0);
+          const label = buildWatermarkLabel(tickRef.current, currentRuleLabel());
+          const fs = Math.max(11, Math.round(src.width / 48));
+          octx.font = `${fs}px ui-monospace, monospace`;
+          octx.textBaseline = "bottom";
+          const padX = Math.round(fs * 0.6), padY = Math.round(fs * 0.45);
+          const tw = octx.measureText(label).width;
+          // halbtransparenter Streifen unten links, damit das Label auf jedem
+          // Untergrund lesbar bleibt (dezent, kleine Box).
+          octx.fillStyle = "rgba(0,0,0,0.45)";
+          octx.fillRect(0, off.height - fs - padY * 2, tw + padX * 2, fs + padY * 2);
+          octx.fillStyle = "rgba(255,255,255,0.92)";
+          octx.fillText(label, padX, off.height - padY);
+          target = off;
+        }
+      }
+      const blob = await canvasToBlob(target, "image/png");
+      const filename = buildSnapshotFilename(new Date(), tickRef.current, "png");
+      const res = await shareOrDownloadBlob(blob, filename, {
+        title: "GolHex",
+        text: buildWatermarkLabel(tickRef.current, currentRuleLabel()),
+      });
+      if (res.method === "share" && res.shared) setSnapMsg("Geteilt.");
+      else if (res.method === "share" && res.cancelled) setSnapMsg("Teilen abgebrochen.");
+      else setSnapMsg(`Heruntergeladen: ${filename}`);
+    } catch (e) {
+      setSnapMsg(`Snapshot fehlgeschlagen: ${e && e.message ? e.message : e}`);
+    } finally {
+      snapBusyRef.current = false;
+    }
+  };
   const doPlace = () => {
     pushUndo(); resetOrigin(); const offs = PATS[pattern], col = colorRef.current;
     const pc = (typeof brush === "number" && brush >= 1 && brush <= 12) ? brush : CB;
@@ -2635,9 +2708,12 @@ export default function GolHex() {
           })}
         </div>
         <div style={{ display: "flex", flexShrink: 0 }}>
-          {/* TODO PR-C: Snapshot (canvas.toBlob -> Web Share / Download). Vorerst disabled. */}
-          <button disabled aria-label="Snapshot (kommt in PR-C)" title="Snapshot — kommt in PR-C"
-            style={{ width: 42, border: "none", borderLeft: `1px solid ${T.border}`, background: "transparent", color: T.sub, opacity: 0.35, fontSize: 16, cursor: "not-allowed" }}>📷</button>
+          {/* v33 PR-D: Snapshot (canvas.toBlob -> Web Share L2 / Download-Fallback).
+              1 Tipp -> System-Share-Sheet bzw. Download startet (kein Zwischendialog). */}
+          <button onClick={shareCanvasImage} aria-label="Snapshot teilen"
+            title="Snapshot teilen (Bild des Feldes — Teilen oder Download)"
+            data-testid="snapshot-btn"
+            style={{ width: 42, border: "none", borderLeft: `1px solid ${T.border}`, background: "transparent", color: T.text, fontSize: 16, cursor: "pointer" }}>📷</button>
           {/* v33 PR-C: Spielstand speichern (IndexedDB + Datei-Export/Import). */}
           <button onClick={toggleSavePanel} aria-label="Spielstand speichern" aria-pressed={saveOpen}
             title="Speichern (Spielstand: Feld + Regel + Rahmen)"
@@ -2909,6 +2985,19 @@ export default function GolHex() {
         <span style={{ background: T.bg2, border: `1px solid ${T.accent}`, color: T.accent, borderRadius: 8, padding: "1px 7px", fontSize: 11 }}>{ruleChip}</span>
         <span style={{ background: T.bg2, border: `1px solid ${T.border}`, color: T.sub, borderRadius: 8, padding: "1px 7px", fontSize: 11 }}>{frameChip}</span>
       </div>
+
+      {/* v33 PR-D: Snapshot-Rueckmeldung (kurz) + Wasserzeichen-Schalter (abschaltbar,
+          Recherche Thema 4: Label optional). Erscheint nur nach erster 📷-Aktion. */}
+      {snapMsg && (
+        <div data-testid="snap-msg" role="status" style={{ flexShrink: 0, display: "flex", alignItems: "center", gap: 10, padding: "2px 8px", fontFamily: MONO, fontSize: 11, color: T.sub, background: T.bg2, borderTop: `1px solid ${T.border}` }}>
+          <span>{snapMsg}</span>
+          <label style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 4, cursor: "pointer", whiteSpace: "nowrap" }}>
+            <input type="checkbox" checked={snapWatermark} onChange={(e) => setSnapWatermark(e.target.checked)}
+              aria-label="Wasserzeichen im Snapshot" style={{ cursor: "pointer" }} />
+            Wasserzeichen
+          </label>
+        </div>
+      )}
 
       {/* v33 STEUERUNG UNTEN. Reihe: 1. Figur (disabled, TODO PR-C) · Undo · Redo
           (disabled, TODO PR-C) · PLAY (60px, gruen, zentral) · Schritt · Random · Leeren

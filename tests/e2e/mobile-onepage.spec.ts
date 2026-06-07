@@ -148,18 +148,18 @@ test.describe("GolHex v33 1-Seiten-Mobile-Layout (390x844)", () => {
     expect(errors).toEqual([]);
   });
 
-  // v33 PR-C-Update: Speichern (💾) + "1. Figur" (⏮) sind jetzt FUNKTIONAL
-  // (Spielstand-Speichern in IndexedDB + Urzustand-Restore). Snapshot (📷) + Redo
-  // bleiben bewusst disabled (eigene Folge-PRs) — kein stilles Vortaeuschen,
-  // Silent-Failure-Gate gewahrt.
-  test("PR-C: Snapshot/Redo disabled; Speichern + 1.Figur aktiv", async ({ page }) => {
+  // v33 PR-D-Update: Snapshot (📷) ist jetzt FUNKTIONAL (canvas.toBlob -> Web
+  // Share L2 / Download-Fallback). Speichern (💾) + "1. Figur" (⏮) sind seit PR-C
+  // funktional. Nur Redo bleibt bewusst disabled (eigene Folge-PR) — kein stilles
+  // Vortaeuschen, Silent-Failure-Gate gewahrt.
+  test("PR-D: Snapshot aktiv; Redo disabled; Speichern + 1.Figur aktiv", async ({ page }) => {
     await page.goto("/");
     await page.waitForTimeout(400);
-    // Noch nicht implementiert -> sichtbar disabled.
-    for (const name of [/Snapshot \(kommt in PR-C\)/, /Redo \(kommt in PR-C\)/]) {
-      await expect(page.getByRole("button", { name }), `${name} disabled`).toBeDisabled();
-    }
-    // Speichern ist jetzt aktiv (oeffnet das Spielstand-Panel).
+    // Snapshot ist jetzt aktiv (teilt/laedt ein Bild des Feldes).
+    await expect(page.getByRole("button", { name: "Snapshot teilen" })).toBeEnabled();
+    // Redo noch nicht implementiert -> sichtbar disabled.
+    await expect(page.getByRole("button", { name: /Redo \(kommt in PR-C\)/ }), "Redo disabled").toBeDisabled();
+    // Speichern ist aktiv (oeffnet das Spielstand-Panel).
     await expect(page.getByRole("button", { name: "Spielstand speichern" })).toBeEnabled();
     // "1. Figur" ist anfangs disabled (kein Urzustand), wird nach dem ersten Play aktiv.
     const firstFigure = page.getByRole("button", { name: "Zur ersten Figur" });

@@ -61,7 +61,7 @@ export default defineConfig({
       name: "chromium",
       // Desktop-Baseline (Visual-Regression + bestehende Funktions-e2e). Diese
       // Specs erwarten alle Controls inline sichtbar (Layout >=768px => kein Sheet).
-      testIgnore: /(mobile-onepage|stamp-drawer|savestate)\.spec\.ts/,
+      testIgnore: /(mobile-onepage|stamp-drawer|savestate|snapshot)\.spec\.ts/,
       use: { ...devices["Desktop Chrome"], viewport: { width: 1280, height: 800 } },
     },
     {
@@ -69,7 +69,7 @@ export default defineConfig({
       // 390x844). Belegt: Kern-Controls + Leinwand + Zurueck/Schliessen im Viewport
       // sichtbar OHNE Scroll; Sekundaeres im Bottom-Sheet erreichbar.
       name: "mobile",
-      testMatch: /(mobile-onepage|stamp-drawer|savestate)\.spec\.ts/,
+      testMatch: /(mobile-onepage|stamp-drawer|savestate|snapshot)\.spec\.ts/,
       use: {
         ...devices["Desktop Chrome"],
         viewport: { width: 390, height: 844 },
