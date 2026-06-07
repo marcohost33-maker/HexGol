@@ -254,6 +254,11 @@ export default function GolHex() {
   const R = G.rows, C = G.cols, HR = G.hr, N = R * C;
   // HQST bei Riesen-Gittern gesperrt (ehrliche UI-Meldung statt stillem Freeze).
   const hqstLocked = N > HQST_CELL_CAP;
+  // Riesen-Gitter-Schwelle fuer den Auto-Worker (Marco-Entscheid M-2). Gleiche
+  // Single-Source-Schwelle wie der HQST-Cap (HQST_CELL_CAP, aus sim-engine.js),
+  // hier aber INKLUSIV (>=): ab dem Cap friert der Haupt-Thread ein (Data AP-D2),
+  // ueber dem OffscreenCanvas-Worker laeuft es bis ~680k weiter.
+  const bigGrid = N >= HQST_CELL_CAP;
   const gridRef = useRef(G);
   gridRef.current = G; // waehrend Render aktuell halten (stabil fuer draw/fitView)
 
@@ -348,6 +353,16 @@ export default function GolHex() {
   const compactRef = useRef(false);
   const [workerSupported] = useState(() => supportsOffscreenWorker());
   const [workerMode, setWorkerMode] = useState(false);
+  // Auto-Worker (Marco-Entscheid M-2): bei Riesen-Gittern (>= HQST_CELL_CAP Zellen)
+  // wird der Worker-Modus AUTOMATISCH eingeschaltet, sofern OffscreenCanvas
+  // verfuegbar ist - der Haupt-Thread friert dort sonst ein (Data AP-D2). Der
+  // User-Schalter gewinnt aber immer: hat der User den Worker auf einem Riesen-
+  // Gitter bewusst AUSgeschaltet, merkt sich dieser Ref den Override und die
+  // Automatik draengt ihn NICHT erneut auf. null = keine bewusste User-Wahl
+  // (Automatik darf entscheiden); true/false = letzte bewusste User-Wahl.
+  const userWorkerPrefRef = useRef(null);
+  // Einmalige, plain-sprachliche Notiz, wenn die Automatik den Worker einschaltet.
+  const [autoWorkerNotice, setAutoWorkerNotice] = useState(false);
   const [canvasKey, setCanvasKey] = useState(0); // transferControlToOffscreen ist
   // irreversibel je Canvas-Element -> beim Moduswechsel ein frisches Element erzwingen.
   const workerRef = useRef(null);
@@ -464,6 +479,34 @@ export default function GolHex() {
     }
     return { cw, ch };
   };
+
+  // Auto-Worker (Marco-Entscheid M-2): zentrale Stelle, die ALLE Gitter-Wechsel
+  // abdeckt (Groessen-Select, Form, Kreis-Radius) - sie haengt nur an der
+  // abgeleiteten Schwelle `bigGrid` (= N >= HQST_CELL_CAP), nicht an den einzelnen
+  // Controls (keine 3 Duplikate). Beim Eintritt in ein Riesen-Gitter wird der
+  // Worker AUTOMATISCH eingeschaltet, sofern OffscreenCanvas verfuegbar ist UND
+  // der User ihn nicht zuvor bewusst ausgeschaltet hat (userWorkerPrefRef === false).
+  // Beim Verlassen des Riesen-Gitters bleibt der Worker-Zustand wie zuletzt gesetzt
+  // (kein Auto-Aus). Ohne OffscreenCanvas passiert hier nichts -> Fallback-Pfad +
+  // separate Riesen-Gitter-Warnung im UI.
+  const workerModeRef = useRef(workerMode);
+  useEffect(() => { workerModeRef.current = workerMode; }, [workerMode]);
+  // HQST ist ueber dem Cap GESPERRT (Crank-Nicolson auch off-thread unzumutbar) -
+  // dort greift die bestehende Sperr-UI + Step-Skip (PR#43), NICHT der Auto-Worker.
+  const hqstActiveLocked = simMode === "rval" && rvalRule === "hqst" && hqstLocked;
+  useEffect(() => {
+    if (!workerSupported) return;            // Fallback-Geraete: Automatik aus
+    if (!bigGrid) return;                    // kleines Gitter: nie automatisch an
+    if (hqstActiveLocked) return;            // gesperrtes HQST: Sperre statt Worker
+    if (userWorkerPrefRef.current === false) return; // User-Override "aus" gewinnt
+    if (workerModeRef.current) return;       // schon an -> nichts tun (kein Flackern)
+    workerModeRef.current = true;            // SYNCHRON: schliesst das Render-Race
+    // (Main-Loop darf ab sofort nicht mehr zeichnen, bevor transferiert wird).
+    setWorkerMode(true);
+    setAutoWorkerNotice(true);               // einmalige plain-Notiz zeigen
+    setCanvasKey((k) => k + 1);              // frisches Canvas-Element fuer Transfer
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bigGrid, workerSupported, hqstActiveLocked]);
 
   // AP-1 Worker-Lebenszyklus: spinnt den OffscreenCanvas-Worker hoch, wenn
   // workerMode aktiv (nur moeglich wenn feature-detektiert). transferControlToOffscreen
@@ -759,7 +802,12 @@ export default function GolHex() {
   // aufgeloest. Behandelt life- UND rval-Modus (Snow/Water/HQST/Collatz/Genetik).
   const drawRaster = useCallback(() => {
     const canvas = canvasRef.current; if (!canvas) return;
-    const ctx = canvas.getContext("2d", { alpha: false }); // konsistent mit draw() (opak)
+    // Fail-safe: eine an den Worker transferierte Canvas wirft bei getContext().
+    // Im (engen) Race-Fenster zwischen transferControlToOffscreen und der "ready"-
+    // Meldung kann der Main-Thread sonst die Seite crashen -> hier sauber abbrechen,
+    // der Worker-Pfad ist dann zustaendig.
+    let ctx; try { ctx = canvas.getContext("2d", { alpha: false }); } catch { return; }
+    if (!ctx) return;
     const dpr = window.devicePixelRatio || 1;
     const Wc = canvas.width, Hc = canvas.height;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -791,7 +839,9 @@ export default function GolHex() {
   // --- Render ---------------------------------------------------------------
   const draw = useCallback((incremental) => {
     const canvas = canvasRef.current; if (!canvas) return;
-    const ctx = canvas.getContext("2d", { alpha: false });
+    // Fail-safe gegen eine bereits an den Worker transferierte Canvas (s. drawRaster).
+    let ctx; try { ctx = canvas.getContext("2d", { alpha: false }); } catch { return; }
+    if (!ctx) return;
     const dpr = window.devicePixelRatio || 1;
     const Wc = canvas.width, Hc = canvas.height;
     const { s, tx, ty } = viewRef.current;
@@ -1017,9 +1067,13 @@ export default function GolHex() {
     let raf, last = performance.now(), acc = 0;
     const loop = (now) => {
       const dt = now - last; last = now;
-      // Worker aktiv: Sim + Render laufen off-main-thread -> Main-Loop macht hier
-      // nichts (kein Doppel-Step, kein Doppel-Render auf der transferierten Canvas).
-      if (workerActiveRef.current) { raf = requestAnimationFrame(loop); return; }
+      // Worker aktiv ODER beabsichtigt: Sim + Render laufen off-main-thread -> die
+      // Main-Loop macht hier nichts. workerModeRef deckt das Zeitfenster zwischen
+      // transferControlToOffscreen und der "ready"-Meldung ab: in diesem Fenster ist
+      // die Canvas bereits transferiert, workerActiveRef aber noch false -> ein
+      // draw() wuerde getContext() auf der transferierten Canvas werfen (Auto-Worker-
+      // Race bei Riesen-Gittern, da der Grid-Rebuild gleichzeitig dirtyRef setzt).
+      if (workerActiveRef.current || workerModeRef.current) { raf = requestAnimationFrame(loop); return; }
       if (runRef.current) {
         acc += dt; const iv = spRef.current; let guard = 0;
         // PERF: Simulation vom Render entkoppeln. Statt fixem Cap (8 Steps/Frame)
@@ -1891,7 +1945,17 @@ export default function GolHex() {
       {workerSupported && (
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, fontFamily: MONO, fontSize: 11, color: T.sub }}>
           <button
-            onClick={() => { setRunning(false); setWorkerMode((v) => !v); setCanvasKey((k) => k + 1); }}
+            onClick={() => {
+              setRunning(false);
+              setWorkerMode((v) => {
+                const next = !v;
+                userWorkerPrefRef.current = next; // bewusste User-Wahl -> Override merken
+                workerModeRef.current = next;     // SYNCHRON (gleiches Race wie Auto-Pfad)
+                return next;
+              });
+              setAutoWorkerNotice(false); // bewusste Wahl ersetzt die Automatik-Notiz
+              setCanvasKey((k) => k + 1);
+            }}
             aria-pressed={workerMode}
             title="Simulation + Raster-Render in einen OffscreenCanvas-Worker auslagern (Beta, Stufe 1)"
             style={{
@@ -1908,6 +1972,38 @@ export default function GolHex() {
               ? "Sim + Raster off-main-thread. Gesten/Detail-Render pausiert (Stufe 1)."
               : "Off-main-thread Raster-Render fuer grosse Gitter. Fallback: Haupt-Thread."}
           </span>
+        </div>
+      )}
+
+      {/* Auto-Worker (M-2): plain-sprachliche Notiz, wenn die Automatik den Worker
+          fuer ein Riesen-Gitter eingeschaltet hat. Verschwindet, sobald der User
+          den Schalter selbst betaetigt. */}
+      {workerSupported && workerMode && autoWorkerNotice && bigGrid && (
+        <div style={{ marginBottom: 10, padding: "7px 10px", borderRadius: 9, background: "rgba(92,240,204,0.10)", border: "1px solid rgba(92,240,204,0.35)", fontSize: 10.5, color: T.accent, fontFamily: MONO, lineHeight: 1.4 }}>
+          Grosses Gitter ({N.toLocaleString("de-CH")} Zellen): Der Worker wurde
+          automatisch eingeschaltet, damit die App nicht einfriert. Du kannst ihn
+          mit dem Schalter oben jederzeit wieder ausschalten.
+        </div>
+      )}
+
+      {/* Auto-Worker (M-2): User-Override-Warnung. Worker auf einem Riesen-Gitter
+          bewusst AUS -> ehrlicher Hinweis, dass der Haupt-Thread einfrieren kann.
+          Nicht bei gesperrtem HQST (dort greift die HQST-Sperr-Meldung + Step-Skip). */}
+      {workerSupported && !workerMode && bigGrid && !hqstActiveLocked && (
+        <div style={{ marginBottom: 10, padding: "7px 10px", borderRadius: 9, background: "rgba(255,120,120,0.10)", border: "1px solid rgba(255,120,120,0.35)", fontSize: 10.5, color: "#ffb0b0", fontFamily: MONO, lineHeight: 1.4 }}>
+          Worker ist AUS bei {N.toLocaleString("de-CH")} Zellen - der Haupt-Thread
+          kann hier einfrieren. Schalte den Worker oben ein, oder verkleinere das Gitter.
+        </div>
+      )}
+
+      {/* Auto-Worker (M-2): Fallback-Geraete ohne OffscreenCanvas - ehrliche
+          Riesen-Gitter-Warnung, da die Automatik hier nicht greifen kann.
+          Nicht bei gesperrtem HQST (dort greift die HQST-Sperr-Meldung). */}
+      {!workerSupported && bigGrid && !hqstActiveLocked && (
+        <div style={{ marginBottom: 10, padding: "7px 10px", borderRadius: 9, background: "rgba(255,120,120,0.10)", border: "1px solid rgba(255,120,120,0.35)", fontSize: 10.5, color: "#ffb0b0", fontFamily: MONO, lineHeight: 1.4 }}>
+          Grosses Gitter ({N.toLocaleString("de-CH")} Zellen): Dieser Browser
+          unterstuetzt den Worker nicht - der Haupt-Thread kann einfrieren.
+          Verkleinere das Gitter fuer fluessiges Verhalten.
         </div>
       )}
 
