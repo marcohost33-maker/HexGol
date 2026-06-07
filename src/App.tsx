@@ -1,14 +1,14 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 // Sim-Engine (pure, worker-importfaehig) - aus dieser Datei extrahiert (AP-1).
 import {
-  S3, PI2, PI3, PI6, C0, CR, CRO, CO, CYO, CY, CYG, CG, CBG, CB, CBV, CV, CRV,
-  PRIMARY, SECONDARY, TERTIARY, ALLCOL, NCOL, CYCLE, COMPLEMENT, T, COLA, rgbStr, COLHEX,
-  NAME, SHORT, STEP12, HUE, COSH, SINH, HUE_BUCKET, hueToState, GRID_SIZES, SPEEDS, SPLBL,
-  DENS, MAX_UNDO, RULES, RMETA, hexClass2, INT_RULES, intMeta, INT_META, WATZ_RULE, WATZ_META,
-  PATS, AXIOMS, PAD, clamp, hexCenter, axialRound, pixelToOddR, worldSize, buildNeighbors,
+  S3, PI2, PI3, C0, CR, CRO, CO, CYO, CY, CYG, CG, CBG, CB, CBV, CV, CRV,
+  PRIMARY, ALLCOL, CYCLE, T, COLA, COLHEX,
+  NAME, COSH, SINH, hueToState, GRID_SIZES, SPEEDS, SPLBL,
+  DENS, MAX_UNDO, RULES, RMETA, hexClass2, INT_RULES, INT_META, WATZ_META,
+  PATS, AXIOMS, PAD, clamp, hexCenter, pixelToOddR, worldSize, buildNeighbors,
   hash2, rng, birthColorQuad, cMixVec, mMixCnt, driftHue, RVAL_RULES, stepReiter, stepWater,
-  solveEuler, solveRK4, SOLVERS, mkHqstWork, stepHQST, rvalColor, COLLATZ_CAP, stepCollatz,
-  collatzColor, G_AA, G_Aa, G_aa, alleleA, genotype, stepGenes, geneColor, BG_PACK, packRGB, parsePack,
+  SOLVERS, mkHqstWork, stepHQST, rvalColor, stepCollatz,
+  collatzColor, G_AA, G_Aa, G_aa, genotype, stepGenes, geneColor,
   oddRToCube, cubeToOddR, hexDist, CUBE_DIRS,
 } from "./lib/sim-engine.js";
 import { renderRaster } from "./lib/raster-render.js"; // geteilter Raster-Pfad (Worker + Main)
