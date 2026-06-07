@@ -11,6 +11,7 @@ import {
   collatzColor, G_AA, G_Aa, G_aa, alleleA, genotype, stepGenes, geneColor, BG_PACK, packRGB, parsePack,
   oddRToCube, cubeToOddR, hexDist, CUBE_DIRS,
 } from "./lib/sim-engine.js";
+import { renderRaster } from "./lib/raster-render.js"; // geteilter Raster-Pfad (Worker + Main)
 // Re-Export der von den Unit-Tests importierten Engine-Funktionen, damit die
 // bestehenden Test-Importpfade (tests/unit/*.test.js -> "../../src/App.tsx")
 // unveraendert weiterlaufen (PR#41-Kontrakt, named exports, export-only).
@@ -595,44 +596,18 @@ export default function GolHex() {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     if (!rasterImgRef.current || rasterImgRef.current.width !== Wc || rasterImgRef.current.height !== Hc) rasterImgRef.current = ctx.createImageData(Wc, Hc);
     const img = rasterImgRef.current, d32 = new Uint32Array(img.data.buffer);
-    d32.fill(BG_PACK);
     const g = gridRef.current, hr = g.hr;
     const { s, tx, ty } = viewRef.current;
     const CX = cellCxRef.current, CY = cellCyRef.current;
-    const half = Math.max(0, Math.floor(hr * s * dpr * 0.72));
-    const plot = (px, py, packed) => {
-      let y0 = py - half, y1 = py + half, x0 = px - half, x1 = px + half;
-      if (y0 < 0) y0 = 0; if (y1 >= Hc) y1 = Hc - 1; if (x0 < 0) x0 = 0; if (x1 >= Wc) x1 = Wc - 1;
-      for (let yy = y0; yy <= y1; yy++) { const row = yy * Wc; for (let xx = x0; xx <= x1; xx++) d32[row + xx] = packed; }
-    };
-    if (simRef.current === "rval") {
-      const rule = rvalRef.current, fld = fieldRef.current, fim = fieldImRef.current;
-      if (rule === "genes") {
-        const gp = { [G_AA]: parsePack(geneColor(G_AA)), [G_Aa]: parsePack(geneColor(G_Aa)), [G_aa]: parsePack(geneColor(G_aa)) };
-        for (let i = 0; i < fld.length; i++) { const gv = fld[i]; if (!gv || !gp[gv]) continue; plot(Math.round((CX[i] * s + tx) * dpr), Math.round((CY[i] * s + ty) * dpr), gp[gv]); }
-      } else {
-        const BUCKETS = 24; let thresh = 0, vmax = 0;
-        if (rule === "snow") thresh = 0.02; else if (rule === "water") thresh = 0.01; else if (rule === "hqst") thresh = 1e-5; else thresh = 1.0001;
-        if (rule === "hqst") { for (let i = 0; i < fld.length; i++) { const p = fld[i] * fld[i] + fim[i] * fim[i]; if (p > vmax) vmax = p; } if (vmax < 1e-12) vmax = 1; }
-        const bcol = new Array(BUCKETS);
-        for (let bi = 0; bi < BUCKETS; bi++) { let repV; if (rule === "collatz") repV = Math.pow(2, (bi + 0.5) / BUCKETS * 30); else if (rule === "hqst") repV = (bi + 0.5) / BUCKETS * vmax; else repV = (bi + 0.5) / (BUCKETS - 1); bcol[bi] = parsePack(rule === "collatz" ? collatzColor(repV) : rvalColor(repV, rule)); }
-        for (let i = 0; i < fld.length; i++) {
-          let v = fld[i];
-          if (rule === "hqst") { v = fld[i] * fld[i] + fim[i] * fim[i]; if (v < thresh) continue; }
-          else if (rule === "collatz") { if (v <= 1) continue; }
-          else if (v < thresh) continue;
-          let bi;
-          if (rule === "collatz") bi = Math.min(BUCKETS - 1, Math.floor(Math.log2(v) / 30 * BUCKETS));
-          else if (rule === "hqst") bi = Math.min(BUCKETS - 1, Math.floor(Math.min(1, v / vmax) * (BUCKETS - 1)));
-          else bi = Math.min(BUCKETS - 1, Math.floor(Math.min(1, v) * (BUCKETS - 1)));
-          plot(Math.round((CX[i] * s + tx) * dpr), Math.round((CY[i] * s + ty) * dpr), bcol[bi]);
-        }
-      }
-    } else {
-      const col = colorRef.current, packed = {};
-      for (const cc of ALLCOL) { const a = COLA[cc]; packed[cc] = packRGB(a[0], a[1], a[2]); }
-      for (let i = 0; i < col.length; i++) { const cc = col[i]; if (!cc) continue; plot(Math.round((CX[i] * s + tx) * dpr), Math.round((CY[i] * s + ty) * dpr), packed[cc]); }
-    }
+    // Geteilter, reiner Pixel-Pfad (src/lib/raster-render.js) - EINE Quelle der
+    // Wahrheit, die auch der OffscreenCanvas-Worker nutzt. Output byte-identisch.
+    renderRaster(d32, {
+      Wc, Hc, hr, s, tx, ty, dpr, CX, CY,
+      mode: simRef.current,
+      rule: rvalRef.current,
+      col: colorRef.current,
+      fld: fieldRef.current, fim: fieldImRef.current,
+    });
     ctx.putImageData(img, 0, 0);
     ctx.setTransform(dpr * s, 0, 0, dpr * s, dpr * tx, dpr * ty);
     drawFrame(ctx, s);
