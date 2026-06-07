@@ -148,6 +148,17 @@ paths. The engine and raster code are shared (one source of truth) between the
 main thread (`src/App.tsx`) and the worker (`src/worker/render-worker.js`) via
 `src/lib/sim-engine.js` + `src/lib/raster-render.js`.
 
+**Auto-worker on giant grids (M-2).** Switching to a grid with **≥ `HQST_CELL_CAP`
+(90,000) cells** turns the worker **on automatically** (with a plain-language
+notice) whenever `OffscreenCanvas` is available — the main thread otherwise
+freezes there. The threshold is the single source from `sim-engine.js` (the same
+constant as the HQST lock), not duplicated. The user toggle always wins: turning
+the worker **off** on a giant grid keeps it off (with a "can freeze" warning) and
+the choice persists; switching back to a small grid leaves the worker state as the
+user last set it. On browsers without `OffscreenCanvas` the behaviour is unchanged
+plus an honest giant-grid warning. Locked HQST (above the cap) keeps its existing
+lock + step-skip; the auto-worker does not override it.
+
 ## Rules
 
 16 classic hex birth/survival rules (`B2/S34` … `B1/S245`) plus one **formula
