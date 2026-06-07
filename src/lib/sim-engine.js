@@ -70,14 +70,37 @@ function hueToState(ang) {
   return HUE_BUCKET[Math.round(a / STEP12) % 12];
 }
 
-// Grid-Groessen mit Hexradius (world units) pro Stufe
+// Grid-Groessen mit Hexradius (world units) pro Stufe.
+// AP-2: Ausbau bis 500x500 (250'000 Zellen). hr (Welt-Radius pro Zelle) sinkt mit
+// der Stufe, damit das Gesamtfeld in vernuenftiger Welt-Groesse bleibt; der
+// ImageData-Raster-Fast-Path greift bei winzigen Bildschirm-Zellen automatisch.
 const GRID_SIZES = [
   { l: "S", rows: 40, cols: 50, hr: 12 },
   { l: "M", rows: 80, cols: 100, hr: 6 },
   { l: "L", rows: 120, cols: 150, hr: 4 },
   { l: "XL", rows: 160, cols: 200, hr: 3 },
   { l: "XXL", rows: 200, cols: 250, hr: 2.5 },
+  { l: "3XL", rows: 300, cols: 300, hr: 2 },   //  90'000
+  { l: "4XL", rows: 400, cols: 400, hr: 1.6 }, // 160'000
+  { l: "5XL", rows: 500, cols: 500, hr: 1.3 }, // 250'000 (Marco-Maximum Quadrat)
 ];
+
+// AP-2 Speicher-Budget / Zell-Deckel (fail-closed, ehrlich auf 8-GB-PC + Handy).
+// CELL_CAP_DEFAULT = harter Deckel fuer alle Rahmenformen (gemeinsames Zell-Budget).
+// 250'000 = 500x500 (Quadrat-Maximum). Der Kreis r=500 (~785'000 Zellen, Bounding-
+// Box noch groesser) liegt darueber -> wird separat per CIRCLE_CELL_CAP erlaubt,
+// aber NUR im booleschen Modus (siehe HQST-Cap). MAX_CIRCLE_RADIUS = 500 (Marco).
+const CELL_CAP = 250000;            // Quadrat/Hexagon/Dreieck: 500x500-Aequivalent
+// Kreis r=500: Bounding-Box 1001x871 = 871'871 Zellen (tool-gemessen,
+// tests/manual/ap2-instantiation.mjs), davon ~680'071 in der Scheibe (78%). Der
+// Deckel gilt auf die ALLOKIERTE Bounding-Box (das ist der Speicher-Treiber).
+const CIRCLE_CELL_CAP = 900000;     // Kreis r=500 Bounding-Box (Bool-CA, ~38 MB RSS)
+const MAX_CIRCLE_RADIUS = 500;      // Marco-Vorgabe
+const DEFAULT_CIRCLE_RADIUS = 250;  // Marco-Vorgabe
+// HQST (Crank-Nicolson, Float32 Re+Im + Arbeitspuffer) ist pro Zelle ~6x teurer
+// und bei Riesen-Gittern unzumutbar langsam -> ueber diesem Deckel im UI gesperrt
+// (ehrliche Meldung statt stillem Freeze). Bool-CA bleibt das Maximal-Groessen-Ziel.
+const HQST_CELL_CAP = 90000;        // ~3XL; darueber HQST gesperrt
 
 const SPEEDS = [650, 460, 320, 220, 150, 95, 60, 16, 0];
 const SPLBL = ["0.5x", "0.8x", "1.1x", "1.6x", "2.4x", "3.8x", "6x", "MAX", "TURBO"];
@@ -194,6 +217,25 @@ function worldSize(R, C, hr) {
   return { W: pad * 2 + w * (C + 0.5), H: pad * 2 + v * R };
 }
 
+// AP-2: Bounding-Gitter fuer einen EXPLIZITEN Kreis-Radius (in Gitterschritten,
+// Marcos "250"/"500"). Liefert {rows, cols, hr, radius} so, dass der Kreis exakt
+// ins Gitter passt. Welt-Radius = radius*1.5 (vertikaler Reihenabstand). Reihen
+// decken (R-1)*1.5 ab -> R = 2*radius+1. Spalten decken (C-1)*S3 + S3 -> aus dem
+// Welt-Radius zurueckgerechnet, + 1 Sicherheitsrand je Seite. hr skaliert mit der
+// Groesse (Raster-Fast-Path greift bei winzigen Zellen). radius wird auf
+// [1, MAX_CIRCLE_RADIUS] geklemmt (fail-closed).
+function circleGridDims(radius) {
+  const r = Math.max(1, Math.min(Math.round(radius) || 1, MAX_CIRCLE_RADIUS));
+  const worldR = r * 1.5;
+  const rows = 2 * r + 1;
+  // Welt-Halbbreite = worldR; col-Schritt = S3. +2 Rand je Seite gegen Klemm-Verlust.
+  const cols = 2 * Math.ceil(worldR / S3) + 3;
+  // hr-Heuristik analog GRID_SIZES (groesser = kleinere Zellen).
+  let hr = 2.5;
+  if (r > 400) hr = 1.3; else if (r > 300) hr = 1.6; else if (r > 200) hr = 2; else if (r > 120) hr = 2.5; else if (r > 60) hr = 4; else hr = 8;
+  return { rows, cols, hr, radius: r };
+}
+
 // Rahmenform + Topologie -> Nachbar-Lookups mit korrekter Randphysik.
 // shape: "box" (volle Rechteck-Domaene) | "circle" (eingeschriebene Scheibe).
 // Liefert: { torus, edge, mask, inCount }.
@@ -203,7 +245,13 @@ function worldSize(R, C, hr) {
 //   torus: Nachbar ausserhalb Domaene -> bei "box" Standard-Wrap; bei "circle"
 //          antipodale Identifikation (Strahl durch Zentrum, gegenueberliegende
 //          Randzelle) -> periodische Scheibe (RP2-artig), reflexionsfrei.
-function buildNeighbors(R, C, shape) {
+// opts (AP-2, optional, rueckwaerts-kompatibel):
+//   opts.circleRadius : EXPLIZITER Kreis-Radius in GITTERSCHRITTEN (Hex-Reihen,
+//     Marcos "250"/"500"). Nur fuer shape==="circle" wirksam. Fehlt er, faellt der
+//     Kreis auf den eingeschriebenen Maximal-Radius (bisheriges Verhalten) zurueck.
+//     Ein Wert > eingeschriebenem Maximum wird auf das Maximum geklemmt (der Kreis
+//     kann nicht ueber das Gitter hinausragen).
+function buildNeighbors(R, C, shape, opts) {
   const N = R * C, torus = new Int32Array(N * 6), edge = new Int32Array(N * 6);
   const mask = new Uint8Array(N);
   const oddOff = [[-1, 0], [-1, 1], [0, -1], [0, 1], [1, 0], [1, 1]];
@@ -218,7 +266,16 @@ function buildNeighbors(R, C, shape) {
   // breiten Gittern die Hoehe. Validiert in test_frame_fill.mjs.
   const halfW = ((C - 1) * S3) / 2 + S3 / 2;
   const halfH = ((R - 1) * 1.5) / 2 + 1.0;
-  const radius = Math.min(halfW, halfH);
+  const radiusMax = Math.min(halfW, halfH);
+  // radius = Welt-Radius der Dreieck-Eckpunkte (immer das Maximum, fuellt das Gitter).
+  const radius = radiusMax;
+  // Kreis-Radius: expliziter Wert (in Gitterschritten -> Welt: *1.5 = vertikaler
+  // Reihenabstand) ODER eingeschriebenes Maximum. Auf [0, radiusMax] geklemmt
+  // (fail-closed: kein Kreis ueber den Gitterrand hinaus).
+  let circleRad = radiusMax;
+  if (opts && Number.isFinite(opts.circleRadius) && opts.circleRadius > 0) {
+    circleRad = Math.min(opts.circleRadius * 1.5, radiusMax);
+  }
   // Hexagon-Rahmen: groesster eingeschriebener Hex-Radius (in Gitterschritten).
   // Begrenzt durch Reihen (R) und Spalten; konservativ das Minimum.
   const centerCube = oddRToCube(cc, cr);
@@ -234,7 +291,7 @@ function buildNeighbors(R, C, shape) {
     if (r < 0 || r >= R || c < 0 || c >= C) return false;
     if (shape === "circle") {
       const dx = wx(r, c) - cx, dy = wy(r) - cy;
-      return Math.hypot(dx, dy) <= radius;
+      return Math.hypot(dx, dy) <= circleRad;
     }
     if (shape === "hexagon") {
       return hexDist(oddRToCube(c, r), centerCube) <= hexRad;
@@ -255,7 +312,7 @@ function buildNeighbors(R, C, shape) {
   const antipode = (r, c) => {
     const dx = wx(r, c) - cx, dy = wy(r) - cy;
     // gegenueberliegende Richtung, am Rand entlang nach innen suchen
-    for (let t = radius; t > 0; t -= 0.5) {
+    for (let t = circleRad; t > 0; t -= 0.5) {
       const ax = cx - dx * (t / (Math.hypot(dx, dy) || 1));
       const ay = cy - dy * (t / (Math.hypot(dx, dy) || 1));
       const rr = Math.round(ay / 1.5);
@@ -637,6 +694,11 @@ export {
   HUE_BUCKET,
   hueToState,
   GRID_SIZES,
+  CELL_CAP,
+  CIRCLE_CELL_CAP,
+  MAX_CIRCLE_RADIUS,
+  DEFAULT_CIRCLE_RADIUS,
+  HQST_CELL_CAP,
   SPEEDS,
   SPLBL,
   DENS,
@@ -657,6 +719,7 @@ export {
   axialRound,
   pixelToOddR,
   worldSize,
+  circleGridDims,
   buildNeighbors,
   hash2,
   rng,

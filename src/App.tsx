@@ -4,8 +4,9 @@ import {
   S3, PI2, PI3, C0, CR, CRO, CO, CYO, CY, CYG, CG, CBG, CB, CBV, CV, CRV,
   PRIMARY, ALLCOL, CYCLE, T, COLA, COLHEX,
   NAME, COSH, SINH, hueToState, GRID_SIZES, SPEEDS, SPLBL,
+  MAX_CIRCLE_RADIUS, DEFAULT_CIRCLE_RADIUS, HQST_CELL_CAP,
   DENS, MAX_UNDO, RULES, RMETA, hexClass2, INT_RULES, INT_META, WATZ_META,
-  PATS, AXIOMS, PAD, clamp, hexCenter, pixelToOddR, worldSize, buildNeighbors,
+  PATS, AXIOMS, PAD, clamp, hexCenter, pixelToOddR, worldSize, buildNeighbors, circleGridDims,
   hash2, rng, birthColorQuad, cMixVec, mMixCnt, driftHue, RVAL_RULES, stepReiter, stepWater,
   SOLVERS, mkHqstWork, stepHQST, rvalColor, stepCollatz,
   collatzColor, G_AA, G_Aa, G_aa, genotype, stepGenes, geneColor,
@@ -241,8 +242,18 @@ function closeApp() {
 // =============================================================================
 export default function GolHex() {
   const [sizeIdx, setSizeIdx] = useState(1); // M default
-  const G = GRID_SIZES[sizeIdx];
+  const [frameShape, setFrameShape] = useState("box"); // "box" Rechteck | "circle" Scheibe | "hexagon" | "triangle"
+  // AP-2: EXPLIZITER Kreis-Radius (Gitterschritte, Marco: Default 250, Max 500).
+  // Nur fuer frameShape==="circle" wirksam; das Gitter wird dann aus dem Radius
+  // abgeleitet (circleGridDims), statt aus der GRID_SIZES-Stufe.
+  const [circleRadius, setCircleRadius] = useState(DEFAULT_CIRCLE_RADIUS);
+  // Effektive Gitter-Geometrie: bei "circle" aus dem Radius, sonst aus der Stufe.
+  const G = (frameShape === "circle")
+    ? (() => { const d = circleGridDims(circleRadius); return { l: `r=${d.radius}`, rows: d.rows, cols: d.cols, hr: d.hr }; })()
+    : GRID_SIZES[sizeIdx];
   const R = G.rows, C = G.cols, HR = G.hr, N = R * C;
+  // HQST bei Riesen-Gittern gesperrt (ehrliche UI-Meldung statt stillem Freeze).
+  const hqstLocked = N > HQST_CELL_CAP;
   const gridRef = useRef(G);
   gridRef.current = G; // waehrend Render aktuell halten (stabil fuer draw/fitView)
 
@@ -250,7 +261,6 @@ export default function GolHex() {
   const [speedIdx, setSpeedIdx] = useState(4);
   const [ruleIdx, setRuleIdx] = useState(0);
   const [torusOn, setTorusOn] = useState(true);
-  const [frameShape, setFrameShape] = useState("box"); // "box" Rechteck | "circle" Scheibe
   // Systemtheorie-Modell: homeostatische Negativ-Rueckkopplung (Kybernetik).
   const [sysTheory, setSysTheory] = useState(false);
   const [sysSetpoint, setSysSetpoint] = useState(0.5); // Ziel-Nachbardichte (0..1)
@@ -363,6 +373,8 @@ export default function GolHex() {
   const brushRef = useRef(brush); useEffect(() => { brushRef.current = brush; }, [brush]);
   const simRef = useRef(simMode); useEffect(() => { simRef.current = simMode; }, [simMode]);
   const frameRef = useRef(frameShape); useEffect(() => { frameRef.current = frameShape; }, [frameShape]);
+  const circleRadiusRef = useRef(circleRadius); useEffect(() => { circleRadiusRef.current = circleRadius; }, [circleRadius]);
+  const hqstLockedRef = useRef(hqstLocked); useEffect(() => { hqstLockedRef.current = hqstLocked; }, [hqstLocked]);
   const seedRef = useRef(seed); useEffect(() => { seedRef.current = seed; }, [seed]);
   const solverWarnRef = useRef(false);
   const solverDivergedRef = useRef(false);
@@ -378,7 +390,7 @@ export default function GolHex() {
     fBufRef.current = new Float32Array(N); fBufImRef.current = new Float32Array(N);
     fRecRef.current = new Uint8Array(N);
     hqstWorkRef.current = mkHqstWork(N);
-    neighRef.current = buildNeighbors(R, C, frameShape);
+    neighRef.current = buildNeighbors(R, C, frameShape, frameShape === "circle" ? { circleRadius } : undefined);
     // Randzellen-Zahl GENAU HIER berechnen, wo das Feld neu entsteht (frischer Wert,
     // keine Render-Reihenfolge-Falle). Speist die transparente Randanzeige.
     { const nb = neighRef.current; let bc = 0; const bd = nb.bnd; for (let i = 0; i < bd.length; i++) if (bd[i]) bc++; setBoundaryStat({ count: bc, total: nb.inCount || 0 }); }
@@ -393,7 +405,7 @@ export default function GolHex() {
     setRunning(false); dirtyRef.current = true;
     fitView();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sizeIdx, frameShape]);
+  }, [sizeIdx, frameShape, circleRadius]);
 
   // AP-1: aktuellen Engine-Config-Snapshot fuer den Worker bauen (Spiegel von
   // cfg.current). Reine Daten (struktur-klonbar), kein Funktions-/Ref-Inhalt.
@@ -449,7 +461,7 @@ export default function GolHex() {
       viewRef.current = { ...view, fit: vs };
       worker.postMessage({
         type: "init", canvas: off,
-        R, C, hr: HR, shape: frameShape, dpr,
+        R, C, hr: HR, shape: frameShape, circleRadius, dpr,
         cfg: buildWorkerCfg(), mode: simMode, rule: rvalRule,
         speedMs: SPEEDS[speedIdx], view, tick: tickRef.current,
         col: colorRef.current.slice().buffer, gh: ghostRef.current.slice().buffer, age: ageRef.current.slice().buffer,
@@ -547,6 +559,9 @@ export default function GolHex() {
       const rule = rvalRef.current, n = fieldRef.current.length;
       const C2 = gridRef.current.cols;
       if (rule === "hqst") {
+        // AP-2: HQST bei Riesen-Gittern gesperrt (Crank-Nicolson zu langsam) -> Step
+        // ueberspringen statt den Tab einzufrieren. Die UI zeigt die ehrliche Meldung.
+        if (hqstLockedRef.current) { runRef.current = false; setRunning(false); return; }
         const conv = stepHQST(fieldRef.current, fieldImRef.current, NL, 0.15, 0.0, 0.5, fBufRef.current, fBufImRef.current, hqstWorkRef.current, cfg.current.solverId);
         // Nur der CN-Solver liefert ein Flag; false = Fixpunkt nicht konvergiert.
         if (conv === false && !solverWarnRef.current) { solverWarnRef.current = true; }
@@ -908,9 +923,13 @@ export default function GolHex() {
     const ctr = hexCenter(cr, cc, hr);
     const halfW = ((C0 - 1) * S3) / 2 + S3 / 2;
     const halfH = ((R0 - 1) * 1.5) / 2 + 1.0;
-    const radPx = Math.min(halfW, halfH) * hr; // Welt-Radius * hr = Pixel
+    const radiusMaxWorld = Math.min(halfW, halfH);
+    const radPx = radiusMaxWorld * hr; // Welt-Radius * hr = Pixel (Maximum)
     if (sh === "circle") {
-      ctx.beginPath(); ctx.arc(ctr.x, ctr.y, radPx, 0, PI2); ctx.stroke();
+      // AP-2: expliziter Radius (Gitterschritte -> Welt *1.5), auf Maximum geklemmt
+      // — EXAKT die Formel aus buildNeighbors (circleRad), Umriss == Maske.
+      const circleWorld = Math.min(circleRadiusRef.current * 1.5, radiusMaxWorld);
+      ctx.beginPath(); ctx.arc(ctr.x, ctr.y, circleWorld * hr, 0, PI2); ctx.stroke();
     } else if (sh === "triangle") {
       // Gleiche 3 Ecken wie der Punkt-im-Dreieck-Test (Spitze oben).
       ctx.beginPath();
@@ -1234,7 +1253,7 @@ export default function GolHex() {
     simMode, rule: simMode === "rval" ? rvalRule : (watzOnly ? "Watzlawick" : (ruleSrc === "int" ? INT_RULES[ruleIdx]?.l : RULES[ruleIdx]?.l)),
     topology: torusOn ? "torus" : "edge", frame: frameShape, openSystem: openSys,
     sysTheory, sysSetpoint: Math.round(sysSetpoint * 6), solver: simMode === "rval" && rvalRule === "hqst" ? solverId : null,
-    seed, grid: { rows: R, cols: C, size: GRID_SIZES[sizeIdx].l }, steps: recRef.current.rows.length,
+    seed, grid: { rows: R, cols: C, size: G.l, circleRadius: frameShape === "circle" ? circleRadius : null }, steps: recRef.current.rows.length,
   });
   const exportCSV = () => {
     const rec = recRef.current;
@@ -1268,7 +1287,7 @@ export default function GolHex() {
       config: {
         simMode, rvalRule, ruleIdx, ruleSrc, watzOnly, ax, a5, colorMode,
         torusOn, frameShape, openSys, sysTheory, sysSetpoint, solverId,
-        sizeIdx, seed,
+        sizeIdx, circleRadius, seed,
       },
     };
     downloadBlob(JSON.stringify(snap, null, 2), `golhex_snapshot_${seed}_${Date.now()}.json`, "application/json");
@@ -1291,6 +1310,7 @@ export default function GolHex() {
     if (typeof cfgObj.sysSetpoint === "number") setSysSetpoint(cfgObj.sysSetpoint);
     if (cfgObj.solverId) setSolverId(cfgObj.solverId);
     if (typeof cfgObj.sizeIdx === "number") setSizeIdx(cfgObj.sizeIdx);
+    if (typeof cfgObj.circleRadius === "number") setCircleRadius(clamp(Math.round(cfgObj.circleRadius), 1, MAX_CIRCLE_RADIUS));
     if (typeof cfgObj.seed === "number") setSeed(cfgObj.seed);
     setArchMsg(`Schnappschuss geladen (Seed ${cfgObj.seed}). "Neu initialisieren" reproduziert den Lauf.`);
   };
@@ -1807,7 +1827,9 @@ export default function GolHex() {
                 : <select value={ruleIdx} onChange={(e) => setRuleIdx(Number(e.target.value))} style={sel}>{(ruleSrc === "int" ? INT_RULES : RULES).map((r, i) => <option key={i} value={i}>{r.l}</option>)}</select>}
             </label>
             <label style={{ fontSize: 11, color: T.sub, fontFamily: MONO }}>Groesse
-              <select value={sizeIdx} onChange={(e) => setSizeIdx(Number(e.target.value))} style={sel}>{GRID_SIZES.map((g, i) => <option key={i} value={i}>{g.l} ({g.rows}x{g.cols})</option>)}</select>
+              {frameShape === "circle"
+                ? <div style={{ ...sel, opacity: 0.7, color: T.accent }}>Kreis: per Radius unten</div>
+                : <select value={sizeIdx} onChange={(e) => setSizeIdx(Number(e.target.value))} style={sel}>{GRID_SIZES.map((g, i) => <option key={i} value={i}>{g.l} ({g.rows}x{g.cols} = {(g.rows * g.cols).toLocaleString("de-CH")} Zellen)</option>)}</select>}
             </label>
             <label style={{ fontSize: 11, color: T.sub, fontFamily: MONO }}>Pattern
               <select value={pattern} onChange={(e) => setPattern(e.target.value)} style={sel}>{Object.keys(PATS).map((k) => <option key={k} value={k}>{k}</option>)}</select>
@@ -1849,6 +1871,41 @@ export default function GolHex() {
                 ? "Dreieck: gleichseitig (Spitze oben) via Schnittmenge dreier Halbebenen. Berandet (Neumann-Wand), kein Torus. Eckzellen haben wenige Nachbarn - sichtbar staerkere Randdynamik."
                 : (torusOn ? "Rechteck + Torus: periodischer Rand (Standard-Wrap)." : "Rechteck + Rand: feste Wand, Null-Fluss (Neumann).")}
             </div>
+
+            {/* AP-2: Kreis-Radius waehlen (Slider + Zahl, Plain-Sprache). Nur bei Kreis. */}
+            {frameShape === "circle" && (
+              <div style={{ marginTop: 8, padding: "8px 10px", borderRadius: 9, background: T.bg2, border: "1px solid rgba(92,240,204,0.14)" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                  <span style={{ fontSize: 11, color: T.sub, fontFamily: MONO, whiteSpace: "nowrap" }}>Kreis-Radius</span>
+                  <input type="range" min={10} max={MAX_CIRCLE_RADIUS} step={1} value={circleRadius}
+                    onChange={(e) => setCircleRadius(clamp(Number(e.target.value) || 10, 10, MAX_CIRCLE_RADIUS))}
+                    style={{ flex: 1, accentColor: T.accent }} aria-label="Kreis-Radius" />
+                  <input type="number" min={10} max={MAX_CIRCLE_RADIUS} value={circleRadius}
+                    onChange={(e) => { const v = Number(e.target.value); if (Number.isFinite(v)) setCircleRadius(clamp(Math.round(v), 10, MAX_CIRCLE_RADIUS)); }}
+                    style={{ width: 56, padding: "4px 6px", borderRadius: 7, fontSize: 12, fontFamily: MONO, background: T.bg, color: T.accent, border: `1px solid ${T.border}`, textAlign: "right" }}
+                    aria-label="Kreis-Radius (Zahl)" />
+                </div>
+                <div style={{ fontSize: 10, color: T.sub, opacity: 0.85, fontFamily: MONO, lineHeight: 1.4 }}>
+                  Wie gross der Kreis ist: 10 (klein) bis {MAX_CIRCLE_RADIUS} (maximal). Standard {DEFAULT_CIRCLE_RADIUS}.
+                  Gitter {R}x{C}, davon ~{(boundaryStat.total || 0).toLocaleString("de-CH")} Zellen im Kreis.
+                </div>
+              </div>
+            )}
+
+            {/* AP-2: ehrlicher Speicher-Hinweis bei Riesen-Gittern (fail-closed, kein stiller Crash) */}
+            {N >= 250000 && (
+              <div style={{ marginTop: 8, padding: "7px 10px", borderRadius: 9, background: "rgba(255,180,60,0.10)", border: "1px solid rgba(255,180,60,0.35)", fontSize: 10.5, color: "#f0c674", fontFamily: MONO, lineHeight: 1.4 }}>
+                Sehr grosses Gitter ({(N).toLocaleString("de-CH")} Zellen). Auf aelteren Handys / 8-GB-PCs
+                kann der Browser langsam werden oder den Tab neu laden. Bei Rucklern eine Stufe kleiner waehlen.
+              </div>
+            )}
+            {hqstLocked && simMode === "rval" && rvalRule === "hqst" && (
+              <div style={{ marginTop: 8, padding: "7px 10px", borderRadius: 9, background: "rgba(255,120,120,0.10)", border: "1px solid rgba(255,120,120,0.35)", fontSize: 10.5, color: "#ffb0b0", fontFamily: MONO, lineHeight: 1.4 }}>
+                HQST (Quantenwelle) ist ab {(HQST_CELL_CAP).toLocaleString("de-CH")} Zellen gesperrt - der
+                Crank-Nicolson-Loeser waere hier unzumutbar langsam. Fuer Riesen-Gitter den booleschen
+                Modus (Game of Life) nutzen, oder das Gitter verkleinern.
+              </div>
+            )}
           </div>
 
           {/* Systemtheorie-Modell (Kybernetik / Homeostase) */}

@@ -23,10 +23,19 @@ priority_when_in_conflict: 1
 - **Stack:** JavaScript + Vite, React 19.2, Vitest (unit), Playwright (e2e +
   visual regression). Package name `hexgol`, `"private": true`.
 - **Purpose:** GolHex is a Carter-Bays **hex-topology cellular automaton**
-  (Hexagonal Game of Life) with a telemetry pipeline, Safari trackpad support,
-  and 16 classic hex birth/survival rules (`B2/S34` … `B1/S245`) plus one
-  formula rule. The simulation exposes hooks (`telemetry`, `perfStats`) so
-  Playwright tests can drive it deterministically.
+  (Hexagonal Game of Life) with real-valued physics modes (snow, water, unitary
+  HQST quantum wave), Safari trackpad support, and 16 classic hex birth/survival
+  rules (`B2/S34` … `B1/S245`) plus INT and formula rules.
+- **e2e contract (no `window` hooks).** There is **no** `window.telemetry` /
+  `window.perfStats` bridge — earlier docs claimed one; it does not exist (verified
+  PR#42). Playwright drives the app through **real DOM controls** (buttons like
+  `Random`, `Start`, `Kreis`, the size `<select>`) plus the `<canvas>`, and asserts
+  the *observable* contract: canvas mounts, controls present/usable, **zero
+  console/page errors**, and stable **visual baselines** (canvas-only screenshots,
+  `maxDiffPixelRatio 0.03`). Determinism comes from a fixed **seed** and **static
+  (non-running) states** in the visual specs, not from a JS hook. The worker
+  (`src/worker/render-worker.js`) posts an internal `telemetry` *message* to the
+  main thread — that is a `postMessage` type, not a global test hook.
 - **Version:** 31.0.0 (see `package.json`) — engine + UI live in `src/App.tsx`;
   pure cores extracted to `src/lib/sim-core.js` (HQST applyH/solveCN) and
   `src/lib/hex-geom.js` (hex cube geometry), both unit-tested.
@@ -41,12 +50,19 @@ index.html                # app entry
 vite.config.js            # Vite build config
 playwright.config.ts      # e2e + visual-regression config
 src/
-  ├── App.tsx             # engine + UI: step()/draw() honour the active
-  │                       #   birth/survival rule (load-bearing core)
-  └── lib/
-      ├── sim-core.js     # HQST tight-binding applyH + Crank-Nicolson solveCN
-      └── hex-geom.js     # hex cube-coordinate geometry (Red Blob Games)
-tests/                    # Vitest unit tests + Playwright e2e + visual baselines
+  ├── App.tsx             # UI + main-thread loop: step()/draw() honour the active
+  │                       #   birth/survival rule (load-bearing); imports the engine
+  ├── main.jsx            # React entry
+  ├── lib/
+  │   ├── sim-engine.js   # SINGLE-SOURCE engine: rules, GRID_SIZES, buildNeighbors,
+  │   │                   #   all rval steps (snow/water/HQST/collatz/genes), colours
+  │   ├── sim-core.js     # HQST tight-binding applyH + Crank-Nicolson solveCN
+  │   ├── hex-geom.js     # hex cube-coordinate geometry (Red Blob Games)
+  │   ├── raster-render.js# shared ImageData raster path (main + worker, no copy-drift)
+  │   └── worker-support.js# OffscreenCanvas feature-detection (fail-closed)
+  └── worker/
+      └── render-worker.js# AP-1: opt-in off-main-thread sim+render (Stufe 1)
+tests/                    # Vitest unit + Playwright e2e + visual baselines + manual/
 experimental/             # spikes — not shipped in the main bundle
 docs/
 .github/workflows/
@@ -92,8 +108,11 @@ npm run test:e2e:update   # refresh Playwright snapshots (use deliberately)
 
 - **Single-file-leaning core.** Keep the hex logic cohesive in `src/App.tsx` + `src/lib/`;
   split only when a module boundary genuinely helps (Coworkerz GolHex style).
-- **Determinism for tests.** Drive the simulation through the exposed hooks
-  (`telemetry`, `perfStats`); do not rely on timing/animation frames in assertions.
+- **Determinism for tests.** Drive the simulation through **real DOM controls**
+  + the `<canvas>`; assert the observable contract (controls present, 0 console
+  errors, visual baselines). Use the fixed seed + static (non-running) states for
+  reproducible screenshots; do not assert on raw animation-frame timing. (There is
+  no `window.telemetry`/`window.perfStats` hook — see Project context.)
 - **Pinned actions.** GitHub Actions are SHA-pinned (zizmor-gated). Let
   Dependabot bump them via PR; don't hand-edit SHAs.
 - **Docs:** `README.md` documents the rule set and controls; keep it current
