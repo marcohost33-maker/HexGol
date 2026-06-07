@@ -25,22 +25,41 @@ simulation (HQST)** — single React component over a Canvas2D render path.
 ## What this is
 
 GolHex is a Carter-Bays hex-topology cellular automaton implemented as a
-single React component over a Canvas2D render path. It supports five grid
-sizes from 40x50 (S) to 200x250 (XXL), 16 birth/survival rules plus one
-**formula rule** (`WZL`, see below), three brush colors with two color-mixing
-strategies, a **selectable domain frame (rectangle / circle / hexagon /
-triangle)**, a real-valued physics layer (snow / water / Collatz / genetics)
-and a unitary **HQST** quantum tight-binding mode, and a tactile-brutalism UI.
+single React component over a Canvas2D render path. It supports eight grid
+sizes from 40x50 (S) up to **500x500 (5XL = 250,000 cells)**, 16 birth/survival
+rules plus one **formula rule** (`WZL`, see below), three brush colors with two
+color-mixing strategies, a **selectable domain frame (rectangle / circle /
+hexagon / triangle)**, a real-valued physics layer (snow / water / Collatz /
+genetics) and a unitary **HQST** quantum tight-binding mode, and a
+tactile-brutalism UI.
+
+### Grid sizes + circle radius (AP-2)
+
+The size `<select>` covers S … 5XL (500x500 = 250,000 cells; the cell count is
+shown per option). The **circle frame uses an explicit radius** instead of the
+size dropdown: a slider + number field (**10 … 500, default 250**) sizes the
+grid to fit the disc (`circleGridDims(radius)`). Circle r=500 spans a
+1001×871 bounding grid (~680k cells in the disc; verified
+`tests/manual/ap2-instantiation.mjs`).
+
+Safety (fail-closed, honest, no silent crash):
+- Square/hexagon/triangle share a **cell-budget cap** (`CELL_CAP = 250,000`).
+- Very large grids (> 250k cells) show a **memory warning** (8-GB-PC / phone honesty).
+- **HQST is locked above `HQST_CELL_CAP` (90,000 cells)** with an honest in-UI
+  message — Crank-Nicolson would be unusably slow at giant grids; the boolean
+  CA (Game of Life) is the primary path for the maximal sizes. (Performance
+  numbers are measured separately by Data, not asserted here.)
 
 ### Domain frames + topology
 
 Four frame shapes define the simulation domain (cells outside are permanent
-walls); each picks the largest inscribed shape that fills the hex field:
+walls); box/hexagon/triangle pick the largest inscribed shape that fills the hex
+field, while the circle uses an **explicit radius** (see above):
 
 | Frame | Geometry | Torus coupling |
 |-------|----------|----------------|
 | **Rechteck** (box) | full grid | periodic wrap (the only shape that tiles the plane cleanly) |
-| **Kreis** (circle) | largest inscribed disc | antipodal identification = real projective plane (RP²) |
+| **Kreis** (circle) | disc of the chosen radius (10–500, default 250), clamped to the inscribed maximum | antipodal identification = real projective plane (RP²) |
 | **Hexagon** | exact regular hexagon via cube-coord hex distance (`hexDist ≤ r`); 6 corners are `r` steps along the 6 cube directions, derived from the mask (corner-BBox == mask-BBox, verified) | bounded (no wrap) |
 | **Dreieck** (triangle) | equilateral, point-up, via three half-plane sign tests | bounded (no wrap) |
 
@@ -144,7 +163,7 @@ docs/
 | Parameter | Purpose                                      |
 |-----------|----------------------------------------------|
 | `?seed=N` | set the deterministic randomize() seed       |
-| `#g=N`    | initial grid size index (0 = S, 4 = XXL)     |
+| `#g=N`    | initial grid size index (0 = S … 7 = 5XL 500x500) |
 | `#r=N`    | initial rule index                           |
 | `#p=Name` | initial pattern (e.g. `Block`, `Pentagon`)   |
 | `#w=0/1`  | wrap (`1`) or edge-clamp (`0`) topology      |

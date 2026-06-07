@@ -214,7 +214,7 @@ self.onmessage = (e) => {
       catch (err) { postMessage({ type: "error", message: "getContext failed: " + err.message }); return; }
       R = m.R; C = m.C; N = R * C; hr = m.hr; dpr = m.dpr || 1;
       cfg = m.cfg; mode = m.mode; rule = m.rule; speedMs = m.speedMs ?? 16;
-      neigh = buildNeighbors(R, C, m.shape);
+      neigh = buildNeighbors(R, C, m.shape, m.shape === "circle" && Number.isFinite(m.circleRadius) ? { circleRadius: m.circleRadius } : undefined);
       // Zustands-Arrays uebernehmen (per Transfer; sonst frisch).
       col = m.col ? new Uint8Array(m.col) : new Uint8Array(N);
       gh = m.gh ? new Uint8Array(m.gh) : new Uint8Array(N);
