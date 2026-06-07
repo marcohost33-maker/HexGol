@@ -94,15 +94,22 @@ test.describe("GolHex v33 1-Seiten-Mobile-Layout (390x844)", () => {
     await page.waitForTimeout(300);
     await expect(page.getByRole("button", { name: /Zeitreihe aufzeichnen/ })).toBeVisible();
 
-    // Tab 1 (Farben): Pinsel-Swatches erreichbar.
-    await page.getByRole("button", { name: "Tab 1 Farben" }).click();
-    await page.waitForTimeout(300);
-    await expect(page.getByRole("button", { name: "Rot" }).first()).toBeVisible();
-
-    // Panel ueber den Schliessen-Knopf (v) zu -> Startansicht zurueck.
+    // Tab 3-Panel ueber den Schliessen-Knopf (v) zu -> Startansicht zurueck.
+    // (Wir sind nach den Klicks oben noch im Tab-4-Overlay; Tab 3/4 sind Voll-Overlay.)
+    await page.getByRole("button", { name: "Tab 3 Hex-Regeln" }).click();
+    await page.waitForTimeout(250);
     await page.getByRole("button", { name: "Panel schliessen" }).click();
     await page.waitForTimeout(300);
     await expect(page.getByRole("button", { name: "Kreis", exact: true })).toBeHidden();
+
+    // v33 PR-B: Tab 1 (Farben) oeffnet jetzt den LINKS-Drawer (nicht das Voll-Overlay).
+    // Pinsel-Swatches sind dort erreichbar; "Drawer schliessen" raeumt ihn wieder weg.
+    await page.getByRole("button", { name: "Tab 1 Farben" }).click();
+    await page.waitForTimeout(300);
+    await expect(page.getByRole("button", { name: "Rot" }).first()).toBeVisible();
+    await page.getByRole("button", { name: "Drawer schliessen" }).click();
+    await page.waitForTimeout(250);
+    await expect(page.getByRole("button", { name: "Rot" }).first()).toBeHidden();
 
     expect(errors, "keine Fehler beim Panel-Roundtrip").toEqual([]);
   });

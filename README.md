@@ -78,8 +78,8 @@ The UI is a **single screen with no scrolling** on phone and desktop alike:
 1. **Top bar (52px):** four content tabs — *1 Farben · 2 Formen · 3 Hex-Regeln ·
    4 Physik* — plus right-aligned action icons *📷 Snapshot* and *💾 Speichern*
    (both **disabled placeholders**, arriving in PR-C/PR-D) and *✕ App schliessen*.
-   Tapping a tab opens its panel as an **overlay over the field** (the field stays
-   underneath); tapping the active tab again closes it.
+   Tabs **3/4** open as an **overlay over the field**; tabs **1/2** open the
+   **left drawer** (PR-B, see below). Tapping the active tab again closes it.
 2. **Field maximal:** the canvas fills the space between the top bar and the stats
    line (`flex-grow`); zoom *+ / − / Fit* are floating 44px buttons bottom-right.
 3. **Stats line (34px):** *Gen · Pop · +births / −deaths · Gen/s · rule chip
@@ -97,6 +97,39 @@ Watzlawick axioms, systems-theory, legend → **Tab 3**; sim mode (life/physics)
 real-valued rules (snow/water/HQST/Collatz/genes) + solver + seed, LiouScope
 recorder, Globalarchiv snapshot, stats detail → **Tab 4**. **No function is removed
 or made unreachable** — only re-grouped behind the tabs.
+
+### v33 (PR-B): left drawer + stamp mathematics
+
+Tabs **1 Farben** and **2 Formen** open a **drawer that slides in from the left**
+and overlays only the left portion — the field stays visible (and, in stamp mode,
+tappable) on the right. The drawer opens via a **visible handle** (`❯`, left edge)
+as the primary affordance and via the tab tap; an edge-swipe is a non-required
+bonus (iOS-back-gesture conflict, so no hard `preventDefault` and the handle is
+not on the exact system edge). Closes via the handle/`❮`, or — in *Farben* mode —
+a tap on the right scrim.
+
+**Stamps (Tab 2 Formen):** four types — *Ring · Scheibe · Hexagon · Frei* (the
+free-form brush is a UI stub; its mask geometry arrives in PR-E). Two stepper rows:
+
+- **Größe 1–4** = the hex **ring distance `n`** (cube `hexDist`), *not* a world-space
+  `min(R,C)·0.42` heuristic (math audit **P1.2**). A ring of distance `n` has exactly
+  **6n** cells; a disk has **1 + 3n(n+1)** (Red Blob Games; unit-tested in
+  `tests/unit/hex-geom.test.js`).
+- **Farbanzahl 1–3** = `k` colours distributed **symmetrically**. Because `6n` is
+  divisible by 1/2/3 for every `n`, a ring splits into `k` remainder-free
+  contiguous sectors of `6n/k` cells; disk/hex sectors are angle-based around the
+  centre (Itten order, red at top, clockwise). A **live mini-preview** renders the
+  exact cells that will be placed.
+- **Placing:** pick type/size/colours in the drawer, then **tap the field** — the
+  stamp is placed at the tap (no confirm button); the last stamp is remembered.
+  Stamps **respect the domain mask** (audit **P1.1**): out-of-domain cells are
+  skipped, so nothing flashes-and-vanishes on the next step. `placeColorWheel` and
+  the pattern stamp got the same mask guard. Covered by
+  `tests/e2e/stamp-drawer.spec.ts` (mobile project).
+
+Geometry primitives live in `src/lib/hex-geom.js`: `cubeRing(center, n)`,
+`cubeDisk(center, n)`, `kColorByIndex(len, k)`, `sectorByAngle(...)` — pure,
+re-exported through `sim-engine.js`, unit-tested (54 geom tests).
 
 - On viewports `≥768px` (desktop) the structure is identical; the panel overlay is
   reused (no separate desktop layout system).

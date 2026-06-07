@@ -11,6 +11,7 @@ import {
   SOLVERS, mkHqstWork, stepHQST, rvalColor, stepCollatz,
   collatzColor, G_AA, G_Aa, G_aa, genotype, stepGenes, geneColor,
   oddRToCube, cubeToOddR, hexDist, CUBE_DIRS,
+  cubeRing, cubeDisk, kColorByIndex, sectorByAngle,
 } from "./lib/sim-engine.js";
 import { renderRaster } from "./lib/raster-render.js"; // geteilter Raster-Pfad (Worker + Main)
 import { supportsOffscreenWorker } from "./lib/worker-support.js"; // Feature-Detection (fail-closed)
@@ -305,6 +306,24 @@ export default function GolHex() {
   // {x,y} = Druckpunkt in CSS-Pixeln relativ zum Canvas-Wrapper; idx = getroffene Zelle.
   const [wheel, setWheel] = useState(null);
   const [pattern, setPattern] = useState("BaysGlider");
+  // v33 Einwisch-Drawer (PR-B): von links einfahrendes Panel fuer Farben (Tab 1) +
+  // Formen/Stempel (Tab 2). null = zu; 1 = Farben offen; 2 = Formen offen. Tab-Tipp
+  // (toggleTab) ODER Handle ODER Edge-Swipe (Bonus) oeffnet; Feld bleibt rechts sichtbar.
+  const [drawer, setDrawer] = useState(null);
+  // v33 Stempel-Konfiguration. typ: ring|disc|hex|brush; size = Hex-Ring-Distanz n
+  // (1..4, Audit-P1.2 statt min(R,C)*0.42); kcols = symmetrische Farbanzahl 1..3
+  // (Audit: 6n teilbar durch 1/2/3 -> restfreie Sektoren). Refs fuer den Tap-Handler.
+  const [stampType, setStampType] = useState("ring"); // ring | disc | hex | brush
+  const [stampSize, setStampSize] = useState(2);       // n = 1..4 Ringe
+  const [stampK, setStampK] = useState(1);             // 1..3 Farben symmetrisch
+  const stampTypeRef = useRef(stampType); useEffect(() => { stampTypeRef.current = stampType; }, [stampType]);
+  const stampSizeRef = useRef(stampSize); useEffect(() => { stampSizeRef.current = stampSize; }, [stampSize]);
+  const stampKRef = useRef(stampK); useEffect(() => { stampKRef.current = stampK; }, [stampK]);
+  // Stempel-Modus aktiv? Im Drawer Tab 2 (Formen) -> Tap aufs Feld setzt einen
+  // Stempel statt einzelner Zelle. Ref fuer den Pointer-Handler (kein Re-Render-Lag).
+  const stampModeRef = useRef(false);
+  useEffect(() => { stampModeRef.current = (drawer === 2); }, [drawer]);
+  const stampPvRef = useRef(null); // Live-Mini-Vorschau des Stempels im Drawer
   const [gen, setGen] = useState(0);
   const [stats, setStats] = useState({ pop: 0, cnt: [0,0,0,0,0,0,0,0,0,0,0,0,0], density: 0, births: 0, deaths: 0, sps: 0, hist: [] });
   const [zoomLbl, setZoomLbl] = useState(1);
@@ -337,7 +356,19 @@ export default function GolHex() {
   // 1 Farben | 2 Formen | 3 Hex-Regeln | 4 Physik. Tab-Tipp auf den aktiven Tab
   // schliesst (toggle). Das Panel ueberlagert das Feld (Feld bleibt darunter sichtbar).
   const [activeTab, setActiveTab] = useState(null);
-  const toggleTab = (id) => setActiveTab((cur) => (cur === id ? null : id));
+  // v33 PR-B: Tabs 1 (Farben) + 2 (Formen) oeffnen den LINKS-Drawer; Tabs 3/4
+  // (Regeln/Physik) bleiben Voll-Overlay. Tab-Tipp auf den aktiven schliesst (toggle).
+  const toggleTab = (id) => {
+    if (id === 1 || id === 2) {
+      setActiveTab(null);
+      setDrawer((cur) => (cur === id ? null : id));
+    } else {
+      setDrawer(null);
+      setActiveTab((cur) => (cur === id ? null : id));
+    }
+  };
+  // Stempel-Modus an, sobald der Drawer auf Tab 2 (Formen) steht und Stempeltyp
+  // gewaehlt ist. Ref, damit der Pointer-Handler ohne Re-Render-Lag liest.
   useEffect(() => { compactRef.current = compact; }, [compact]);
   // Farbmodus: "quad" = QuadLife-farbinvariant (State of the Art),
   //            "mix" = subtraktiver Hue-Mix, "drift" = Verfaerben (experimentell)
@@ -1329,7 +1360,15 @@ export default function GolHex() {
         ges.current.mode = "wheel-open"; // weiteres Painting/Pan unterdruecken
         openWheel(ox, oy);
       }, LONG_PRESS_MS);
-      if (brushRef.current !== "cycle" || simRef.current === "rval") {
+      // v33 PR-B: Stempel-Modus (Drawer Tab 2 "Formen" offen) -> ein Tap setzt den
+      // gewaehlten Stempel an die getippte Zelle und unterdrueckt Pinsel/Pan.
+      if (stampModeRef.current && simRef.current === "life") {
+        clearLongPress();
+        const { wx, wy } = toWorld(e.clientX, e.clientY);
+        const idx = pixelToOddR(wx, wy, HR, R, C);
+        if (idx >= 0) { placeStamp(idx); ges.current.mode = "stamped"; }
+        else ges.current.mode = "maybe-tap";
+      } else if (brushRef.current !== "cycle" || simRef.current === "rval") {
         pushUndo();
         const { wx, wy } = toWorld(e.clientX, e.clientY);
         const idx = pixelToOddR(wx, wy, HR, R, C); paintCell(idx, false); ges.current.lastCell = idx; ges.current.mode = "paint"; updatePop();
@@ -1542,7 +1581,8 @@ export default function GolHex() {
     const pc = (typeof brush === "number" && brush >= 1 && brush <= 12) ? brush : CB;
     let mR = 0, mC = 0; offs.forEach(([dr, dc]) => { mR = Math.max(mR, dr); mC = Math.max(mC, dc); });
     const r0 = (R - mR) >> 1, c0 = (C - mC) >> 1;
-    offs.forEach(([dr, dc]) => { const rr = r0 + dr, cc = c0 + dc; if (rr >= 0 && rr < R && cc >= 0 && cc < C) { const idx = rr * C + cc; col[idx] = pc; ageRef.current[idx] = 1; } });
+    const dmask = neighRef.current.mask; // Audit-P1.1: nicht out-of-domain stempeln
+    offs.forEach(([dr, dc]) => { const rr = r0 + dr, cc = c0 + dc; if (rr >= 0 && rr < R && cc >= 0 && cc < C) { const idx = rr * C + cc; if (!dmask[idx]) return; col[idx] = pc; ageRef.current[idx] = 1; } });
     updatePop(); dirtyRef.current = true; fitView();
   };
   // Farbkreis-Stempel: 12 Itten-Farben kreisfoermig in die Gittermitte.
@@ -1551,6 +1591,7 @@ export default function GolHex() {
   const placeColorWheel = (mode) => {
     pushUndo();
     const col = colorRef.current, age = ageRef.current;
+    const dmask = neighRef.current.mask; // Audit-P1.1: Domaenen-Maske respektieren
     const cr = (R - 1) / 2, cc = (C - 1) / 2;
     const radius = Math.max(3, Math.min(R, C) * 0.42);
     const inner = mode === "ring" ? radius * 0.74 : 0;
@@ -1574,12 +1615,125 @@ export default function GolHex() {
         ang = -ang;                              // Uhrzeigersinn
         ang %= PI2; if (ang < 0) ang += PI2;
         const idx = r * C + c;
+        if (!dmask[idx]) continue;        // Audit-P1.1: out-of-domain ueberspringen
         col[idx] = hueToState(ang);
         age[idx] = 1;
       }
     }
     updatePop(); dirtyRef.current = true; fitView();
   };
+
+  // v33 PR-B: Stempel an die getippte Zelle setzen. Nutzt die kanonischen
+  // hex-geom-Primitive (cubeRing/cubeDisk) — Groesse = Hex-Ring-Distanz n
+  // (Audit-P1.2, NICHT min(R,C)*0.42) — und respektiert die Domaenen-Maske
+  // (Audit-P1.1: out-of-domain wird uebersprungen, kein Aufblitzen). k Farben
+  // werden SYMMETRISCH verteilt (Ring: 6n/k zusammenhaengende Sektoren; Disk/Hex:
+  // winkelbasierte Sektoren). centerIdx = row*C+col der getippten Zelle.
+  const STAMP_PALETTES = {
+    // k Farben gleichmaessig ueber den Itten-Kreis verteilt (visuell distinkt),
+    // verankert an der aktuell gewaehlten Pinselfarbe falls eine reale Farbe (1..12).
+    pick: (k, anchor) => {
+      const base = (typeof anchor === "number" && anchor >= 1 && anchor <= 12)
+        ? ALLCOL.indexOf(anchor) : ALLCOL.indexOf(CR);
+      const start = base < 0 ? 0 : base;
+      const out = [];
+      for (let j = 0; j < k; j++) out.push(ALLCOL[(start + Math.round((j * 12) / k)) % 12]);
+      return out;
+    },
+  };
+  const placeStamp = (centerIdx) => {
+    if (centerIdx < 0 || simRef.current === "rval") return false; // Stempel nur in Lebenswelt
+    const cr0 = Math.floor(centerIdx / C), cc0 = centerIdx % C;
+    if (cr0 < 0 || cr0 >= R || cc0 < 0 || cc0 >= C) return false;
+    const center = oddRToCube(cc0, cr0);
+    const n = clamp(stampSizeRef.current | 0, 1, 4);
+    const k = clamp(stampKRef.current | 0, 1, 3);
+    const typ = stampTypeRef.current;
+    pushUndo();
+    const col = colorRef.current, age = ageRef.current, gh = ghostRef.current;
+    const dmask = neighRef.current.mask;
+    const cols = STAMP_PALETTES.pick(k, brushRef.current);
+    let painted = 0;
+    const setCell = (cube, colorState) => {
+      const off = cubeToOddR(cube);
+      if (off.row < 0 || off.row >= R || off.col < 0 || off.col >= C) return;
+      const idx = off.row * C + off.col;
+      if (!dmask[idx]) return;            // Audit-P1.1: out-of-domain ueberspringen
+      col[idx] = colorState; age[idx] = 1; gh[idx] = 0; painted++;
+    };
+    const S3w = S3;
+    const wxF = (r, c) => (c + ((r & 1) ? 0.5 : 0)) * S3w;
+    const wyF = (r) => r * 1.5;
+    if (typ === "ring") {
+      const ring = cubeRing(center, n);            // genau 6n Zellen, geordnet
+      const sectorOf = kColorByIndex(ring.length, k);
+      ring.forEach((cube, i) => setCell(cube, cols[sectorOf(i)]));
+    } else if (typ === "disc") {
+      const disk = cubeDisk(center, n);            // 1+3n(n+1) Zellen
+      disk.forEach((cube) => setCell(cube, cols[sectorByAngle(cube, center, k, wxF, wyF)]));
+    } else if (typ === "hex") {
+      // Hexagon = gefuellte Scheibe in Hex-Distanz-Metrik == cubeDisk (regelm. Sechseck).
+      const disk = cubeDisk(center, n);
+      disk.forEach((cube) => setCell(cube, cols[sectorByAngle(cube, center, k, wxF, wyF)]));
+    } else { // brush (Freiform) — UI-Stub: setzt nur die Zentrumszelle (Geometrie PR-E)
+      setCell(center, cols[0]);
+    }
+    dirtyRef.current = true; syncWorkerState(); updatePop();
+    return painted > 0;
+  };
+
+  // v33 PR-B: Live-Mini-Vorschau des aktuellen Stempels (Typ/Groesse/Farbanzahl).
+  // Rendert exakt die Zellen, die placeStamp setzen wuerde — symmetrische k-Sektoren.
+  // Pointy-top-Hexzellen, Zentrum in der Vorschau-Mitte. Kein Engine-Eingriff.
+  useEffect(() => {
+    if (drawer !== 2) return;
+    const cv = stampPvRef.current; if (!cv) return;
+    const ctx = cv.getContext("2d"); if (!ctx) return;
+    const W = cv.width, H = cv.height;
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = "#0b0f14"; ctx.fillRect(0, 0, W, H);
+    const n = clamp(stampSize | 0, 1, 4), k = clamp(stampK | 0, 1, 3);
+    const center = { x: 0, y: 0, z: 0 };
+    let cells;
+    if (stampType === "ring") cells = cubeRing(center, n).map((cube, i) => [cube, i, cubeRing(center, n).length]);
+    else if (stampType === "brush") cells = [[center, 0, 1]];
+    else cells = cubeDisk(center, n).map((cube) => [cube, -1, 0]);
+    const cols = STAMP_PALETTES.pick(k, brush);
+    const ringLen = stampType === "ring" ? cubeRing(center, n).length : 0;
+    const sectorRing = kColorByIndex(ringLen, k);
+    const S3w = S3;
+    const wxF = (r, c) => (c + ((r & 1) ? 0.5 : 0)) * S3w;
+    const wyF = (r) => r * 1.5;
+    // Welt-Bbox bestimmen, damit der Stempel die Vorschau ausfuellt.
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (const [cube] of cells) {
+      const o = cubeToOddR(cube); const x = wxF(o.row, o.col), y = wyF(o.row);
+      minX = Math.min(minX, x); maxX = Math.max(maxX, x); minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+    }
+    const spanX = Math.max(1e-6, maxX - minX), spanY = Math.max(1e-6, maxY - minY);
+    const pad = 10, scale = Math.min((W - 2 * pad) / spanX, (H - 2 * pad) / spanY);
+    const hr = scale * 1.0 / 1.5 * 0.92; // Hex-Radius in px (1.5 = Zeilenabstand-Faktor)
+    const cxPx = W / 2, cyPx = H / 2, midX = (minX + maxX) / 2, midY = (minY + maxY) / 2;
+    for (const [cube, i, len] of cells) {
+      const o = cubeToOddR(cube);
+      const wx = wxF(o.row, o.col), wy = wyF(o.row);
+      const px = cxPx + (wx - midX) * scale, py = cyPx + (wy - midY) * scale;
+      let colorState;
+      if (stampType === "ring") colorState = cols[sectorRing(i)];
+      else if (stampType === "brush") colorState = cols[0];
+      else colorState = cols[sectorByAngle(cube, center, k, wxF, wyF)];
+      ctx.beginPath();
+      for (let s = 0; s < 6; s++) {
+        const a = Math.PI / 180 * (60 * s - 30);
+        const hx = px + (hr) * Math.cos(a), hy = py + (hr) * Math.sin(a);
+        s ? ctx.lineTo(hx, hy) : ctx.moveTo(hx, hy);
+      }
+      ctx.closePath();
+      ctx.fillStyle = COLHEX[colorState] || "#5cf0cc"; ctx.fill();
+      ctx.strokeStyle = "#0b0f14"; ctx.lineWidth = 1; ctx.stroke();
+    }
+  }, [drawer, stampType, stampSize, stampK, brush]);
+
   const zoom = (f) => {
     const v = viewRef.current, dpr = window.devicePixelRatio || 1;
     const cw = canvasRef.current.width / dpr, ch = canvasRef.current.height / dpr, mx = cw / 2, my = ch / 2;
@@ -1690,6 +1844,67 @@ export default function GolHex() {
         </div>
       )}
     </>
+  );
+
+  // v33 PR-B: Stempel-Picker im Drawer-Tab "Formen". Typ (Ring/Scheibe/Hex/Frei) +
+  // Kaestchen-Reihe GROESSE (1..4 = Hex-Ring-Distanz n) + FARBANZAHL (1..3, symm.
+  // Sektoren) + Live-Mini-Vorschau (stampPvRef). Tap aufs Feld setzt den Stempel.
+  const STAMP_DEFS = [
+    { id: "ring", icon: "◌", lab: "Ring" },
+    { id: "disc", icon: "●", lab: "Scheibe" },
+    { id: "hex", icon: "⬡", lab: "Hex" },
+    { id: "brush", icon: "✎", lab: "Frei" },
+  ];
+  const kastBtn = (val, cur, onClick, key) => (
+    <button key={key ?? val} onClick={onClick} aria-pressed={cur === val} aria-label={`Wert ${val}`}
+      style={{ width: 40, height: 40, borderRadius: 10, cursor: "pointer", fontFamily: MONO, fontSize: 15,
+        fontWeight: cur === val ? 700 : 500, border: cur === val ? `1px solid ${T.accent}` : `1px solid ${T.border}`,
+        background: cur === val ? "rgba(92,240,204,0.12)" : T.bg2, color: cur === val ? T.accent : T.text }}>{val}</button>
+  );
+  const stampDrawerContent = (
+    <div data-drawer="formen">
+      <div style={{ fontSize: 11, color: T.sub, fontFamily: MONO, marginBottom: 6, letterSpacing: "0.03em" }}>STEMPEL</div>
+      <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+        {STAMP_DEFS.map((s) => (
+          <button key={s.id} onClick={() => setStampType(s.id)} aria-pressed={stampType === s.id}
+            aria-label={`Stempel ${s.lab}`}
+            style={{ flex: 1, height: 54, borderRadius: 12, cursor: "pointer", fontFamily: MONO,
+              display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 2,
+              border: stampType === s.id ? `1px solid ${T.accent}` : `1px solid ${T.border}`,
+              background: stampType === s.id ? "rgba(92,240,204,0.1)" : T.bg2, color: stampType === s.id ? T.accent : T.text }}>
+            <span style={{ fontSize: 18, lineHeight: 1 }}>{s.icon}</span>
+            <span style={{ fontSize: 9, color: T.sub }}>{s.lab}</span>
+          </button>
+        ))}
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+        <span style={{ fontSize: 11.5, color: T.sub, fontFamily: MONO, width: 96, flexShrink: 0 }}>Groesse (Ringe)</span>
+        {[1, 2, 3, 4].map((v) => kastBtn(v, stampSize, () => setStampSize(v), `sz${v}`))}
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+        <span style={{ fontSize: 11.5, color: T.sub, fontFamily: MONO, width: 96, flexShrink: 0 }}>Farbanzahl</span>
+        {[1, 2, 3].map((v) => kastBtn(v, stampK, () => setStampK(v), `k${v}`))}
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12, background: T.bg2,
+        border: `1px solid ${T.border}`, borderRadius: 12, padding: 10 }}>
+        <canvas ref={stampPvRef} width={92} height={92} aria-label="Stempel-Vorschau"
+          style={{ borderRadius: 8, background: "#0b0f14", flexShrink: 0 }} />
+        <div style={{ fontSize: 11, color: T.sub, fontFamily: MONO, lineHeight: 1.5 }}>
+          <b style={{ color: T.text }}>Vorschau:</b> {STAMP_DEFS.find((s) => s.id === stampType)?.lab}, Groesse {stampSize},<br />
+          {stampK} {stampK === 1 ? "Farbe" : "Farben"} {stampK > 1 ? <b style={{ color: T.text }}>symmetrisch</b> : ""}
+          {stampType === "brush" && <span style={{ color: T.accent }}><br />Freiform-Maske: Geometrie folgt (PR-E)</span>}
+        </div>
+      </div>
+      <div style={{ fontSize: 11, color: T.accent, fontFamily: MONO, lineHeight: 1.5, padding: "9px 10px",
+        borderRadius: 10, border: `1px solid ${T.accent}`, background: "rgba(92,240,204,0.06)" }}>
+        Jetzt aufs <b>Feld tippen</b> &mdash; der Stempel wird an der Tipp-Stelle gesetzt (kein Bestaetigen noetig).
+      </div>
+      {simMode === "rval" && (
+        <div style={{ fontSize: 11, color: T.sub, fontFamily: MONO, marginTop: 10, lineHeight: 1.5 }}>
+          Hinweis: Stempel wirken nur in der <b>Lebenswelt</b> (Tab 3). Im Physik-Modus malt der Tap das reellwertige Feld.
+        </div>
+      )}
+    </div>
   );
 
   // v33-Layout (PR-A): aktive Regel als B/S-Chip + Rahmen/Groesse-Chip fuer die
@@ -2286,6 +2501,71 @@ export default function GolHex() {
           </div>
         </div>
 
+        {/* v33 PR-B: Einwisch-GRIFF links. Sichtbare Primaer-Affordance (Recherche
+            Thema 1: Handle/Icon-Tap PRIMAER, Edge-Swipe nur Bonus). Tap oeffnet den
+            Drawer auf Tab 1 (Farben). Nicht exakt auf der Systemkante (x=0..6 frei),
+            damit die iOS-Back-Geste nicht kollidiert. */}
+        {drawer == null && (
+          <button onClick={() => setDrawer(1)} aria-label="Farben & Stempel oeffnen" title="Farben & Stempel"
+            style={{ position: "absolute", left: 0, top: "50%", transform: "translateY(-50%)", zIndex: 18,
+              width: 24, height: 92, borderRadius: "0 12px 12px 0", border: `1px solid ${T.border}`, borderLeft: "none",
+              background: "rgba(20,27,36,0.92)", backdropFilter: "blur(8px)", color: T.accent, fontSize: 14, fontWeight: 700,
+              fontFamily: MONO, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", touchAction: "none" }}>
+            &#10095;
+          </button>
+        )}
+        {/* v33 PR-B: LINKS-Drawer fuer Farben (1) + Formen/Stempel (2). Ueberlagert nur
+            den linken Teil; das Feld bleibt rechts sichtbar (Recherche Thema 1/3).
+            Schliessen: Tap auf den Scrim rechts / Griff-zu / aktiven Tab erneut tippen. */}
+        {drawer != null && (
+          <>
+            {/* Scrim NUR im Farben-Modus (Tab 1): Tap ausserhalb schliesst. Im Formen-
+                Modus (Tab 2) bleibt das Feld BEWUSST tappbar — ein Tap setzt dort den
+                Stempel (Auftrag 6: kein Bestaetigen). Schliessen dann via Griff/✕/Tab. */}
+            {drawer === 1 && (
+              <div onPointerDown={() => setDrawer(null)} aria-hidden="true"
+                style={{ position: "absolute", inset: 0, zIndex: 19, background: "rgba(2,5,8,0.28)" }} />
+            )}
+            <div role="dialog" aria-label={`Drawer ${drawer === 1 ? "Farben" : "Formen"}`}
+              style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: "min(300px, 82%)", zIndex: 20,
+                background: "rgba(16,22,30,0.98)", borderRight: `1px solid ${T.accent}`, display: "flex", flexDirection: "column",
+                boxShadow: "4px 0 24px rgba(0,0,0,0.5)", touchAction: "pan-y" }}>
+              {/* Drawer-Kopf: zwei Untertabs Farben | Formen + Schliessen-Griff */}
+              <div style={{ flexShrink: 0, display: "flex", alignItems: "stretch", borderBottom: `1px solid ${T.border}` }}>
+                {[[1, "🎨 Farben"], [2, "⬢ Formen"]].map(([id, lab]) => (
+                  <button key={id} onClick={() => setDrawer(id)} aria-pressed={drawer === id}
+                    aria-label={`Drawer ${id === 1 ? "Farben" : "Formen"}`}
+                    style={{ flex: 1, padding: "10px 4px", border: "none", borderRight: `1px solid ${T.border}`,
+                      background: drawer === id ? T.bg2 : "transparent", color: drawer === id ? T.accent : T.sub,
+                      boxShadow: drawer === id ? `inset 0 -3px 0 ${T.accent}` : "none",
+                      fontFamily: MONO, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>{lab}</button>
+                ))}
+                <button onClick={() => setDrawer(null)} aria-label="Drawer schliessen" title="Schliessen"
+                  style={{ width: 40, border: "none", borderLeft: `1px solid ${T.border}`, background: T.panel, color: T.text,
+                    fontFamily: MONO, fontWeight: 700, fontSize: 15, cursor: "pointer" }}>&#10094;</button>
+              </div>
+              <div style={{ flex: "1 1 0", minHeight: 0, overflowY: "auto", padding: "12px 12px 16px", overscrollBehavior: "contain" }}>
+                {drawer === 1 && (
+                  <div data-drawer="farben">
+                    {brushBlock}
+                    <div style={{ fontSize: 11, color: T.sub, fontFamily: MONO, marginBottom: 4 }}>FARBMODUS</div>
+                    <div style={{ display: "flex", gap: 6, marginBottom: 4 }}>
+                      {[["quad", "QuadLife"], ["mix", "Hue-Mix"], ["drift", "Verfaerben"]].map(([k, lab]) => (
+                        <button key={k} onClick={() => setColorMode(k)} style={{
+                          flex: 1, padding: "8px 4px", borderRadius: 9, fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: MONO,
+                          border: colorMode === k ? `1px solid ${T.accent}` : "1px solid rgba(92,240,204,0.14)",
+                          background: colorMode === k ? "rgba(92,240,204,0.12)" : T.bg2, color: colorMode === k ? T.accent : T.sub,
+                        }}>{lab}</button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {drawer === 2 && stampDrawerContent}
+              </div>
+            </div>
+          </>
+        )}
+
         {/* v33: Tab-Panel-Overlay. Liegt UEBER dem Feld (Feld bleibt darunter sichtbar,
             Recherche Thema 3/Entscheid 6). Inhalt je Tab steht weiter unten in
             tabPanelContent; Scrim + Tab-Tipp schliessen. */}
@@ -2372,7 +2652,7 @@ export default function GolHex() {
         marginTop: compact ? 4 : 8, fontFamily: MONO, fontSize: 12, color: T.sub, whiteSpace: "nowrap",
         overflowX: "auto", overflowY: "hidden", borderTop: `1px solid ${T.border}` }}>
         <span>Gen <b style={{ color: T.text }}>{gen}</b></span>
-        <span>{stats.rval ? "Aktiv" : "Pop"} <b style={{ color: T.text }}>{total.toLocaleString("de-CH")}</b></span>
+        <span>{stats.rval ? "Aktiv" : "Pop"} <b data-testid="pop" style={{ color: T.text }}>{total.toLocaleString("de-CH")}</b></span>
         {!stats.rval && <span style={{ color: "#6fd098" }}>+{stats.births}</span>}
         {!stats.rval && <span style={{ color: "#e08a8a" }}>−{stats.deaths}</span>}
         <span>{running ? <><b style={{ color: T.accent }}>{stats.sps.toFixed(0)}</b> Gen/s</> : <span style={{ opacity: 0.55 }}>⏸ pausiert</span>}</span>

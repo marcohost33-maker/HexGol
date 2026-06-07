@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { oddRToCube, cubeToOddR, hexDist, CUBE_DIRS } from "../../src/lib/hex-geom.js";
+import {
+  oddRToCube, cubeToOddR, hexDist, CUBE_DIRS,
+  cubeRing, cubeDisk, kColorByIndex, sectorByAngle,
+} from "../../src/lib/hex-geom.js";
 
 // Portiert aus den Drive-Verifikations-Skripten (G:\...\0HexGol):
 //   - "golhex test hex corners.js"   -> hexagon-corners / mask-BBox
@@ -84,5 +87,108 @@ describe("hex corners (portiert): Hexagon-Umriss == Maske", () => {
       const f = hexFrame(R, C);
       expect(f.count).toBe(1 + 3 * f.hexRad * (f.hexRad + 1));
     }
+  });
+});
+
+// ===========================================================================
+// v33 Stempel-Primitive (Ring/Disk/k-Faerbung). Unabhaengiges Orakel je Aussage
+// (Red Blob Games: Ring(n)=6n, Disk(n)=1+3n(n+1)). AGENTS.md DoD#4: Geometrie-
+// Aenderung -> passende Unit-Tests. Inkl. Negativ-/Edge-Inputs (Silent-Failure-Gate).
+// ===========================================================================
+const CENTER = oddRToCube(20, 20); // beliebiges Zentrum, n>0 vom Rand entkoppelt
+
+describe("cubeRing (Red Blob): Ring(n) hat genau 6n Zellen", () => {
+  for (let n = 1; n <= 6; n++) {
+    it(`Ring ${n}: Laenge == 6*${n} == ${6 * n}`, () => {
+      expect(cubeRing(CENTER, n)).toHaveLength(6 * n);
+    });
+    it(`Ring ${n}: ALLE Zellen haben hexDist == ${n} (Symmetrie)`, () => {
+      for (const cell of cubeRing(CENTER, n)) expect(hexDist(cell, CENTER)).toBe(n);
+    });
+  }
+  it("Ring-Zellen sind paarweise verschieden (keine Doppel)", () => {
+    const r = cubeRing(CENTER, 4);
+    const keys = new Set(r.map((c) => `${c.x},${c.y},${c.z}`));
+    expect(keys.size).toBe(r.length);
+  });
+  it("aufeinanderfolgende Ring-Zellen sind Nachbarn (hexDist 1, geschlossener Umlauf)", () => {
+    const r = cubeRing(CENTER, 3);
+    for (let i = 0; i < r.length; i++) {
+      const a = r[i], b = r[(i + 1) % r.length];
+      expect(hexDist(a, b)).toBe(1); // zusammenhaengend -> Sektoren sind zusammenhaengend
+    }
+  });
+  // Edge/Negativ (Silent-Failure-Gate):
+  it("Ring 0 == nur das Zentrum; Ring -1/-3 == leer (kein crash, kein garbage)", () => {
+    expect(cubeRing(CENTER, 0)).toHaveLength(1);
+    expect(hexDist(cubeRing(CENTER, 0)[0], CENTER)).toBe(0);
+    expect(cubeRing(CENTER, -1)).toHaveLength(0);
+    expect(cubeRing(CENTER, -3)).toHaveLength(0);
+  });
+});
+
+describe("cubeDisk (Red Blob): Disk(n) hat genau 1+3n(n+1) Zellen", () => {
+  for (let n = 0; n <= 5; n++) {
+    it(`Disk ${n}: Laenge == 1+3*${n}*${n + 1} == ${1 + 3 * n * (n + 1)}`, () => {
+      expect(cubeDisk(CENTER, n)).toHaveLength(1 + 3 * n * (n + 1));
+    });
+    it(`Disk ${n}: ALLE Zellen haben hexDist <= ${n}`, () => {
+      for (const cell of cubeDisk(CENTER, n)) expect(hexDist(cell, CENTER)).toBeLessThanOrEqual(n);
+    });
+  }
+  it("Disk == Vereinigung der Ringe 0..n (Konsistenz mit cubeRing)", () => {
+    const n = 4;
+    let sum = 1;
+    for (let k = 1; k <= n; k++) sum += cubeRing(CENTER, k).length;
+    expect(cubeDisk(CENTER, n)).toHaveLength(sum);
+  });
+});
+
+describe("kColorByIndex: symmetrische k-Faerbung des Rings (restfrei)", () => {
+  // 6n ist fuer JEDES n durch 1,2,3,6 teilbar -> jeder Sektor exakt 6n/k Zellen.
+  for (const n of [1, 2, 3, 4]) {
+    for (const k of [1, 2, 3]) {
+      it(`Ring ${n}, ${k} Farben: jeder Sektor hat exakt ${(6 * n) / k} Zellen`, () => {
+        const len = 6 * n;
+        const sectorOf = kColorByIndex(len, k);
+        const counts = new Array(k).fill(0);
+        for (let i = 0; i < len; i++) counts[sectorOf(i)]++;
+        for (const c of counts) expect(c).toBe((6 * n) / k);
+        // restfrei: Summe == len, keine Farbe ausserhalb 0..k-1
+        expect(counts.reduce((a, b) => a + b, 0)).toBe(len);
+      });
+    }
+  }
+  it("k=1 -> alles Farbe 0; k<=0 wird als 1 behandelt (kein Index-Out-of-Range)", () => {
+    const sectorOf = kColorByIndex(18, 1);
+    for (let i = 0; i < 18; i++) expect(sectorOf(i)).toBe(0);
+    const z = kColorByIndex(18, 0);
+    for (let i = 0; i < 18; i++) expect(z(i)).toBe(0);
+  });
+  it("Sektoren sind zusammenhaengend (Index-Bloecke, kein Reissverschluss)", () => {
+    const n = 3, k = 3, len = 6 * n, per = len / k;
+    const sectorOf = kColorByIndex(len, k);
+    for (let i = 0; i < len; i++) expect(sectorOf(i)).toBe(Math.floor(i / per));
+  });
+});
+
+describe("sectorByAngle (Disk-Faerbung): Winkel-Sektoren, Zentrum stabil", () => {
+  const S3 = Math.sqrt(3);
+  const wx = (r, c) => (c + ((r & 1) ? 0.5 : 0)) * S3;
+  const wy = (r) => r * 1.5;
+  it("Zentrum -> immer Sektor 0 (kein NaN aus atan2(0,0))", () => {
+    for (const k of [1, 2, 3]) expect(sectorByAngle(CENTER, CENTER, k, wx, wy)).toBe(0);
+  });
+  it("Sektor-Index immer in [0, k-1] fuer eine ganze Disk", () => {
+    for (const k of [2, 3, 6]) {
+      for (const cell of cubeDisk(CENTER, 4)) {
+        const s = sectorByAngle(cell, CENTER, k, wx, wy);
+        expect(s).toBeGreaterThanOrEqual(0);
+        expect(s).toBeLessThanOrEqual(k - 1);
+      }
+    }
+  });
+  it("k=1 -> Sektor 0 fuer alle Zellen", () => {
+    for (const cell of cubeDisk(CENTER, 3)) expect(sectorByAngle(cell, CENTER, 1, wx, wy)).toBe(0);
   });
 });
