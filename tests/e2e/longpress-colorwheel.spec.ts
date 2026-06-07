@@ -56,6 +56,47 @@ async function releaseAtOrigin(page: import("@playwright/test").Page, pointerTyp
   }, { pointerType });
 }
 
+// PR#44-Auflage (2): nur Bewegung > Slop, OHNE pointerup (Finger bleibt unten).
+// Schaerft den Pan-Slop-Test: Hold > 500 ms + Move > 8 px (kein frueher Up) darf
+// KEIN Rad oeffnen (der Bewegungs-Abbruch des Long-Press-Timers ist der Pruefstein,
+// nicht das Loslassen).
+async function pointerMoveOnly(page: import("@playwright/test").Page, ddx: number, ddy: number, pointerType: Pt) {
+  await page.evaluate(({ ddx, ddy, pointerType }) => {
+    const c = document.querySelector("canvas")!;
+    const w = window as unknown as { __lpX: number; __lpY: number };
+    const x = w.__lpX + ddx, y = w.__lpY + ddy;
+    c.dispatchEvent(new PointerEvent("pointermove", {
+      bubbles: true, cancelable: true, pointerId: 1, isPrimary: true, pointerType, clientX: x, clientY: y,
+    }));
+  }, { ddx, ddy, pointerType });
+}
+
+// PR#44-Auflage (1): realer Zellfaerbungs-Beleg via Canvas-Pixel-Readback. Die
+// getroffene Hex-Zelle rendert um ihr Zentrum, das vom exakten Druckpunkt leicht
+// versetzt liegen kann (Hex-Versatz). Darum scannen wir einen kleinen Bereich um
+// den Druckpunkt und zaehlen Pixel, deren Farbe (mit Toleranz) der Zielfarbe
+// entspricht. 2D-Canvas-Readback ist im Main-Thread-Pfad in headless Chromium
+// zuverlaessig (dieselbe Canvas, die die Visual-Specs screenshotten).
+async function countColorNear(
+  page: import("@playwright/test").Page, dx: number, dy: number, rgb: number[], half = 26, tol = 60,
+): Promise<number> {
+  return page.evaluate(({ dx, dy, rgb, half, tol }) => {
+    const c = document.querySelector("canvas") as HTMLCanvasElement;
+    const ratio = c.width / c.getBoundingClientRect().width; // CSS-px -> Geraete-px
+    const ctx = c.getContext("2d", { willReadFrequently: true })!;
+    const x0 = Math.max(0, Math.round((dx - half) * ratio));
+    const y0 = Math.max(0, Math.round((dy - half) * ratio));
+    const w = Math.min(Math.round(half * 2 * ratio), c.width - x0);
+    const h = Math.min(Math.round(half * 2 * ratio), c.height - y0);
+    const data = ctx.getImageData(x0, y0, w, h).data;
+    let n = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      if (Math.abs(data[i] - rgb[0]) <= tol && Math.abs(data[i + 1] - rgb[1]) <= tol && Math.abs(data[i + 2] - rgb[2]) <= tol) n++;
+    }
+    return n;
+  }, { dx, dy, rgb, half, tol });
+}
+
 const collectErrors = (page: import("@playwright/test").Page) => {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push("pageerror: " + e.message));
@@ -194,5 +235,62 @@ test.describe("GolHex AP-3 Long-Press-Farbrad", () => {
     await page.waitForTimeout(300);
     await expect(page.locator("canvas")).toHaveCount(1);
     expect(errors, "keine Fehler im Worker-Pfad bei Long-Press-Auswahl").toEqual([]);
+  });
+
+  // PR#44-Auflage (1): Farbrad-e2e haerten — die getroffene Zelle wird real ROT
+  // gefaerbt (Pixel-Readback der Canvas), nicht nur der Pinsel-State geprueft.
+  test("Auswahl faerbt die Zelle REAL rot (Canvas-Pixel-Readback)", async ({ page }) => {
+    const errors = collectErrors(page);
+    await page.goto("/");
+    await page.waitForTimeout(400);
+
+    // Leere Leinwand + grosse Zellen (Default-Grid S) -> ein Treffer faerbt eine
+    // klar sichtbare Flaeche. Druckpunkt = Leinwand-Mitte: liegt garantiert in der
+    // Domaene (auch bei berandeten Formen Kreis/Hexagon), damit idx >= 0 ist.
+    await page.getByRole("button", { name: "Leeren", exact: true }).click();
+    await page.waitForTimeout(200);
+
+    const cbox = await page.locator("canvas").boundingBox();
+    const DX = Math.round(cbox!.width / 2), DY = Math.round(cbox!.height / 2);
+    const RED = [255, 0, 0]; // CR = rgb(255,0,0) (Itten-Rot, sim-engine COLA[CR])
+    // Vorzustand: keine roten Pixel um den Druckpunkt (leere Leinwand).
+    const before = await countColorNear(page, DX, DY, RED);
+    expect(before, "Vorzustand: keine roten Pixel um den Druckpunkt").toBe(0);
+
+    await pointerDownOnCanvas(page, DX, DY, "touch");
+    await page.waitForTimeout(650);
+    await releaseAtOrigin(page, "touch");
+
+    const wheel = page.locator('[data-testid="color-wheel"]');
+    await expect(wheel).toBeVisible();
+    await wheel.locator('button[data-color-state="1"]').click(); // CR (Rot) = rgb(255,0,0)
+    await expect(wheel).toHaveCount(0);
+    await page.waitForTimeout(250); // einen rAF-Render abwarten
+
+    // Nachzustand: die getroffene Zelle rendert real ROT -> rote Pixel sind da.
+    const after = await countColorNear(page, DX, DY, RED);
+    expect(after, "Nachzustand: getroffene Zelle ist real rot gerendert (Pixel-Readback)").toBeGreaterThan(20);
+    expect(errors).toEqual([]);
+  });
+
+  // PR#44-Auflage (2): Pan-Slop schaerfen. Hold > 500 ms + Move > 8 px OHNE fruehes
+  // Loslassen -> KEIN Rad (Bewegungs-Abbruch ist der Pruefstein, nicht der pointerup).
+  test("Pan-Slop scharf: Hold >500ms + Move >8px (kein Up) oeffnet KEIN Rad", async ({ page }) => {
+    const errors = collectErrors(page);
+    await page.goto("/");
+    await page.waitForTimeout(400);
+
+    await pointerDownOnCanvas(page, 200, 150, "touch");
+    await page.waitForTimeout(120);
+    await pointerMoveOnly(page, 20, 14, "touch"); // ~24 px >> 8 px Slop, Finger BLEIBT unten
+    await page.waitForTimeout(650);               // weit ueber die 500-ms-Schwelle
+
+    // Trotz gehaltenem Finger jenseits 500 ms: kein Rad (Move > Slop hat den
+    // Long-Press-Timer abgebrochen).
+    await expect(page.locator('[data-testid="color-wheel"]')).toHaveCount(0);
+
+    await releaseAtOrigin(page, "touch"); // erst jetzt loslassen
+    await expect(page.locator('[data-testid="color-wheel"]')).toHaveCount(0);
+    expect(errors).toEqual([]);
   });
 });

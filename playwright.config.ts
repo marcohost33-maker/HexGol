@@ -59,7 +59,22 @@ export default defineConfig({
   projects: [
     {
       name: "chromium",
+      // Desktop-Baseline (Visual-Regression + bestehende Funktions-e2e). Diese
+      // Specs erwarten alle Controls inline sichtbar (Layout >=768px => kein Sheet).
+      testIgnore: /mobile-onepage\.spec\.ts/,
       use: { ...devices["Desktop Chrome"], viewport: { width: 1280, height: 800 } },
+    },
+    {
+      // AP-4: 1-Seiten-Mobile-Beleg. Handy-Hochkant-Viewport (iPhone 12/13/14-Klasse,
+      // 390x844). Belegt: Kern-Controls + Leinwand + Zurueck/Schliessen im Viewport
+      // sichtbar OHNE Scroll; Sekundaeres im Bottom-Sheet erreichbar.
+      name: "mobile",
+      testMatch: /mobile-onepage\.spec\.ts/,
+      use: {
+        ...devices["Desktop Chrome"],
+        viewport: { width: 390, height: 844 },
+        hasTouch: true,
+      },
     },
   ],
   webServer: {
