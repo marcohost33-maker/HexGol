@@ -12,6 +12,7 @@ import {
   oddRToCube, cubeToOddR, hexDist, CUBE_DIRS,
 } from "./lib/sim-engine.js";
 import { renderRaster } from "./lib/raster-render.js"; // geteilter Raster-Pfad (Worker + Main)
+import { supportsOffscreenWorker } from "./lib/worker-support.js"; // Feature-Detection (fail-closed)
 // Re-Export der von den Unit-Tests importierten Engine-Funktionen, damit die
 // bestehenden Test-Importpfade (tests/unit/*.test.js -> "../../src/App.tsx")
 // unveraendert weiterlaufen (PR#41-Kontrakt, named exports, export-only).
@@ -301,6 +302,17 @@ export default function GolHex() {
   //                   "rval" = reellwertig (Schneeflocke/Wasser/HQST).
   const [simMode, setSimMode] = useState("life");
   const [rvalRule, setRvalRule] = useState("snow");
+  // AP-1 OffscreenCanvas-Worker (Stufe 1): Sim + Raster-Render off-main-thread.
+  // Feature-detektiert (fail-closed) + OPT-IN: Default AUS, damit der bewaehrte
+  // Haupt-Thread-Pfad (inkl. aller Gesten/Path2D-Detail/inkrementell) unveraendert
+  // laeuft. Ist OffscreenCanvas nicht verfuegbar (alte Browser/Safari), bleibt der
+  // Schalter ausgeblendet und der Main-Thread-Pfad ist der Fallback.
+  const [workerSupported] = useState(() => supportsOffscreenWorker());
+  const [workerMode, setWorkerMode] = useState(false);
+  const [canvasKey, setCanvasKey] = useState(0); // transferControlToOffscreen ist
+  // irreversibel je Canvas-Element -> beim Moduswechsel ein frisches Element erzwingen.
+  const workerRef = useRef(null);
+  const workerActiveRef = useRef(false); // true = Worker rendert; Main-Loop pausiert Render
 
   const colorRef = useRef(new Uint8Array(N));
   const ghostRef = useRef(new Uint8Array(N));
@@ -382,6 +394,101 @@ export default function GolHex() {
     fitView();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sizeIdx, frameShape]);
+
+  // AP-1: aktuellen Engine-Config-Snapshot fuer den Worker bauen (Spiegel von
+  // cfg.current). Reine Daten (struktur-klonbar), kein Funktions-/Ref-Inhalt.
+  const buildWorkerCfg = useCallback(() => ({
+    ruleIdx, torusOn,
+    ax: { ...ax, colorMode },
+    a5, watzOnly, ruleSrc, solverId,
+    sysT: sysTheory, sysSp: sysSetpoint, bcMode: boundaryMode, openSys,
+  }), [ruleIdx, torusOn, ax, colorMode, a5, watzOnly, ruleSrc, solverId, sysTheory, sysSetpoint, boundaryMode, openSys]);
+
+  // AP-1 Worker-Lebenszyklus: spinnt den OffscreenCanvas-Worker hoch, wenn
+  // workerMode aktiv (nur moeglich wenn feature-detektiert). transferControlToOffscreen
+  // ist je Canvas-Element irreversibel -> canvasKey erzwingt ein frisches Element
+  // bei jedem Moduswechsel. Wird der Worker abgeschaltet (oder unmount), uebernimmt
+  // wieder der bewaehrte Main-Thread-Pfad (Fallback) auf einer neuen Canvas.
+  useEffect(() => {
+    if (!workerMode || !workerSupported) { workerActiveRef.current = false; return; }
+    const canvas = canvasRef.current; if (!canvas) return;
+    let worker = null, disposed = false;
+    try {
+      // Canvas-Pixelmasse vor dem Transfer sicherstellen (fit() laeuft sonst erst spaeter).
+      const dpr = window.devicePixelRatio || 1;
+      const wrap = wrapRef.current;
+      const cw = wrap ? wrap.clientWidth : canvas.clientWidth;
+      const ch = Math.min(Math.round(window.innerHeight * 0.5), 540);
+      canvas.style.width = cw + "px"; canvas.style.height = ch + "px";
+      canvas.width = Math.round(cw * dpr); canvas.height = Math.round(ch * dpr);
+      const off = canvas.transferControlToOffscreen();
+      worker = new Worker(new URL("./worker/render-worker.js", import.meta.url), { type: "module" });
+      workerRef.current = worker;
+      worker.onmessage = (e) => {
+        const m = e.data;
+        if (m.type === "ready") { workerActiveRef.current = true; }
+        else if (m.type === "telemetry") {
+          setGen(m.tick);
+          spsRef.current = m.sps;
+          if (m.solverWarn) setSolverWarn(true);
+          if (m.diverged) { setSolverDiverged(true); setRunning(false); }
+        } else if (m.type === "error") {
+          // Worker konnte nicht initialisieren -> ehrlicher Fallback auf Main-Thread.
+          // eslint-disable-next-line no-console
+          console.warn("[GolHex] Worker-Init fehlgeschlagen, Fallback Main-Thread:", m.message);
+          workerActiveRef.current = false; setWorkerMode(false); setCanvasKey((k) => k + 1);
+        }
+      };
+      worker.onerror = () => {
+        workerActiveRef.current = false; setWorkerMode(false); setCanvasKey((k) => k + 1);
+      };
+      // fitView fuer den Worker spiegeln (gleiche Mathematik wie Main-fitView).
+      const { W, H } = worldSize(R, C, HR);
+      const vs = Math.min((canvas.width / dpr) / W, (canvas.height / dpr) / H) * 0.98;
+      const view = { s: vs, tx: ((canvas.width / dpr) - W * vs) / 2, ty: ((canvas.height / dpr) - H * vs) / 2 };
+      viewRef.current = { ...view, fit: vs };
+      worker.postMessage({
+        type: "init", canvas: off,
+        R, C, hr: HR, shape: frameShape, dpr,
+        cfg: buildWorkerCfg(), mode: simMode, rule: rvalRule,
+        speedMs: SPEEDS[speedIdx], view, tick: tickRef.current,
+        col: colorRef.current.slice().buffer, gh: ghostRef.current.slice().buffer, age: ageRef.current.slice().buffer,
+        fld: fieldRef.current.slice().buffer, fim: fieldImRef.current.slice().buffer,
+        CX: cellCxRef.current.slice().buffer, CY: cellCyRef.current.slice().buffer,
+      }, [off,
+        // transferierte Buffer (Performance, kein Copy)
+      ]);
+    } catch (err) {
+      // Jeder Fehler beim Transfer/Spawn -> sauberer Fallback auf den Main-Thread.
+      // eslint-disable-next-line no-console
+      console.warn("[GolHex] OffscreenCanvas-Worker nicht startbar, Fallback Main-Thread:", err && err.message);
+      workerActiveRef.current = false;
+      if (worker) { try { worker.terminate(); } catch { /* ignore */ } }
+      workerRef.current = null;
+      // Modus zuruecknehmen + frische Canvas fuer den Main-Thread-Pfad.
+      setWorkerMode(false); setCanvasKey((k) => k + 1);
+      return;
+    }
+    return () => {
+      disposed = true;
+      workerActiveRef.current = false;
+      if (worker) { try { worker.postMessage({ type: "dispose" }); worker.terminate(); } catch { /* ignore */ } }
+      if (workerRef.current === worker) workerRef.current = null;
+      dirtyRef.current = true; // Main-Thread-Pfad soll nach Rueckkehr neu zeichnen
+      void disposed;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workerMode, canvasKey, workerSupported]);
+
+  // AP-1: laufende Worker-Sim ueber run/config/view auf dem Laufenden halten.
+  useEffect(() => {
+    const w = workerRef.current; if (!w || !workerActiveRef.current) return;
+    w.postMessage({ type: "run", running });
+  }, [running]);
+  useEffect(() => {
+    const w = workerRef.current; if (!w || !workerActiveRef.current) return;
+    w.postMessage({ type: "config", cfg: buildWorkerCfg(), mode: simMode, rule: rvalRule, speedMs: SPEEDS[speedIdx] });
+  }, [buildWorkerCfg, simMode, rvalRule, speedIdx]);
 
   const countColor = useCallback(() => {
     const col = colorRef.current; const cnt = [0,0,0,0,0,0,0,0,0,0,0,0,0]; let pop = 0;
@@ -844,6 +951,9 @@ export default function GolHex() {
     let raf, last = performance.now(), acc = 0;
     const loop = (now) => {
       const dt = now - last; last = now;
+      // Worker aktiv: Sim + Render laufen off-main-thread -> Main-Loop macht hier
+      // nichts (kein Doppel-Step, kein Doppel-Render auf der transferierten Canvas).
+      if (workerActiveRef.current) { raf = requestAnimationFrame(loop); return; }
       if (runRef.current) {
         acc += dt; const iv = spRef.current; let guard = 0;
         // PERF: Simulation vom Render entkoppeln. Statt fixem Cap (8 Steps/Frame)
@@ -873,8 +983,13 @@ export default function GolHex() {
     const id = setInterval(() => {
       const v = viewRef.current; setZoomLbl(v.fit ? v.s / v.fit : 1);
       const now = performance.now(), dt = (now - loopT0Ref.current) / 1000;
-      if (dt > 0) { spsRef.current = loopStepRef.current / dt; loopStepRef.current = 0; loopT0Ref.current = now; }
-      if (runRef.current) { setGen(tickRef.current); pushStats(statsRef.current.births, statsRef.current.deaths); }
+      // Worker aktiv: Gen + sps liefert die Worker-Telemetrie-Bruecke; den
+      // Main-Thread-Zaehler (tickRef=0, loopStep=0) hier NICHT ueberschreiben.
+      if (workerActiveRef.current) { loopT0Ref.current = now; loopStepRef.current = 0; }
+      else {
+        if (dt > 0) { spsRef.current = loopStepRef.current / dt; loopStepRef.current = 0; loopT0Ref.current = now; }
+        if (runRef.current) { setGen(tickRef.current); pushStats(statsRef.current.births, statsRef.current.deaths); }
+      }
       if (solverWarnRef.current) setSolverWarn(true);
       // Divergenz EINMALIG pro Ereignis behandeln: die Ref ist der Ausloeser und
       // wird sofort zurueckgesetzt, damit setRunning(false) nicht bei jedem Tick
@@ -891,8 +1006,20 @@ export default function GolHex() {
       const canvas = canvasRef.current, wrap = wrapRef.current; if (!canvas || !wrap) return;
       const dpr = window.devicePixelRatio || 1;
       const cw = wrap.clientWidth, ch = Math.min(Math.round(window.innerHeight * 0.5), 540);
+      // Worker aktiv: die Canvas-Kontrolle liegt off-main-thread; Groesse NICHT
+      // direkt setzen (wuerfe InvalidStateError) -> per postMessage an den Worker.
+      if (workerActiveRef.current && workerRef.current) {
+        canvas.style.width = cw + "px"; canvas.style.height = ch + "px";
+        workerRef.current.postMessage({ type: "resize", width: Math.round(cw * dpr), height: Math.round(ch * dpr), dpr });
+        return;
+      }
       canvas.style.width = cw + "px"; canvas.style.height = ch + "px";
-      canvas.width = Math.round(cw * dpr); canvas.height = Math.round(ch * dpr);
+      try {
+        // Auf einer bereits transferierten Canvas (Worker uebernimmt im selben
+        // canvasKey-Zyklus) wirft das Setzen von width/height InvalidStateError.
+        // Dann ist der Worker-Pfad zustaendig -> Resize wird dort gehandhabt.
+        canvas.width = Math.round(cw * dpr); canvas.height = Math.round(ch * dpr);
+      } catch { return; }
       fitView(); dirtyRef.current = true;
     };
     fit(); window.addEventListener("resize", fit);
@@ -920,8 +1047,10 @@ export default function GolHex() {
         canvasEl.removeEventListener("wheel", wheelHandler);
       }
     };
+    // canvasKey: bei Worker-Moduswechsel entsteht ein frisches Canvas-Element
+    // (transferControlToOffscreen ist irreversibel) -> Listener neu binden.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [canvasKey]);
 
   function fitView() {
     const canvas = canvasRef.current; if (!canvas) return;
@@ -1354,7 +1483,7 @@ export default function GolHex() {
       )}
 
       <div ref={wrapRef} style={{ position: "relative", width: "100%", borderRadius: 14, overflow: "hidden", border: `1px solid ${T.border}`, background: T.bg, boxShadow: `0 0 30px rgba(92,240,204,0.06) inset` }}>
-        <canvas ref={canvasRef} onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp}
+        <canvas key={canvasKey} ref={canvasRef} onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp}
           style={{ display: "block", touchAction: "none", cursor: brush === "cycle" ? "pointer" : "crosshair" }} />
         {/* Schwebende Zoom-Steuerung */}
         <div style={{ position: "absolute", top: 8, right: 8, display: "flex", flexDirection: "column", gap: 6, pointerEvents: "none" }}>
@@ -1448,6 +1577,32 @@ export default function GolHex() {
         {btn(doClear, "Leeren", { flex: "1 1 70px", color: "#FFB3C0", borderColor: "rgba(255,51,85,0.28)" })}
         {btn(doUndo, "Undo", { flex: "1 1 60px" })}
       </div>
+
+      {/* AP-1: OffscreenCanvas-Worker (Stufe 1) - nur sichtbar, wenn der Browser
+          OffscreenCanvas + transferControlToOffscreen + Worker unterstuetzt.
+          Opt-in (Default AUS); abgeschaltet laeuft der bewaehrte Main-Thread-Pfad. */}
+      {workerSupported && (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, fontFamily: MONO, fontSize: 11, color: T.sub }}>
+          <button
+            onClick={() => { setRunning(false); setWorkerMode((v) => !v); setCanvasKey((k) => k + 1); }}
+            aria-pressed={workerMode}
+            title="Simulation + Raster-Render in einen OffscreenCanvas-Worker auslagern (Beta, Stufe 1)"
+            style={{
+              padding: "7px 12px", borderRadius: 9, cursor: "pointer", fontFamily: MONO, fontSize: 11, fontWeight: 700,
+              border: `1px solid ${workerMode ? T.accent : T.border}`,
+              background: workerMode ? "rgba(92,240,204,0.14)" : T.bg2,
+              color: workerMode ? T.accent : T.sub,
+            }}
+          >
+            Worker {workerMode ? "AN" : "AUS"} (Beta)
+          </button>
+          <span style={{ opacity: 0.7, lineHeight: 1.35 }}>
+            {workerMode
+              ? "Sim + Raster off-main-thread. Gesten/Detail-Render pausiert (Stufe 1)."
+              : "Off-main-thread Raster-Render fuer grosse Gitter. Fallback: Haupt-Thread."}
+          </span>
+        </div>
+      )}
 
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10, fontFamily: MONO }}>
         <span style={{ fontSize: 11, color: T.sub, width: 60 }}>Tempo</span>
