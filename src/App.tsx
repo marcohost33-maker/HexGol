@@ -393,7 +393,7 @@ function worldSize(R, C, hr) {
 //   torus: Nachbar ausserhalb Domaene -> bei "box" Standard-Wrap; bei "circle"
 //          antipodale Identifikation (Strahl durch Zentrum, gegenueberliegende
 //          Randzelle) -> periodische Scheibe (RP2-artig), reflexionsfrei.
-function buildNeighbors(R, C, shape) {
+export function buildNeighbors(R, C, shape) {
   const N = R * C, torus = new Int32Array(N * 6), edge = new Int32Array(N * 6);
   const mask = new Uint8Array(N);
   const oddOff = [[-1, 0], [-1, 1], [0, -1], [0, 1], [1, 0], [1, 1]];
@@ -670,7 +670,7 @@ const SOLVERS = {
   euler: { fn: solveEuler, l: "Euler (explizit)", note: "driftet stark - Vergleich" },
 };
 // Work-Buffer fuer alle HQST-Solver (CN nutzt b*, alle nutzen h*, RK4 k*/t*).
-function mkHqstWork(n) {
+export function mkHqstWork(n) {
   return {
     bRe: new Float64Array(n), bIm: new Float64Array(n), hRe: new Float64Array(n), hIm: new Float64Array(n),
     k1r: new Float64Array(n), k1i: new Float64Array(n), k2r: new Float64Array(n), k2i: new Float64Array(n),
@@ -679,7 +679,7 @@ function mkHqstWork(n) {
   };
 }
 // Einheitlicher Einstiegspunkt; solverId waehlt den Adapter.
-function stepHQST(re, im, NL, J, V, dt, reBuf, imBuf, work, solverId) {
+export function stepHQST(re, im, NL, J, V, dt, reBuf, imBuf, work, solverId) {
   const s = SOLVERS[solverId] || SOLVERS.cn;
   return s.fn(re, im, NL, J, V, dt, reBuf, imBuf, work); // Konvergenz-Flag (cn) bzw. undefined
 }
