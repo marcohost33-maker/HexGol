@@ -17,6 +17,10 @@ test.describe("GolHex AP-1 OffscreenCanvas worker", () => {
 
     await page.goto("/");
     await page.waitForTimeout(500);
+    // v33: Worker-Schalter + Groesse + Rahmenformen liegen im Tab 3 (Hex-Regeln);
+    // die Bottom-Steuerung (Random/Start/Pause) + Gen-Zeile bleiben darunter sichtbar.
+    await page.getByRole("button", { name: "Tab 3 Hex-Regeln" }).click();
+    await page.waitForTimeout(250);
 
     // Feature-Detection-Beweis: in Chromium ist der Beta-Schalter da.
     const toggle = page.getByRole("button", { name: /Worker (AN|AUS) \(Beta\)/ });

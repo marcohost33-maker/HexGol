@@ -71,19 +71,35 @@ new colour. Cancel by tapping outside the ring (or releasing without a pick).
   appear in the canvas visual baselines. Behaviour is covered by
   `tests/e2e/longpress-colorwheel.spec.ts`.
 
-### One-page mobile layout (AP-4)
+### v33 layout (PR-A): top tabs · max field · stats line · bottom controls
 
-On a narrow portrait viewport (`max-width: 767px`, e.g. a phone) the UI collapses
-to a **single screen with no scrolling**: a compact header (title + close), the
-**canvas filling the maximum available area** (flex-grow), and a fixed **core
-bar** — *Start/Pause · Schritt · Random · Leeren · Menü*. Everything else lives in
-a **bottom sheet** opened by *Menü* (brush/colours, statistics, boundary mode,
-worker toggle, speed, Watzlawick axioms, rule/size/pattern, LiouScope recorder,
-Globalarchiv snapshot). **No function is removed or made unreachable** — only
-progressively disclosed.
+The UI is a **single screen with no scrolling** on phone and desktop alike:
 
-- On viewports `≥768px` (desktop) the full control column stays inline (no sheet),
-  so nothing changes for desktop use or the desktop e2e/visual baselines.
+1. **Top bar (52px):** four content tabs — *1 Farben · 2 Formen · 3 Hex-Regeln ·
+   4 Physik* — plus right-aligned action icons *📷 Snapshot* and *💾 Speichern*
+   (both **disabled placeholders**, arriving in PR-C/PR-D) and *✕ App schliessen*.
+   Tapping a tab opens its panel as an **overlay over the field** (the field stays
+   underneath); tapping the active tab again closes it.
+2. **Field maximal:** the canvas fills the space between the top bar and the stats
+   line (`flex-grow`); zoom *+ / − / Fit* are floating 44px buttons bottom-right.
+3. **Stats line (34px):** *Gen · Pop · +births / −deaths · Gen/s · rule chip
+   (B/S) · frame+size chip*. Updated throttled (~4 Hz, decoupled from the rAF draw
+   loop) so a running sim never thrashes the DOM.
+4. **Bottom controls:** *1. Figur (disabled, PR-C) · Undo · Redo (disabled, PR-C)
+   · **▶ Play** (60px, centre) · Schritt · Random · Leeren (red, set apart)*, plus
+   a Tempo slider (TURBO step preserved). Touch targets ≥48px,
+   `padding-bottom: env(safe-area-inset-bottom)`.
+
+Where the old controls moved: brush/colours + colour mode → **Tab 1**; pattern
+stamp + ring/disc colour-wheel stamp → **Tab 2**; rule source/INT, rule + **size
+(S–5XL)** select, topology/frame + circle radius, worker toggle + big-grid notices,
+Watzlawick axioms, systems-theory, legend → **Tab 3**; sim mode (life/physics),
+real-valued rules (snow/water/HQST/Collatz/genes) + solver + seed, LiouScope
+recorder, Globalarchiv snapshot, stats detail → **Tab 4**. **No function is removed
+or made unreachable** — only re-grouped behind the tabs.
+
+- On viewports `≥768px` (desktop) the structure is identical; the panel overlay is
+  reused (no separate desktop layout system).
 - The close button (`×`, *App schliessen*) — Coworkerz back/close requirement —
   stays visible in the viewport at all times (`closeApp()`: `history.back()` in a
   launcher tab, else `window.close()` with an honest browser-tab fallback).

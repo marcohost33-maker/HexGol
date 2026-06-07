@@ -308,7 +308,6 @@ export default function GolHex() {
   const [gen, setGen] = useState(0);
   const [stats, setStats] = useState({ pop: 0, cnt: [0,0,0,0,0,0,0,0,0,0,0,0,0], density: 0, births: 0, deaths: 0, sps: 0, hist: [] });
   const [zoomLbl, setZoomLbl] = useState(1);
-  const [showSettings, setShowSettings] = useState(true);
   const [showAxioms, setShowAxioms] = useState(false);
   const [ax, setAx] = useState({ a1: false, a2: false, a3: false, a4: false });
   const [a5, setA5] = useState("off");
@@ -334,9 +333,11 @@ export default function GolHex() {
     if (mq.addEventListener) { mq.addEventListener("change", onChange); return () => mq.removeEventListener("change", onChange); }
     mq.addListener(onChange); return () => mq.removeListener(onChange);
   }, []);
-  // Bottom-Sheet (nur im compact-Modus relevant): Default geschlossen, damit die
-  // Startansicht eine Seite ohne Scroll ist (Canvas + Kern-Leiste + Schliessen).
-  const [sheetOpen, setSheetOpen] = useState(false);
+  // v33-Layout (PR-A): aktiver Tab-Panel-Overlay. null = kein Panel (Feld maximal);
+  // 1 Farben | 2 Formen | 3 Hex-Regeln | 4 Physik. Tab-Tipp auf den aktiven Tab
+  // schliesst (toggle). Das Panel ueberlagert das Feld (Feld bleibt darunter sichtbar).
+  const [activeTab, setActiveTab] = useState(null);
+  const toggleTab = (id) => setActiveTab((cur) => (cur === id ? null : id));
   useEffect(() => { compactRef.current = compact; }, [compact]);
   // Farbmodus: "quad" = QuadLife-farbinvariant (State of the Art),
   //            "mix" = subtraktiver Hue-Mix, "drift" = Verfaerben (experimentell)
@@ -1180,7 +1181,7 @@ export default function GolHex() {
   useEffect(() => {
     const id = requestAnimationFrame(() => { refitRef.current && refitRef.current(); });
     return () => cancelAnimationFrame(id);
-  }, [compact, sheetOpen]);
+  }, [compact, activeTab]);
 
   function fitView() {
     const canvas = canvasRef.current; if (!canvas) return;
@@ -1691,6 +1692,460 @@ export default function GolHex() {
     </>
   );
 
+  // v33-Layout (PR-A): aktive Regel als B/S-Chip + Rahmen/Groesse-Chip fuer die
+  // Statistik-Zeile. Reine Anzeige aus bestehendem State (keine Engine-Aenderung).
+  const ruleChip = simMode === "rval"
+    ? (rvalRule === "snow" ? "Schnee" : rvalRule === "water" ? "Wasser" : rvalRule === "hqst" ? "HQST" : rvalRule === "collatz" ? "Collatz" : "Gene")
+    : watzOnly
+    ? "B2,3/S1-5"
+    : (() => { const r = (ruleSrc === "int" ? INT_RULES : RULES)[ruleIdx]; return r ? `B${r.B.join("")}/S${r.S.join("")}` : "—"; })();
+  const frameLbl = { box: "Rechteck", circle: "Kreis", hexagon: "Hexagon", triangle: "Dreieck" }[frameShape] || frameShape;
+  const sizeLbl = frameShape === "circle" ? `r${circleRadius}` : (GRID_SIZES[sizeIdx]?.l || "");
+  const frameChip = `${frameShape === "circle" ? "◯" : frameShape === "box" ? "▭" : "⬢"} ${frameLbl} ${sizeLbl}`;
+
+  // v33: Tab-Meta (Reihenfolge + Icon + Kurzname). 4 inhaltliche Tabs (Recherche
+  // Thema 3: Aktionen sind keine Tabs -> rechts als Icon-Buttons abgesetzt).
+  const TABS = [
+    { id: 1, icon: "🎨", label: "Farben" },
+    { id: 2, icon: "⬢", label: "Formen" },
+    { id: 3, icon: "⚙", label: "Hex-Regeln" },
+    { id: 4, icon: "🌊", label: "Physik" },
+  ];
+
+  // v33 Tab 3 (Hex-Regeln): Regelquelle/INT + Regel- & GROESSE-Auswahl (S-5XL bleibt
+  // hier erreichbar, Auflage Punkt 1) + Topologie/Rahmen + Watzlawick-Axiome +
+  // Systemtheorie + Legende. Inhalt 1:1 aus der bisherigen Settings-Sektion.
+  const tab3Content = (
+    <>
+      {/* Regelquelle: Standard B/S abwaehlbar -> nur Watzlawick (nur Lebenswelt) */}
+      {simMode === "life" && (<>
+      <div style={{ fontSize: 11, color: T.sub, fontFamily: MONO, marginBottom: 4 }}>REGELQUELLE</div>
+      <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
+        {[["std", "Standard B/S"], ["watz", "Nur Watzlawick"]].map(([k, lab]) => {
+          const on = (k === "watz") === watzOnly;
+          return (
+            <button key={k} onClick={() => setWatzOnly(k === "watz")} style={{
+              flex: 1, padding: "8px 6px", borderRadius: 9, fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: MONO,
+              border: on ? `1px solid ${T.accent}` : "1px solid rgba(92,240,204,0.14)",
+              background: on ? "rgba(92,240,204,0.12)" : T.bg2, color: on ? T.accent : T.sub,
+            }}>{lab}</button>
+          );
+        })}
+      </div>
+      {/* Regeltyp: totalistisch vs. isotrop-nicht-totalistisch (INT, Callahan o/m/p) */}
+      {!watzOnly && (
+        <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+          {[["tot", "Totalistisch"], ["int", "INT (o/m/p)"]].map(([k, lab]) => (
+            <button key={k} onClick={() => { setRuleSrc(k); setRuleIdx(0); }} style={{
+              flex: 1, padding: "7px 6px", borderRadius: 9, fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: MONO,
+              border: ruleSrc === k ? `1px solid ${T.accent}` : "1px solid rgba(92,240,204,0.14)",
+              background: ruleSrc === k ? "rgba(92,240,204,0.12)" : T.bg2, color: ruleSrc === k ? T.accent : T.sub,
+            }}>{lab}</button>
+          ))}
+        </div>
+      )}
+      </>)}
+
+      <button onClick={() => setShowLegend((v) => !v)} style={{ width: "100%", textAlign: "left", padding: "8px 10px", borderRadius: 9, border: `1px solid ${T.border}`, background: T.bg2, color: T.text, fontFamily: MONO, fontSize: 11.5, fontWeight: 700, cursor: "pointer", marginBottom: showLegend ? 6 : 8 }}>
+        {showLegend ? "v" : ">"} Legende: alle Regeln &amp; Farbenlehre
+      </button>
+      {showLegend && (
+        <div style={{ border: "1px solid rgba(92,240,204,0.14)", borderRadius: 9, padding: "10px 12px", marginBottom: 10, background: T.bg2, fontFamily: MONO, fontSize: 10.5, color: T.sub, lineHeight: 1.55 }}>
+          <div style={{ color: T.text, fontWeight: 700, marginBottom: 3 }}>B/S-Notation (Hexgitter: 0-6 Nachbarn)</div>
+          <div><b style={{ color: T.accent }}>B</b> Geburt bei dieser Nachbarzahl, <b style={{ color: T.accent }}>S</b> Survival sonst Tod.</div>
+          <div style={{ color: T.text, fontWeight: 700, margin: "7px 0 3px" }}>Alle Standard-Rulesets ({RULES.length})</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "2px 10px" }}>
+            {RULES.map((r, i) => (
+              <div key={i} style={{ color: (!watzOnly && ruleIdx === i) ? T.accent : T.sub }}>
+                {(!watzOnly && ruleIdx === i) ? "▸ " : ""}B{r.B.join("")}/S{r.S.join("")}{i === 1 ? " *Bays" : ""}
+              </div>
+            ))}
+          </div>
+          <div style={{ opacity: 0.7, marginTop: 2 }}>*B2/S35 = Carter-Bays (Complex Systems 15:245).</div>
+          <div style={{ color: T.text, fontWeight: 700, margin: "7px 0 3px" }}>Watzlawick-Regel {watzOnly ? "(aktiv)" : ""}</div>
+          <div style={{ color: watzOnly ? T.accent : T.sub }}>B2,3 / S1-5 - Kommunikationsband: 0 = Isolation = Tod; 6 = Rauschueberlast = Tod; dazwischen lebt der Dialog.</div>
+          <div style={{ color: T.text, fontWeight: 700, margin: "7px 0 3px" }}>Axiome (modulieren jede Regel)</div>
+          <div><b style={{ color: ax.a1 ? T.accent : T.sub }}>A1</b> Stille: stille Leerzonen keimen selten spontan.</div>
+          <div><b style={{ color: ax.a2 ? T.accent : T.sub }}>A2</b> Beziehung: Geburtsfarbe per Nachbar-Mehrheit statt Mischung.</div>
+          <div><b style={{ color: ax.a3 ? T.accent : T.sub }}>A3</b> Interpunktion: alte Zellen (Alter &ge;6) +/-1 Survival-Toleranz.</div>
+          <div><b style={{ color: ax.a4 ? T.accent : T.sub }}>A4</b> Analog: sterbende Zelle hinterlaesst 1 Generation Ghost.</div>
+          <div><b style={{ color: a5 !== "off" ? T.accent : T.sub }}>A5</b> Symm./Kompl.: nur gleich- bzw. andersfarbige Nachbarn zaehlen.</div>
+          <div style={{ color: T.text, fontWeight: 700, margin: "7px 0 3px" }}>INT-Regeln (isotrop nicht-totalistisch, {INT_RULES.length})</div>
+          <div>Callahan o/m/p: bei genau 2 Nachbarn zaehlt die Anordnung - o=ortho (60grad), m=meta (120grad), p=para (180grad gegenueber). Erzeugt Dynamik, die rein totalistische Regeln nicht erreichen.</div>
+        </div>
+      )}
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+        <label style={{ fontSize: 11, color: T.sub, fontFamily: MONO }}>Regel
+          {watzOnly
+            ? <div style={{ ...sel, opacity: 0.85, color: T.accent }}>Watzlawick B2,3 / S1-5</div>
+            : <select value={ruleIdx} onChange={(e) => setRuleIdx(Number(e.target.value))} style={sel}>{(ruleSrc === "int" ? INT_RULES : RULES).map((r, i) => <option key={i} value={i}>{r.l}</option>)}</select>}
+        </label>
+        <label style={{ fontSize: 11, color: T.sub, fontFamily: MONO }}>Groesse
+          {frameShape === "circle"
+            ? <div style={{ ...sel, opacity: 0.7, color: T.accent }}>Kreis: per Radius unten</div>
+            : <select value={sizeIdx} onChange={(e) => setSizeIdx(Number(e.target.value))} style={sel}>{GRID_SIZES.map((g, i) => <option key={i} value={i}>{g.l} ({g.rows}x{g.cols} = {(g.rows * g.cols).toLocaleString("de-CH")} Zellen)</option>)}</select>}
+        </label>
+      </div>
+
+      <div style={{ marginBottom: 10 }}>
+        <div style={{ fontSize: 11, color: T.sub, fontFamily: MONO, marginBottom: 4 }}>TOPOLOGIE &amp; RAHMEN</div>
+        <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
+          {[["torus", "Torus"], ["edge", "Rand"]].map(([k, lab]) => {
+            const on = (k === "torus") === torusOn;
+            return (
+              <button key={k} onClick={() => setTorusOn(k === "torus")} style={{
+                flex: 1, padding: "8px 6px", borderRadius: 9, fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: MONO,
+                border: on ? `1px solid ${T.accent}` : "1px solid rgba(92,240,204,0.14)",
+                background: on ? "rgba(92,240,204,0.12)" : T.bg2, color: on ? T.accent : T.sub,
+              }}>{lab}</button>
+            );
+          })}
+        </div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 4 }}>
+          {[["box", "Rechteck"], ["circle", "Kreis"], ["hexagon", "Hexagon"], ["triangle", "Dreieck"]].map(([k, lab]) => (
+            <button key={k} onClick={() => setFrameShape(k)} style={{
+              flex: "1 1 40%", padding: "8px 6px", borderRadius: 9, fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: MONO,
+              border: frameShape === k ? `1px solid ${T.accent}` : "1px solid rgba(92,240,204,0.14)",
+              background: frameShape === k ? "rgba(92,240,204,0.12)" : T.bg2, color: frameShape === k ? T.accent : T.sub,
+            }}>{lab}</button>
+          ))}
+        </div>
+        <div style={{ fontSize: 10, color: T.sub, opacity: 0.7, fontFamily: MONO, lineHeight: 1.4 }}>
+          {frameShape === "circle"
+            ? (torusOn ? "Kreis + Torus: antipodale Identifikation (reelle projektive Ebene, RP2). Reflexionsfrei, aber nicht-orientierbar - Muster kehren am Rand spiegelverkehrt zurueck (Moebius-Eigenschaft)." : "Kreis + Rand: harte runde Wand, Null-Fluss (Neumann), massenerhaltend.")
+            : frameShape === "hexagon"
+            ? "Hexagon: exaktes regelmaessiges Sechseck via Hex-Distanz (Wuerfelkoordinaten), die natuerliche Form des Hexgitters. Berandet (Neumann-Wand), kein Torus - die Form kachelt das Gitter nicht periodisch sauber."
+            : frameShape === "triangle"
+            ? "Dreieck: gleichseitig (Spitze oben) via Schnittmenge dreier Halbebenen. Berandet (Neumann-Wand), kein Torus. Eckzellen haben wenige Nachbarn - sichtbar staerkere Randdynamik."
+            : (torusOn ? "Rechteck + Torus: periodischer Rand (Standard-Wrap)." : "Rechteck + Rand: feste Wand, Null-Fluss (Neumann).")}
+        </div>
+
+        {/* AP-2: Kreis-Radius waehlen (Slider + Zahl). Nur bei Kreis. */}
+        {frameShape === "circle" && (
+          <div style={{ marginTop: 8, padding: "8px 10px", borderRadius: 9, background: T.bg2, border: "1px solid rgba(92,240,204,0.14)" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+              <span style={{ fontSize: 11, color: T.sub, fontFamily: MONO, whiteSpace: "nowrap" }}>Kreis-Radius</span>
+              <input type="range" min={10} max={MAX_CIRCLE_RADIUS} step={1} value={circleRadius}
+                onChange={(e) => setCircleRadius(clamp(Number(e.target.value) || 10, 10, MAX_CIRCLE_RADIUS))}
+                style={{ flex: 1, accentColor: T.accent }} aria-label="Kreis-Radius" />
+              <input type="number" min={10} max={MAX_CIRCLE_RADIUS} value={circleRadius}
+                onChange={(e) => { const v = Number(e.target.value); if (Number.isFinite(v)) setCircleRadius(clamp(Math.round(v), 10, MAX_CIRCLE_RADIUS)); }}
+                style={{ width: 56, padding: "4px 6px", borderRadius: 7, fontSize: 12, fontFamily: MONO, background: T.bg, color: T.accent, border: `1px solid ${T.border}`, textAlign: "right" }}
+                aria-label="Kreis-Radius (Zahl)" />
+            </div>
+            <div style={{ fontSize: 10, color: T.sub, opacity: 0.85, fontFamily: MONO, lineHeight: 1.4 }}>
+              Wie gross der Kreis ist: 10 (klein) bis {MAX_CIRCLE_RADIUS} (maximal). Standard {DEFAULT_CIRCLE_RADIUS}.
+              Gitter {R}x{C}, davon ~{(boundaryStat.total || 0).toLocaleString("de-CH")} Zellen im Kreis.
+            </div>
+          </div>
+        )}
+
+        {N >= 250000 && (
+          <div style={{ marginTop: 8, padding: "7px 10px", borderRadius: 9, background: "rgba(255,180,60,0.10)", border: "1px solid rgba(255,180,60,0.35)", fontSize: 10.5, color: "#f0c674", fontFamily: MONO, lineHeight: 1.4 }}>
+            Sehr grosses Gitter ({(N).toLocaleString("de-CH")} Zellen). Auf aelteren Handys / 8-GB-PCs
+            kann der Browser langsam werden oder den Tab neu laden. Bei Rucklern eine Stufe kleiner waehlen.
+          </div>
+        )}
+        {hqstLocked && simMode === "rval" && rvalRule === "hqst" && (
+          <div style={{ marginTop: 8, padding: "7px 10px", borderRadius: 9, background: "rgba(255,120,120,0.10)", border: "1px solid rgba(255,120,120,0.35)", fontSize: 10.5, color: "#ffb0b0", fontFamily: MONO, lineHeight: 1.4 }}>
+            HQST (Quantenwelle) ist ab {(HQST_CELL_CAP).toLocaleString("de-CH")} Zellen gesperrt - der
+            Crank-Nicolson-Loeser waere hier unzumutbar langsam. Fuer Riesen-Gitter den booleschen
+            Modus (Game of Life) nutzen, oder das Gitter verkleinern.
+          </div>
+        )}
+
+        {/* OffscreenCanvas-Worker (Stufe 1) + Auto-Worker-Hinweise. v33: hier bei der
+            Gitter-Groesse einsortiert (Worker = Riesen-Gitter-Konzern, Tab 3). */}
+        {workerSupported && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10, marginBottom: 10, fontFamily: MONO, fontSize: 11, color: T.sub }}>
+            <button
+              onClick={() => {
+                setRunning(false);
+                setWorkerMode((v) => {
+                  const next = !v;
+                  userWorkerPrefRef.current = next;
+                  workerModeRef.current = next;
+                  return next;
+                });
+                setAutoWorkerNotice(false);
+                setCanvasKey((k) => k + 1);
+              }}
+              aria-pressed={workerMode}
+              title="Simulation + Raster-Render in einen OffscreenCanvas-Worker auslagern (Beta, Stufe 1)"
+              style={{
+                padding: "7px 12px", borderRadius: 9, cursor: "pointer", fontFamily: MONO, fontSize: 11, fontWeight: 700,
+                border: `1px solid ${workerMode ? T.accent : T.border}`,
+                background: workerMode ? "rgba(92,240,204,0.14)" : T.bg2,
+                color: workerMode ? T.accent : T.sub,
+              }}
+            >
+              Worker {workerMode ? "AN" : "AUS"} (Beta)
+            </button>
+            <span style={{ opacity: 0.7, lineHeight: 1.35 }}>
+              {workerMode
+                ? "Sim + Raster off-main-thread. Gesten/Detail-Render pausiert (Stufe 1)."
+                : "Off-main-thread Raster-Render fuer grosse Gitter. Fallback: Haupt-Thread."}
+            </span>
+          </div>
+        )}
+        {workerSupported && workerMode && autoWorkerNotice && bigGrid && (
+          <div style={{ marginBottom: 10, padding: "7px 10px", borderRadius: 9, background: "rgba(92,240,204,0.10)", border: "1px solid rgba(92,240,204,0.35)", fontSize: 10.5, color: T.accent, fontFamily: MONO, lineHeight: 1.4 }}>
+            Grosses Gitter ({N.toLocaleString("de-CH")} Zellen): Der Worker wurde
+            automatisch eingeschaltet, damit die App nicht einfriert. Du kannst ihn
+            mit dem Schalter oben jederzeit wieder ausschalten.
+          </div>
+        )}
+        {workerSupported && !workerMode && bigGrid && !hqstActiveLocked && (
+          <div style={{ marginBottom: 10, padding: "7px 10px", borderRadius: 9, background: "rgba(255,120,120,0.10)", border: "1px solid rgba(255,120,120,0.35)", fontSize: 10.5, color: "#ffb0b0", fontFamily: MONO, lineHeight: 1.4 }}>
+            Worker ist AUS bei {N.toLocaleString("de-CH")} Zellen - der Haupt-Thread
+            kann hier einfrieren. Schalte den Worker oben ein, oder verkleinere das Gitter.
+          </div>
+        )}
+        {!workerSupported && bigGrid && !hqstActiveLocked && (
+          <div style={{ marginBottom: 10, padding: "7px 10px", borderRadius: 9, background: "rgba(255,120,120,0.10)", border: "1px solid rgba(255,120,120,0.35)", fontSize: 10.5, color: "#ffb0b0", fontFamily: MONO, lineHeight: 1.4 }}>
+            Grosses Gitter ({N.toLocaleString("de-CH")} Zellen): Dieser Browser
+            unterstuetzt den Worker nicht - der Haupt-Thread kann einfrieren.
+            Verkleinere das Gitter fuer fluessiges Verhalten.
+          </div>
+        )}
+      </div>
+
+      {/* WATZLAWICK-AXIOME (komplett erhalten, Auflage Punkt 1) */}
+      <button onClick={() => setShowAxioms((v) => !v)} style={{ width: "100%", textAlign: "left", padding: "9px 10px", borderRadius: 10, border: `1px solid ${T.border}`, background: T.panel, color: T.text, fontFamily: MONO, fontSize: 12, fontWeight: 700, cursor: "pointer", marginBottom: 8 }}>
+        {showAxioms ? "v" : ">"} WATZLAWICK-AXIOME (als Regeln)
+      </button>
+      {showAxioms && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 10 }}>
+          {AXIOMS.map((a) => (
+            <button key={a.id} onClick={() => setAx((s) => ({ ...s, [a.id]: !s[a.id] }))} title={a.desc} style={{
+              textAlign: "left", padding: "8px 10px", borderRadius: 9, cursor: "pointer", fontFamily: MONO,
+              border: ax[a.id] ? `1px solid ${T.accent}` : "1px solid rgba(92,240,204,0.14)",
+              background: ax[a.id] ? "rgba(92,240,204,0.10)" : T.bg2, color: ax[a.id] ? T.text : T.sub,
+            }}>
+              <div style={{ fontSize: 12, fontWeight: 700 }}><span style={{ color: ax[a.id] ? T.accent : T.sub }}>{ax[a.id] ? "[x]" : "[ ]"}</span> {a.short}</div>
+              <div style={{ fontSize: 10.5, color: T.sub, marginTop: 2, lineHeight: 1.4, opacity: 0.85 }}>{a.desc}</div>
+            </button>
+          ))}
+          <div style={{ padding: "8px 10px", borderRadius: 9, border: "1px solid rgba(92,240,204,0.14)", background: T.bg2 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: a5 !== "off" ? T.text : T.sub, fontFamily: MONO }}>
+              <span style={{ color: a5 !== "off" ? T.accent : T.sub }}>{a5 !== "off" ? "[x]" : "[ ]"}</span> A5 Symmetrie / Komplementaritaet
+            </div>
+            <div style={{ fontSize: 10.5, color: T.sub, margin: "2px 0 6px", lineHeight: 1.4, opacity: 0.85, fontFamily: MONO }}>
+              Symmetrisch: nur gleichfarbige Nachbarn zaehlen. Komplementaer: nur andersfarbige.
+            </div>
+            <div style={{ display: "flex", gap: 6 }}>
+              {[["off", "Aus"], ["sym", "Symm."], ["komp", "Kompl."]].map(([k, lab]) => (
+                <button key={k} onClick={() => setA5(k)} style={{
+                  flex: 1, padding: "6px 4px", borderRadius: 8, fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: MONO,
+                  border: a5 === k ? `1px solid ${T.accent}` : "1px solid rgba(92,240,204,0.14)",
+                  background: a5 === k ? "rgba(92,240,204,0.12)" : T.bg, color: a5 === k ? T.accent : T.sub,
+                }}>{lab}</button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Systemtheorie-Modell (Kybernetik / Homeostase) */}
+      <div style={{ marginBottom: 14 }}>
+        <button onClick={() => setSysTheory((v) => !v)} style={{
+          width: "100%", padding: "9px", borderRadius: 9, fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: MONO,
+          border: sysTheory ? `1px solid ${T.accent}` : `1px solid ${T.border}`,
+          background: sysTheory ? "rgba(92,240,204,0.12)" : T.bg2, color: sysTheory ? T.accent : T.sub, marginBottom: sysTheory ? 6 : 0,
+        }}>{sysTheory ? "Systemtheorie: AN (Homeostase)" : "Systemtheorie: AUS"}</button>
+        {sysTheory && (
+          <>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+              <span style={{ fontSize: 10.5, color: T.sub, fontFamily: MONO, whiteSpace: "nowrap" }}>Sollwert {Math.round(sysSetpoint * 6)}</span>
+              <input type="range" min="1" max="6" step="1" value={Math.round(sysSetpoint * 6)} onChange={(e) => setSysSetpoint(Number(e.target.value) / 6)} style={{ flex: 1, accentColor: T.accent }} />
+            </div>
+            <div style={{ fontSize: 10, color: T.sub, opacity: 0.7, fontFamily: MONO, lineHeight: 1.4 }}>
+              Kybernetische Negativ-Rueckkopplung: Unterdichte stuetzt Leben, Ueberdichte entzieht es. Das System regelt sich auf den Sollwert (dynamisches Gleichgewicht), statt frei zu wachsen oder zu sterben.
+            </div>
+          </>
+        )}
+        <button onClick={() => setOpenSys((v) => !v)} style={{
+          width: "100%", marginTop: 6, padding: "9px", borderRadius: 9, fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: MONO,
+          border: openSys ? `1px solid ${T.accent}` : `1px solid ${T.border}`,
+          background: openSys ? "rgba(92,240,204,0.12)" : T.bg2, color: openSys ? T.accent : T.sub,
+        }}>{openSys ? "Offenes System: AN (Dirichlet-Rand)" : "Offenes System: AUS (geschlossen)"}</button>
+        {openSys && (
+          <div style={{ fontSize: 10, color: T.sub, opacity: 0.7, marginTop: 4, fontFamily: MONO, lineHeight: 1.4 }}>
+            Systemtheorie: offenes System. Der Rand haelt einen konstanten Quellwert (Dirichlet) und tauscht mit der Umgebung aus - wirkt in der Physik bei Schnee und Wasser. Geschlossen = Null-Fluss (Neumann).
+          </div>
+        )}
+      </div>
+    </>
+  );
+
+  // v33 Tab 4 (Physik): Simulationsmodus + reellwertige Regeln (Schnee/Wasser/HQST/
+  // Collatz/Gene) + Solver + Seed + Forschung (Recorder + Globalarchiv).
+  const tab4Content = (
+    <>
+      {/* Simulationsmodus: boolesche Lebenswelt-Engine vs. reellwertige Physik */}
+      <div style={{ fontSize: 11, color: T.sub, fontFamily: MONO, marginBottom: 4 }}>SIMULATIONSMODUS</div>
+      <div style={{ display: "flex", gap: 6, marginBottom: simMode === "rval" ? 6 : 8 }}>
+        {[["life", "Lebenswelt"], ["rval", "Physik (reellwertig)"]].map(([k, lab]) => (
+          <button key={k} onClick={() => setSimMode(k)} style={{
+            flex: 1, padding: "8px 6px", borderRadius: 9, fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: MONO,
+            border: simMode === k ? `1px solid ${T.accent}` : "1px solid rgba(92,240,204,0.14)",
+            background: simMode === k ? "rgba(92,240,204,0.12)" : T.bg2, color: simMode === k ? T.accent : T.sub,
+          }}>{lab}</button>
+        ))}
+      </div>
+      {/* Reellwertige Regelauswahl + Seed */}
+      {simMode === "rval" && (
+        <>
+          <div style={{ display: "flex", gap: 6, marginBottom: 6, flexWrap: "wrap" }}>
+            {RVAL_RULES.map((r) => (
+              <button key={r.id} onClick={() => setRvalRule(r.id)} style={{
+                flex: "1 1 28%", minWidth: 0, padding: "7px 4px", borderRadius: 9, fontSize: 10.5, fontWeight: 700, cursor: "pointer", fontFamily: MONO,
+                border: rvalRule === r.id ? `1px solid ${T.accent}` : "1px solid rgba(92,240,204,0.14)",
+                background: rvalRule === r.id ? "rgba(92,240,204,0.12)" : T.bg2, color: rvalRule === r.id ? T.accent : T.sub,
+              }}>{r.id === "snow" ? "Schnee" : r.id === "water" ? "Wasser" : r.id === "hqst" ? "HQST" : r.id === "collatz" ? "Collatz" : "Gene"}</button>
+            ))}
+          </div>
+          <div style={{ fontSize: 10, color: T.sub, opacity: 0.7, marginBottom: 6, fontFamily: MONO, lineHeight: 1.4 }}>
+            {rvalRule === "snow" && "Reiter-Schneeflocke: reellwertige Wasserdiffusion, rezeptive Zellen frieren (Chaos Solitons Fractals 23). Start setzt Eiskeim + Dampf."}
+            {rvalRule === "water" && "Wasser: Gravitation nach unten + seitlicher Druckausgleich, massenerhaltend. Start fuellt eine Saeule oben."}
+            {rvalRule === "hqst" && "HQST: hexagonale Tight-Binding-Quantenwelle, normerhaltend. Start setzt ein lokalisiertes Wellenpaket in der Mitte."}
+            {rvalRule === "collatz" && "Collatz: jede Zelle eine Zahl; gerade -> n/2, ungerade -> 3n+1. Erreicht 1, wird aus groesstem Nachbarn neu geboren. Farbe nach log2(Wert)."}
+            {rvalRule === "genes" && "Dominante Gene (Mendel): diploide Genotypen AA/Aa/aa. AA+Aa zeigen dominant (rot/orange), aa rezessiv (blau). Geburt vererbt je 1 Allel zweier Eltern; Hardy-Weinberg-Start p=0.6."}
+          </div>
+          <button onClick={rvalSeed} style={{ width: "100%", padding: "8px", borderRadius: 9, fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: MONO, border: `1px solid ${T.border}`, background: T.bg2, color: T.accent, marginBottom: 10 }}>
+            Neu initialisieren (Seed)
+          </button>
+          {rvalRule === "hqst" && (
+            <div style={{ marginBottom: 10 }}>
+              <div style={{ fontSize: 10.5, color: T.sub, fontFamily: MONO, marginBottom: 4 }}>SOLVER (Q-SIM-OPS)</div>
+              <div style={{ display: "flex", gap: 6, marginBottom: 4 }}>
+                {Object.entries(SOLVERS).map(([k, s]) => (
+                  <button key={k} onClick={() => setSolverId(k)} style={{
+                    flex: 1, padding: "7px 4px", borderRadius: 9, fontSize: 10.5, fontWeight: 700, cursor: "pointer", fontFamily: MONO,
+                    border: solverId === k ? `1px solid ${T.accent}` : "1px solid rgba(92,240,204,0.14)",
+                    background: solverId === k ? "rgba(92,240,204,0.12)" : T.bg2, color: solverId === k ? T.accent : T.sub,
+                  }}>{s.l}</button>
+                ))}
+              </div>
+              <div style={{ fontSize: 10, color: T.sub, opacity: 0.7, fontFamily: MONO, lineHeight: 1.4 }}>
+                Austauschbarer Integrator: {SOLVERS[solverId].note}. Crank-Nicolson erhaelt die Norm exakt; Euler driftet sichtbar (Vergleich der Verfahren).
+              </div>
+              {solverWarn && solverId === "cn" && (
+                <div style={{ fontSize: 10, color: "#FFB347", fontFamily: MONO, lineHeight: 1.4, marginTop: 4 }}>
+                  Warnung: Crank-Nicolson-Fixpunkt nicht konvergiert (Parameter zu gross). Ergebnis kann ungenau sein.
+                </div>
+              )}
+              {solverDiverged && (
+                <div style={{ fontSize: 10, color: "#FF6680", fontFamily: MONO, lineHeight: 1.4, marginTop: 4 }}>
+                  Divergenz abgefangen: {SOLVERS[solverId] ? solverId.toUpperCase() : "Der Loeser"} ist fuer die Schroedingergleichung instabil und die Amplitude wuchs unbegrenzt. Das Feld wurde genullt und der Lauf gestoppt. Fuer stabile Langzeitlaeufe Crank-Nicolson (cn) waehlen und neu seeden.
+                </div>
+              )}
+            </div>
+          )}
+        </>
+      )}
+
+      {/* Forschungsstation: LiouScope-Zeitreihen-Recorder + Export */}
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ fontSize: 11, color: T.sub, fontFamily: MONO, marginBottom: 4 }}>FORSCHUNG &middot; LIOUSCOPE-EXPORT</div>
+        <button onClick={toggleRecord} style={{
+          width: "100%", padding: "9px", borderRadius: 9, fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: MONO,
+          border: recording ? `1px solid ${T.accent}` : `1px solid ${T.border}`,
+          background: recording ? "rgba(92,240,204,0.12)" : T.bg2, color: recording ? T.accent : T.sub, marginBottom: 6,
+        }}>{recording ? "Aufzeichnung: LAEUFT (stoppen)" : "Zeitreihe aufzeichnen (Start)"}</button>
+        <div style={{ display: "flex", gap: 6, marginBottom: 4 }}>
+          <button onClick={exportCSV} style={{ flex: 1, padding: "8px 4px", borderRadius: 9, fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: MONO, border: `1px solid ${T.border}`, background: T.bg2, color: T.accent }}>CSV</button>
+          <button onClick={exportJSON} style={{ flex: 1, padding: "8px 4px", borderRadius: 9, fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: MONO, border: `1px solid ${T.border}`, background: T.bg2, color: T.accent }}>JSON (LiouScope)</button>
+        </div>
+        <div style={{ fontSize: 10, color: T.sub, opacity: 0.75, fontFamily: MONO, lineHeight: 1.4 }}>
+          {recMsg || "Zeichnet pro Schritt Observablen auf (Pop/Dichte/Geburten oder aktive Zellen/Summe). JSON traegt Metadaten fuer reproduzierbare LiouScope-Analyse (Spektrum, Skalierung)."}
+        </div>
+      </div>
+
+      {/* Forschungsstation: Globalarchiv (reproduzierbarer Lauf-Schnappschuss) */}
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ fontSize: 11, color: T.sub, fontFamily: MONO, marginBottom: 4 }}>FORSCHUNG &middot; GLOBALARCHIV</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+          <span style={{ fontSize: 10.5, color: T.sub, fontFamily: MONO, whiteSpace: "nowrap" }}>Seed</span>
+          <input type="number" value={seed} onChange={(e) => setSeed(Number(e.target.value) | 0)} style={{ flex: 1, minWidth: 0, padding: "6px 8px", borderRadius: 8, border: `1px solid ${T.border}`, background: T.bg2, color: T.text, fontFamily: MONO, fontSize: 11 }} />
+          <button onClick={() => setSeed((Math.random() * 1e9) | 0)} style={{ padding: "6px 8px", borderRadius: 8, fontSize: 10.5, fontWeight: 700, cursor: "pointer", fontFamily: MONO, border: `1px solid ${T.border}`, background: T.bg2, color: T.accent }}>Wuerfeln</button>
+        </div>
+        <div style={{ display: "flex", gap: 6, marginBottom: 4 }}>
+          <button onClick={exportSnapshot} style={{ flex: 1, padding: "8px 4px", borderRadius: 9, fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: MONO, border: `1px solid ${T.border}`, background: T.bg2, color: T.accent }}>Speichern</button>
+          <label style={{ flex: 1, padding: "8px 4px", borderRadius: 9, fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: MONO, border: `1px solid ${T.border}`, background: T.bg2, color: T.accent, textAlign: "center" }}>
+            Laden<input type="file" accept="application/json,.json" onChange={importSnapshot} style={{ display: "none" }} />
+          </label>
+        </div>
+        <div style={{ fontSize: 10, color: T.sub, opacity: 0.75, fontFamily: MONO, lineHeight: 1.4 }}>
+          {archMsg || "Speichert/laedt die vollstaendige Lauf-Konfiguration (Seed + alle Parameter) als JSON. Mit festem Seed ist jeder Zufallsstart exakt reproduzierbar."}
+        </div>
+      </div>
+
+      {/* Statistik-Detail (Farb-Aufschluesselung + Sparkline + Randbedingung) */}
+      <div style={{ marginBottom: 6, padding: "10px 12px", borderRadius: 12, border: `1px solid ${T.border}`, background: T.panel, fontFamily: MONO }}>
+        <div style={{ fontSize: 11, color: T.sub, marginBottom: 8 }}>STATISTIK-DETAIL</div>
+        {!stats.rval && boundaryInfo.count > 0 && (
+          <div style={{ fontSize: 10, color: T.sub, opacity: 0.7, marginBottom: 8, lineHeight: 1.4 }}>
+            Randzellen: <b style={{ color: T.text }}>{boundaryInfo.count}</b> von {boundaryInfo.total} &middot; {
+              (frameShape === "box" && torusOn)
+                ? "periodischer Rand (Torus, kein fester Rand)"
+                : (frameShape === "circle" && torusOn)
+                ? "antipodaler Rand (RP2)"
+                : (boundaryMode === "adiabatic")
+                ? "reflektierende Wand (adiabatisch: fehlender Nachbar spiegelt die Zelle)"
+                : "feste Wand (Null-Randbedingung: fehlende Nachbarn = tot)"
+            }
+          </div>
+        )}
+        {!stats.rval && boundaryInfo.count > 0 && !((frameShape === "box" || frameShape === "circle") && torusOn) && (
+          <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+            {[["null", "Feste Wand"], ["adiabatic", "Reflektierend"]].map(([k, lab]) => (
+              <button key={k} onClick={() => setBoundaryMode(k)} style={{
+                flex: 1, padding: "6px 6px", borderRadius: 8, fontSize: 10.5, fontWeight: 700, cursor: "pointer", fontFamily: MONO,
+                border: boundaryMode === k ? `1px solid ${T.accent}` : "1px solid rgba(92,240,204,0.14)",
+                background: boundaryMode === k ? "rgba(92,240,204,0.12)" : T.bg2, color: boundaryMode === k ? T.accent : T.sub,
+              }}>{lab}</button>
+            ))}
+          </div>
+        )}
+        {stats.rval ? (
+          <div style={{ fontSize: 11, color: T.sub, marginBottom: 8, lineHeight: 1.5 }}>
+            {rvalRule === "snow" && <span>Eiszellen: <b style={{ color: T.text }}>{total}</b> &middot; reellwertige Diffusion</span>}
+            {rvalRule === "water" && <span>Wasserzellen: <b style={{ color: T.text }}>{total}</b> &middot; Gesamtmasse <b style={{ color: T.text }}>{(stats.rvalSum || 0).toFixed(0)}</b> (erhalten)</span>}
+            {rvalRule === "hqst" && <span>Belegte Zellen: <b style={{ color: T.text }}>{total}</b> &middot; Norm <b style={{ color: T.text }}>{(stats.rvalSum || 0).toFixed(3)}</b> (unitaer)</span>}
+            {rvalRule === "collatz" && <span>Zellen &gt; 1: <b style={{ color: T.text }}>{total}</b> &middot; Collatz-Folgen aktiv</span>}
+            {rvalRule === "genes" && <span>Lebende Genotypen: <b style={{ color: T.text }}>{total}</b> &middot; Mendel/Hardy-Weinberg</span>}
+          </div>
+        ) : (<>
+          <div style={{ display: "flex", height: 8, borderRadius: 4, overflow: "hidden", background: "rgba(140,196,187,0.12)", marginBottom: 8 }}>
+            {ALLCOL.map((c) => <div key={c} style={{ width: `${pct(stats.cnt[c])}%`, background: COLHEX[c] }} />)}
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "4px 8px", fontSize: 10.5, marginBottom: 8 }}>
+            {ALLCOL.map((c) => (
+              <span key={c} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                <span style={{ width: 9, height: 9, borderRadius: "50%", background: COLHEX[c], display: "inline-block", flexShrink: 0 }} />
+                <span style={{ color: T.sub, whiteSpace: "nowrap" }}>{NAME[c]} <b style={{ color: T.text }}>{stats.cnt[c]}</b> <span style={{ opacity: 0.55 }}>{pct(stats.cnt[c])}%</span></span>
+              </span>
+            ))}
+          </div>
+        </>)}
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          {!stats.rval && <span style={{ fontSize: 11, color: "#7CF0B0" }}>+{stats.births}</span>}
+          {!stats.rval && <span style={{ fontSize: 11, color: "#FF7A93" }}>-{stats.deaths}</span>}
+          <svg viewBox="0 0 100 28" preserveAspectRatio="none" style={{ flex: 1, height: 28, opacity: 0.9 }}>
+            {sparkPath && <path d={sparkPath} fill="none" stroke={T.accent} strokeWidth="1.3" vectorEffect="non-scaling-stroke" />}
+          </svg>
+        </div>
+      </div>
+
+      <div style={{ fontSize: 10.5, color: T.sub, opacity: 0.7, lineHeight: 1.6, fontFamily: MONO }}>
+        Pinsel Zyklus: ein Tap schaltet weiter (leer&rarr;blau&rarr;rot&rarr;gelb&rarr;leer), ein Finger pant. Blau/Rot/Gelb/Leer: Tap und Ziehen malen.
+        Zwei Finger oder Rad = Zoom (jetzt bis 0.2x rausgezoomt), Fit zentriert. Regelquelle "Nur Watzlawick" deaktiviert die B/S-Rulesets.
+      </div>
+    </>
+  );
+
   return (
     <div style={compact
       ? {
@@ -1723,32 +2178,57 @@ export default function GolHex() {
         button:active { transform: translateY(1px); }
         input[type="range"] { min-height: 32px; touch-action: none; }
         input:focus-visible, select:focus-visible { outline: 2px solid ${T.accent}; outline-offset: 2px; }
-        @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+        /* prefers-reduced-motion: keine Transitionen UND kein Press-Versatz (das
+           Verschieben beim Druecken ist Bewegung; deaktiviert -> ruhige UI fuer
+           bewegungsempfindliche Nutzer, deterministische Hit-Tests). */
+        @media (prefers-reduced-motion: reduce) {
+          * { transition: none !important; }
+          button:active { transform: none !important; }
+        }
+        /* v33 Statistik-Zeile: feste Hoehe, horizontal scrollbar OHNE Layout-Sprung.
+           Scrollbalken ausblenden + Hoehe konstant halten -> kein Jitter, der die
+           darunter liegende Steuerung waehrend eines laufenden Sims verschiebt. */
+        .ghx-stats { scrollbar-width: none; -ms-overflow-style: none; }
+        .ghx-stats::-webkit-scrollbar { display: none; height: 0; }
         .ghx-canvas, .ghx-canvas canvas, [data-testid="color-wheel"] {
           -webkit-user-select: none; user-select: none;
           -webkit-touch-callout: none;
         }
       `}</style>
-      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 8 }}>
-        <div style={{ fontSize: 20, fontWeight: 700, letterSpacing: "0.04em" }}>
-          <span style={{ color: T.accent, textShadow: `0 0 18px ${T.accent}66` }}>Gol</span><span style={{ color: T.text }}>Hex</span>
-          <span style={{ color: T.sub, fontSize: 12, marginLeft: 8, fontFamily: MONO }}>v31</span>
+      {/* v33 TOP-LEISTE (52px): 4 Tabs links + Aktions-Icons rechts (Snapshot 📷 /
+          Speichern 💾 — PR-C/D, vorerst disabled+TODO) + Schliessen ✕ (closeApp).
+          Tab-Tipp oeffnet/schliesst den zugehoerigen Panel-Overlay (toggleTab). */}
+      <div style={{ flexShrink: 0, display: "flex", alignItems: "stretch", height: 52, marginBottom: compact ? 6 : 8,
+        background: T.panel, border: `1px solid ${T.border}`, borderRadius: compact ? 10 : 12, overflow: "hidden" }}>
+        <div style={{ display: "flex", flex: 1, minWidth: 0 }}>
+          {TABS.map((t) => {
+            const on = activeTab === t.id;
+            return (
+              <button key={t.id} onClick={() => toggleTab(t.id)} aria-pressed={on}
+                aria-label={`Tab ${t.id} ${t.label}`} title={t.label}
+                style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 1,
+                  cursor: "pointer", border: "none", borderRight: `1px solid ${T.border}`,
+                  background: on ? T.bg2 : "transparent", color: on ? T.accent : T.sub,
+                  boxShadow: on ? `inset 0 -3px 0 ${T.accent}` : "none", fontFamily: MONO, padding: 0 }}>
+                <span style={{ fontSize: 15, lineHeight: 1 }}>{t.icon}</span>
+                <span style={{ fontSize: 9, opacity: 0.85, whiteSpace: "nowrap" }}>{t.id} {t.label}</span>
+              </button>
+            );
+          })}
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <span style={{ fontSize: 11, color: T.sub, fontFamily: MONO }}>Coworker Research</span>
+        <div style={{ display: "flex", flexShrink: 0 }}>
+          {/* TODO PR-C: Snapshot (canvas.toBlob -> Web Share / Download). Vorerst disabled. */}
+          <button disabled aria-label="Snapshot (kommt in PR-C)" title="Snapshot — kommt in PR-C"
+            style={{ width: 42, border: "none", borderLeft: `1px solid ${T.border}`, background: "transparent", color: T.sub, opacity: 0.35, fontSize: 16, cursor: "not-allowed" }}>📷</button>
+          {/* TODO PR-D: Spielstand speichern (IndexedDB + browser-fs-access). Vorerst disabled. */}
+          <button disabled aria-label="Speichern (kommt in PR-D)" title="Speichern — kommt in PR-D"
+            style={{ width: 42, border: "none", borderLeft: `1px solid ${T.border}`, background: "transparent", color: T.sub, opacity: 0.35, fontSize: 16, cursor: "not-allowed" }}>💾</button>
           <button onClick={closeApp} aria-label="App schliessen" title="Schliessen"
-            style={{ width: 44, height: 44, borderRadius: 8, cursor: "pointer", lineHeight: 1,
-              border: "1px solid rgba(255,107,134,0.45)", background: "rgba(255,51,85,0.12)",
-              color: "#FFC2CE", fontSize: 16, fontWeight: 700, fontFamily: MONO,
-              display: "flex", alignItems: "center", justifyContent: "center" }}>&times;</button>
+            style={{ width: 46, border: "none", borderLeft: `1px solid ${T.border}`, background: "rgba(255,51,85,0.12)", color: "#FFC2CE", fontSize: 17, fontWeight: 700, fontFamily: MONO, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>&times;</button>
         </div>
       </div>
 
-      {/* AP-4: Pinsel-/Farbblock auf Desktop ueber der Leinwand; im compact-Modus
-          steckt er stattdessen im Bottom-Sheet (s. unten). */}
-      {!compact && brushBlock}
-
-      <div ref={wrapRef} className="ghx-canvas" style={{ position: "relative", width: "100%", flex: compact ? "1 1 0" : "none", minHeight: compact ? 0 : undefined, borderRadius: compact ? 0 : 14, overflow: "hidden", border: compact ? "none" : `1px solid ${T.border}`, background: T.bg, boxShadow: compact ? "none" : `0 0 30px rgba(92,240,204,0.06) inset` }}>
+      <div ref={wrapRef} className="ghx-canvas" style={{ position: "relative", width: "100%", flex: compact ? "1 1 0" : "none", minHeight: compact ? 0 : 360, borderRadius: compact ? 10 : 14, overflow: "hidden", border: `1px solid ${T.border}`, background: T.bg, boxShadow: `0 0 30px rgba(92,240,204,0.06) inset` }}>
         <canvas key={canvasKey} ref={canvasRef} onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp}
           onContextMenu={(e) => e.preventDefault()}
           style={{ display: "block", touchAction: "none", cursor: brush === "cycle" ? "pointer" : "crosshair" }} />
@@ -1792,578 +2272,156 @@ export default function GolHex() {
             }} />
           </div>
         )}
-        {/* Schwebende Zoom-Steuerung */}
-        <div style={{ position: "absolute", top: 8, right: 8, display: "flex", flexDirection: "column", gap: 6, pointerEvents: "none" }}>
-          {[["+", () => zoom(1.3)], ["\u2212", () => zoom(1 / 1.3)], ["\u2316", () => fitView()]].map(([lab, fn], i) => (
-            <button key={i} onClick={fn} style={{
-              pointerEvents: "auto", width: 34, height: 34, borderRadius: 9, cursor: "pointer",
-              border: `1px solid ${T.border}`, background: "rgba(6,15,18,0.78)", backdropFilter: "blur(8px)",
-              color: T.accent, fontSize: 16, fontWeight: 700, fontFamily: MONO, lineHeight: 1, display: "flex", alignItems: "center", justifyContent: "center",
+        {/* v33: Schwebende Zoom-Steuerung rechts UNTEN (44px, rgba-Panel wie Mockup). */}
+        <div style={{ position: "absolute", right: 10, bottom: 10, display: "flex", flexDirection: "column", gap: 8, pointerEvents: "none" }}>
+          {[["+", "Vergroessern", () => zoom(1.3)], ["\u2212", "Verkleinern", () => zoom(1 / 1.3)], ["Fit", "Einpassen", () => fitView()]].map(([lab, al, fn], i) => (
+            <button key={i} onClick={fn} aria-label={al} title={al} style={{
+              pointerEvents: "auto", width: 44, height: 44, borderRadius: 12, cursor: "pointer",
+              border: `1px solid ${T.border}`, background: "rgba(20,27,36,0.88)", backdropFilter: "blur(8px)",
+              color: T.accent, fontSize: lab === "Fit" ? 13 : 20, fontWeight: 700, fontFamily: MONO, lineHeight: 1, display: "flex", alignItems: "center", justifyContent: "center",
             }}>{lab}</button>
           ))}
-          <div style={{ pointerEvents: "none", textAlign: "center", fontSize: 9.5, color: T.sub, fontFamily: MONO, background: "rgba(6,15,18,0.78)", borderRadius: 7, padding: "2px 0", border: `1px solid ${T.border}` }}>
+          <div style={{ pointerEvents: "none", textAlign: "center", fontSize: 9.5, color: T.sub, fontFamily: MONO, background: "rgba(20,27,36,0.88)", borderRadius: 9, padding: "2px 0", border: `1px solid ${T.border}` }}>
             {zoomLbl >= 10 ? zoomLbl.toFixed(0) : zoomLbl.toFixed(1)}x
           </div>
         </div>
-      </div>
 
-      {/* AP-4: Kern-Leiste (nur compact). Bleibt immer sichtbar, kein Scroll noetig.
-          Start/Pause, Schritt, Random, Leeren (rot) + Menue oeffnet das Bottom-Sheet
-          mit ALLEN Sekundaer-Controls (nichts entfernt, nur eingeklappt). */}
-      {compact && (
-        <div style={{ flexShrink: 0, display: "flex", gap: 6, paddingTop: 8, paddingBottom: 2, alignItems: "stretch" }}>
-          {btn(() => setRunning((r) => !r), running ? "Pause" : "Start", { flex: "1 1 0", background: running ? "rgba(255,51,85,0.16)" : "rgba(92,240,204,0.14)", borderColor: running ? "rgba(255,51,85,0.4)" : T.accent, color: running ? "#FFC2CE" : T.accent, fontWeight: 700 })}
-          {btn(doStep, "Schritt", { flex: "1 1 0" })}
-          {btn(doRandom, "Random", { flex: "1 1 0" })}
-          {btn(doClear, "Leeren", { flex: "1 1 0", color: "#FFB3C0", borderColor: "rgba(255,51,85,0.28)" })}
-          <button onClick={() => setSheetOpen((v) => !v)} aria-expanded={sheetOpen} aria-controls="ghx-sheet"
-            style={{ flex: "1 1 0", minHeight: 44, borderRadius: 10, cursor: "pointer", fontFamily: MONO, fontSize: 12, fontWeight: 700,
-              border: `1px solid ${sheetOpen ? T.accent : T.border}`, background: sheetOpen ? "rgba(92,240,204,0.14)" : T.panel, color: sheetOpen ? T.accent : T.text }}>
-            {sheetOpen ? "Schliessen" : "Menue"}
-          </button>
-        </div>
-      )}
-
-      {/* AP-4: Bottom-Sheet (compact) — haelt ALLE Sekundaer-Controls. Default zu.
-          Auf Desktop kein Sheet: derselbe Inhalt steht inline (kein Regress; e2e bei
-          1280 finden alle Controls direkt). Der Sheet-Backdrop schliesst bei Tipp.
-          ANTI-REGRESSION: jede bisherige Funktion ist hier weiterhin erreichbar. */}
-      {compact && sheetOpen && (
-        <div onClick={() => setSheetOpen(false)} aria-hidden="true"
-          style={{ position: "fixed", inset: 0, zIndex: 40, background: "rgba(2,6,8,0.55)" }} />
-      )}
-      <div
-        id="ghx-sheet"
-        role={compact ? "dialog" : undefined}
-        aria-label={compact ? "Weitere Steuerung" : undefined}
-        style={compact
-          ? {
-              position: "fixed", left: 0, right: 0, bottom: 0, zIndex: 41,
-              maxHeight: "82dvh", overflowY: "auto",
-              padding: "10px 12px max(14px, env(safe-area-inset-bottom))",
-              background: T.bg2, borderTop: `1px solid ${T.border}`,
-              borderTopLeftRadius: 16, borderTopRightRadius: 16,
-              boxShadow: "0 -8px 30px rgba(0,0,0,0.5)",
-              transform: sheetOpen ? "translateY(0)" : "translateY(100%)",
-              transition: "transform .2s ease", overscrollBehavior: "contain",
-              visibility: sheetOpen ? "visible" : "hidden",
-            }
-          : { display: "contents" }
-        }>
-      {compact && (
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-          <div style={{ fontSize: 12, fontWeight: 700, fontFamily: MONO, color: T.accent, letterSpacing: "0.04em" }}>STEUERUNG</div>
-          <button onClick={() => setSheetOpen(false)} aria-label="Menue schliessen"
-            style={{ width: 44, height: 36, borderRadius: 8, cursor: "pointer", fontFamily: MONO, fontWeight: 700,
-              border: `1px solid ${T.border}`, background: T.panel, color: T.text }}>v</button>
-        </div>
-      )}
-      {/* AP-4: im compact-Modus steht der Pinsel-/Farbblock hier im Sheet. */}
-      {compact && brushBlock}
-
-      {/* Statistik-Karte */}
-      <div style={{ margin: "8px 0", padding: "10px 12px", borderRadius: 12, border: `1px solid ${T.border}`, background: T.panel, backdropFilter: "blur(6px)", fontFamily: MONO }}>
-        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11.5, color: T.sub, marginBottom: 8 }}>
-          <span>Gen <b style={{ color: T.text }}>{gen}</b></span>
-          <span>{stats.rval ? "Aktiv" : "Pop"} <b style={{ color: T.text }}>{total}</b></span>
-          <span>Dichte <b style={{ color: T.text }}>{(stats.density * 100).toFixed(1)}%</b></span>
-          <span>{running ? <span style={{ color: T.accent }}>{stats.sps.toFixed(0)}/s</span> : <span style={{ opacity: 0.5 }}>pausiert</span>}</span>
-        </div>
-        {/* Randbedingung transparent machen: bei berandeten Formen (oder Rechteck
-            ohne Torus) wirkt an den Randzellen die feste Wand (Null-Randbedingung,
-            fehlende Nachbarn zaehlen als tot - kanonisch korrekt). Beim Torus gibt
-            es keinen Rand (periodisch). */}
-        {!stats.rval && boundaryInfo.count > 0 && (
-          <div style={{ fontSize: 10, color: T.sub, opacity: 0.7, marginBottom: 8, lineHeight: 1.4 }}>
-            Randzellen: <b style={{ color: T.text }}>{boundaryInfo.count}</b> von {boundaryInfo.total} &middot; {
-              (frameShape === "box" && torusOn)
-                ? "periodischer Rand (Torus, kein fester Rand)"
-                : (frameShape === "circle" && torusOn)
-                ? "antipodaler Rand (RP2)"
-                : (boundaryMode === "adiabatic")
-                ? "reflektierende Wand (adiabatisch: fehlender Nachbar spiegelt die Zelle)"
-                : "feste Wand (Null-Randbedingung: fehlende Nachbarn = tot)"
-            }
-          </div>
-        )}
-        {/* Wahl der Randbedingung - nur sinnvoll im booleschen Modus an einer
-            echten Wand (nicht im Torus, wo es keinen Rand gibt). Standard "null"
-            erhaelt das bisherige Verhalten exakt; "adiabatic" reflektiert. */}
-        {!stats.rval && boundaryInfo.count > 0 && !((frameShape === "box" || frameShape === "circle") && torusOn) && (
-          <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
-            {[["null", "Feste Wand"], ["adiabatic", "Reflektierend"]].map(([k, lab]) => (
-              <button key={k} onClick={() => setBoundaryMode(k)} style={{
-                flex: 1, padding: "6px 6px", borderRadius: 8, fontSize: 10.5, fontWeight: 700, cursor: "pointer", fontFamily: MONO,
-                border: boundaryMode === k ? `1px solid ${T.accent}` : "1px solid rgba(92,240,204,0.14)",
-                background: boundaryMode === k ? "rgba(92,240,204,0.12)" : T.bg2, color: boundaryMode === k ? T.accent : T.sub,
-              }}>{lab}</button>
-            ))}
-          </div>
-        )}
-        {stats.rval ? (
-          <div style={{ fontSize: 11, color: T.sub, marginBottom: 8, lineHeight: 1.5 }}>
-            {rvalRule === "snow" && <span>Eiszellen: <b style={{ color: T.text }}>{total}</b> &middot; reellwertige Diffusion</span>}
-            {rvalRule === "water" && <span>Wasserzellen: <b style={{ color: T.text }}>{total}</b> &middot; Gesamtmasse <b style={{ color: T.text }}>{(stats.rvalSum || 0).toFixed(0)}</b> (erhalten)</span>}
-            {rvalRule === "hqst" && <span>Belegte Zellen: <b style={{ color: T.text }}>{total}</b> &middot; Norm <b style={{ color: T.text }}>{(stats.rvalSum || 0).toFixed(3)}</b> (unitaer)</span>}
-            {rvalRule === "collatz" && <span>Zellen &gt; 1: <b style={{ color: T.text }}>{total}</b> &middot; Collatz-Folgen aktiv</span>}
-            {rvalRule === "genes" && <span>Lebende Genotypen: <b style={{ color: T.text }}>{total}</b> &middot; Mendel/Hardy-Weinberg</span>}
-          </div>
-        ) : (<>
-        {/* Farb-Stapelbalken (12 Farben) */}
-        <div style={{ display: "flex", height: 8, borderRadius: 4, overflow: "hidden", background: "rgba(140,196,187,0.12)", marginBottom: 8 }}>
-          {ALLCOL.map((c) => <div key={c} style={{ width: `${pct(stats.cnt[c])}%`, background: COLHEX[c] }} />)}
-        </div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "4px 8px", fontSize: 10.5, marginBottom: 8 }}>
-          {ALLCOL.map((c) => (
-            <span key={c} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
-              <span style={{ width: 9, height: 9, borderRadius: "50%", background: COLHEX[c], display: "inline-block", flexShrink: 0 }} />
-              <span style={{ color: T.sub, whiteSpace: "nowrap" }}>{NAME[c]} <b style={{ color: T.text }}>{stats.cnt[c]}</b> <span style={{ opacity: 0.55 }}>{pct(stats.cnt[c])}%</span></span>
-            </span>
-          ))}
-        </div>
-        </>)}
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          {!stats.rval && <span style={{ fontSize: 11, color: "#7CF0B0" }}>+{stats.births}</span>}
-          {!stats.rval && <span style={{ fontSize: 11, color: "#FF7A93" }}>-{stats.deaths}</span>}
-          <svg viewBox="0 0 100 28" preserveAspectRatio="none" style={{ flex: 1, height: 28, opacity: 0.9 }}>
-            {sparkPath && <path d={sparkPath} fill="none" stroke={T.accent} strokeWidth="1.3" vectorEffect="non-scaling-stroke" />}
-          </svg>
-        </div>
-      </div>
-
-      <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
-        {btn(() => setRunning((r) => !r), running ? "Pause" : "Start", { flex: "1 1 80px", background: running ? "rgba(255,51,85,0.16)" : "rgba(92,240,204,0.14)", borderColor: running ? "rgba(255,51,85,0.4)" : T.accent, color: running ? "#FFC2CE" : T.accent, fontWeight: 700 })}
-        {btn(doStep, "Schritt", { flex: "1 1 70px" })}
-        {btn(doRandom, "Random", { flex: "1 1 70px" })}
-        {btn(doClear, "Leeren", { flex: "1 1 70px", color: "#FFB3C0", borderColor: "rgba(255,51,85,0.28)" })}
-        {btn(doUndo, "Undo", { flex: "1 1 60px" })}
-      </div>
-
-      {/* AP-1: OffscreenCanvas-Worker (Stufe 1) - nur sichtbar, wenn der Browser
-          OffscreenCanvas + transferControlToOffscreen + Worker unterstuetzt.
-          Opt-in (Default AUS); abgeschaltet laeuft der bewaehrte Main-Thread-Pfad. */}
-      {workerSupported && (
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, fontFamily: MONO, fontSize: 11, color: T.sub }}>
-          <button
-            onClick={() => {
-              setRunning(false);
-              setWorkerMode((v) => {
-                const next = !v;
-                userWorkerPrefRef.current = next; // bewusste User-Wahl -> Override merken
-                workerModeRef.current = next;     // SYNCHRON (gleiches Race wie Auto-Pfad)
-                return next;
-              });
-              setAutoWorkerNotice(false); // bewusste Wahl ersetzt die Automatik-Notiz
-              setCanvasKey((k) => k + 1);
-            }}
-            aria-pressed={workerMode}
-            title="Simulation + Raster-Render in einen OffscreenCanvas-Worker auslagern (Beta, Stufe 1)"
-            style={{
-              padding: "7px 12px", borderRadius: 9, cursor: "pointer", fontFamily: MONO, fontSize: 11, fontWeight: 700,
-              border: `1px solid ${workerMode ? T.accent : T.border}`,
-              background: workerMode ? "rgba(92,240,204,0.14)" : T.bg2,
-              color: workerMode ? T.accent : T.sub,
-            }}
-          >
-            Worker {workerMode ? "AN" : "AUS"} (Beta)
-          </button>
-          <span style={{ opacity: 0.7, lineHeight: 1.35 }}>
-            {workerMode
-              ? "Sim + Raster off-main-thread. Gesten/Detail-Render pausiert (Stufe 1)."
-              : "Off-main-thread Raster-Render fuer grosse Gitter. Fallback: Haupt-Thread."}
-          </span>
-        </div>
-      )}
-
-      {/* Auto-Worker (M-2): plain-sprachliche Notiz, wenn die Automatik den Worker
-          fuer ein Riesen-Gitter eingeschaltet hat. Verschwindet, sobald der User
-          den Schalter selbst betaetigt. */}
-      {workerSupported && workerMode && autoWorkerNotice && bigGrid && (
-        <div style={{ marginBottom: 10, padding: "7px 10px", borderRadius: 9, background: "rgba(92,240,204,0.10)", border: "1px solid rgba(92,240,204,0.35)", fontSize: 10.5, color: T.accent, fontFamily: MONO, lineHeight: 1.4 }}>
-          Grosses Gitter ({N.toLocaleString("de-CH")} Zellen): Der Worker wurde
-          automatisch eingeschaltet, damit die App nicht einfriert. Du kannst ihn
-          mit dem Schalter oben jederzeit wieder ausschalten.
-        </div>
-      )}
-
-      {/* Auto-Worker (M-2): User-Override-Warnung. Worker auf einem Riesen-Gitter
-          bewusst AUS -> ehrlicher Hinweis, dass der Haupt-Thread einfrieren kann.
-          Nicht bei gesperrtem HQST (dort greift die HQST-Sperr-Meldung + Step-Skip). */}
-      {workerSupported && !workerMode && bigGrid && !hqstActiveLocked && (
-        <div style={{ marginBottom: 10, padding: "7px 10px", borderRadius: 9, background: "rgba(255,120,120,0.10)", border: "1px solid rgba(255,120,120,0.35)", fontSize: 10.5, color: "#ffb0b0", fontFamily: MONO, lineHeight: 1.4 }}>
-          Worker ist AUS bei {N.toLocaleString("de-CH")} Zellen - der Haupt-Thread
-          kann hier einfrieren. Schalte den Worker oben ein, oder verkleinere das Gitter.
-        </div>
-      )}
-
-      {/* Auto-Worker (M-2): Fallback-Geraete ohne OffscreenCanvas - ehrliche
-          Riesen-Gitter-Warnung, da die Automatik hier nicht greifen kann.
-          Nicht bei gesperrtem HQST (dort greift die HQST-Sperr-Meldung). */}
-      {!workerSupported && bigGrid && !hqstActiveLocked && (
-        <div style={{ marginBottom: 10, padding: "7px 10px", borderRadius: 9, background: "rgba(255,120,120,0.10)", border: "1px solid rgba(255,120,120,0.35)", fontSize: 10.5, color: "#ffb0b0", fontFamily: MONO, lineHeight: 1.4 }}>
-          Grosses Gitter ({N.toLocaleString("de-CH")} Zellen): Dieser Browser
-          unterstuetzt den Worker nicht - der Haupt-Thread kann einfrieren.
-          Verkleinere das Gitter fuer fluessiges Verhalten.
-        </div>
-      )}
-
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10, fontFamily: MONO }}>
-        <span style={{ fontSize: 11, color: T.sub, width: 60 }}>Tempo</span>
-        <input type="range" min={0} max={SPEEDS.length - 1} value={speedIdx} onChange={(e) => setSpeedIdx(Number(e.target.value))} style={{ flex: 1, accentColor: T.accent }} />
-        <span style={{ fontSize: 11, color: T.sub, width: 44, textAlign: "right" }}>{SPLBL[speedIdx]}</span>
-      </div>
-
-      {/* Watzlawick */}
-      <button onClick={() => setShowAxioms((v) => !v)} style={{ width: "100%", textAlign: "left", padding: "9px 10px", borderRadius: 10, border: `1px solid ${T.border}`, background: T.panel, color: T.text, fontFamily: MONO, fontSize: 12, fontWeight: 700, cursor: "pointer", marginBottom: 8 }}>
-        {showAxioms ? "v" : ">"} WATZLAWICK-AXIOME (als Regeln)
-      </button>
-      {showAxioms && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 10 }}>
-          {AXIOMS.map((a) => (
-            <button key={a.id} onClick={() => setAx((s) => ({ ...s, [a.id]: !s[a.id] }))} title={a.desc} style={{
-              textAlign: "left", padding: "8px 10px", borderRadius: 9, cursor: "pointer", fontFamily: MONO,
-              border: ax[a.id] ? `1px solid ${T.accent}` : "1px solid rgba(92,240,204,0.14)",
-              background: ax[a.id] ? "rgba(92,240,204,0.10)" : T.bg2, color: ax[a.id] ? T.text : T.sub,
-            }}>
-              <div style={{ fontSize: 12, fontWeight: 700 }}><span style={{ color: ax[a.id] ? T.accent : T.sub }}>{ax[a.id] ? "[x]" : "[ ]"}</span> {a.short}</div>
-              <div style={{ fontSize: 10.5, color: T.sub, marginTop: 2, lineHeight: 1.4, opacity: 0.85 }}>{a.desc}</div>
-            </button>
-          ))}
-          <div style={{ padding: "8px 10px", borderRadius: 9, border: "1px solid rgba(92,240,204,0.14)", background: T.bg2 }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: a5 !== "off" ? T.text : T.sub, fontFamily: MONO }}>
-              <span style={{ color: a5 !== "off" ? T.accent : T.sub }}>{a5 !== "off" ? "[x]" : "[ ]"}</span> A5 Symmetrie / Komplementaritaet
-            </div>
-            <div style={{ fontSize: 10.5, color: T.sub, margin: "2px 0 6px", lineHeight: 1.4, opacity: 0.85, fontFamily: MONO }}>
-              Symmetrisch: nur gleichfarbige Nachbarn zaehlen. Komplementaer: nur andersfarbige.
-            </div>
-            <div style={{ display: "flex", gap: 6 }}>
-              {[["off", "Aus"], ["sym", "Symm."], ["komp", "Kompl."]].map(([k, lab]) => (
-                <button key={k} onClick={() => setA5(k)} style={{
-                  flex: 1, padding: "6px 4px", borderRadius: 8, fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: MONO,
-                  border: a5 === k ? `1px solid ${T.accent}` : "1px solid rgba(92,240,204,0.14)",
-                  background: a5 === k ? "rgba(92,240,204,0.12)" : T.bg, color: a5 === k ? T.accent : T.sub,
-                }}>{lab}</button>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Settings */}
-      <button onClick={() => setShowSettings((v) => !v)} style={{ width: "100%", textAlign: "left", padding: "9px 10px", borderRadius: 10, border: `1px solid ${T.border}`, background: T.panel, color: T.text, fontFamily: MONO, fontSize: 12, fontWeight: 700, cursor: "pointer", marginBottom: 8 }}>
-        {showSettings ? "v" : ">"} REGEL / GROESSE / PATTERN
-      </button>
-      {showSettings && (
-        <>
-          {/* Simulationsmodus: boolesche Lebenswelt-Engine vs. reellwertige Physik */}
-          <div style={{ fontSize: 11, color: T.sub, fontFamily: MONO, marginBottom: 4 }}>SIMULATIONSMODUS</div>
-          <div style={{ display: "flex", gap: 6, marginBottom: simMode === "rval" ? 6 : 8 }}>
-            {[["life", "Lebenswelt"], ["rval", "Physik (reellwertig)"]].map(([k, lab]) => (
-              <button key={k} onClick={() => setSimMode(k)} style={{
-                flex: 1, padding: "8px 6px", borderRadius: 9, fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: MONO,
-                border: simMode === k ? `1px solid ${T.accent}` : "1px solid rgba(92,240,204,0.14)",
-                background: simMode === k ? "rgba(92,240,204,0.12)" : T.bg2, color: simMode === k ? T.accent : T.sub,
-              }}>{lab}</button>
-            ))}
-          </div>
-          {/* Reellwertige Regelauswahl + Seed */}
-          {simMode === "rval" && (
-            <>
-              <div style={{ display: "flex", gap: 6, marginBottom: 6, flexWrap: "wrap" }}>
-                {RVAL_RULES.map((r) => (
-                  <button key={r.id} onClick={() => setRvalRule(r.id)} style={{
-                    flex: "1 1 28%", minWidth: 0, padding: "7px 4px", borderRadius: 9, fontSize: 10.5, fontWeight: 700, cursor: "pointer", fontFamily: MONO,
-                    border: rvalRule === r.id ? `1px solid ${T.accent}` : "1px solid rgba(92,240,204,0.14)",
-                    background: rvalRule === r.id ? "rgba(92,240,204,0.12)" : T.bg2, color: rvalRule === r.id ? T.accent : T.sub,
-                  }}>{r.id === "snow" ? "Schnee" : r.id === "water" ? "Wasser" : r.id === "hqst" ? "HQST" : r.id === "collatz" ? "Collatz" : "Gene"}</button>
-                ))}
+        {/* v33: Tab-Panel-Overlay. Liegt UEBER dem Feld (Feld bleibt darunter sichtbar,
+            Recherche Thema 3/Entscheid 6). Inhalt je Tab steht weiter unten in
+            tabPanelContent; Scrim + Tab-Tipp schliessen. */}
+        {activeTab != null && (
+          <div role="dialog" aria-label={`Panel ${TABS.find((t) => t.id === activeTab)?.label}`}
+            style={{ position: "absolute", inset: 0, zIndex: 20, display: "flex", flexDirection: "column",
+              background: T.bg }}>
+            <div style={{ flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 12px 8px" }}>
+              <div style={{ fontSize: 13, fontWeight: 700, fontFamily: MONO, color: T.accent, letterSpacing: "0.04em" }}>
+                {TABS.find((t) => t.id === activeTab)?.icon} {activeTab} {TABS.find((t) => t.id === activeTab)?.label}
               </div>
-              <div style={{ fontSize: 10, color: T.sub, opacity: 0.7, marginBottom: 6, fontFamily: MONO, lineHeight: 1.4 }}>
-                {rvalRule === "snow" && "Reiter-Schneeflocke: reellwertige Wasserdiffusion, rezeptive Zellen frieren (Chaos Solitons Fractals 23). Start setzt Eiskeim + Dampf."}
-                {rvalRule === "water" && "Wasser: Gravitation nach unten + seitlicher Druckausgleich, massenerhaltend. Start fuellt eine Saeule oben."}
-                {rvalRule === "hqst" && "HQST: hexagonale Tight-Binding-Quantenwelle, normerhaltend. Start setzt ein lokalisiertes Wellenpaket in der Mitte."}
-                {rvalRule === "collatz" && "Collatz: jede Zelle eine Zahl; gerade -> n/2, ungerade -> 3n+1. Erreicht 1, wird aus groesstem Nachbarn neu geboren. Farbe nach log2(Wert)."}
-                {rvalRule === "genes" && "Dominante Gene (Mendel): diploide Genotypen AA/Aa/aa. AA+Aa zeigen dominant (rot/orange), aa rezessiv (blau). Geburt vererbt je 1 Allel zweier Eltern; Hardy-Weinberg-Start p=0.6."}
-              </div>
-              <button onClick={rvalSeed} style={{ width: "100%", padding: "8px", borderRadius: 9, fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: MONO, border: `1px solid ${T.border}`, background: T.bg2, color: T.accent, marginBottom: 10 }}>
-                Neu initialisieren (Seed)
-              </button>
-              {rvalRule === "hqst" && (
-                <div style={{ marginBottom: 10 }}>
-                  <div style={{ fontSize: 10.5, color: T.sub, fontFamily: MONO, marginBottom: 4 }}>SOLVER (Q-SIM-OPS)</div>
+              <button onClick={() => setActiveTab(null)} aria-label="Panel schliessen" title="Schliessen"
+                style={{ width: 44, height: 36, borderRadius: 8, cursor: "pointer", fontFamily: MONO, fontWeight: 700, border: `1px solid ${T.border}`, background: T.panel, color: T.text }}>v</button>
+            </div>
+            <div style={{ flex: "1 1 0", minHeight: 0, overflowY: "auto", padding: "0 12px 14px", overscrollBehavior: "contain" }}>
+
+              {/* ===================== TAB 1 — FARBEN ===================== */}
+              {activeTab === 1 && (
+                <div data-tab="farben">
+                  {/* Pinsel + Swatches + Sekundaer/Tertiaer + Kreis-Stempel (brushBlock) */}
+                  {brushBlock}
+                  {/* FARBMODUS (Farbenlehre) */}
+                  <div style={{ fontSize: 11, color: T.sub, fontFamily: MONO, marginBottom: 4 }}>FARBMODUS</div>
                   <div style={{ display: "flex", gap: 6, marginBottom: 4 }}>
-                    {Object.entries(SOLVERS).map(([k, s]) => (
-                      <button key={k} onClick={() => setSolverId(k)} style={{
-                        flex: 1, padding: "7px 4px", borderRadius: 9, fontSize: 10.5, fontWeight: 700, cursor: "pointer", fontFamily: MONO,
-                        border: solverId === k ? `1px solid ${T.accent}` : "1px solid rgba(92,240,204,0.14)",
-                        background: solverId === k ? "rgba(92,240,204,0.12)" : T.bg2, color: solverId === k ? T.accent : T.sub,
-                      }}>{s.l}</button>
+                    {[["quad", "QuadLife"], ["mix", "Hue-Mix"], ["drift", "Verfaerben"]].map(([k, lab]) => (
+                      <button key={k} onClick={() => setColorMode(k)} style={{
+                        flex: 1, padding: "8px 4px", borderRadius: 9, fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: MONO,
+                        border: colorMode === k ? `1px solid ${T.accent}` : "1px solid rgba(92,240,204,0.14)",
+                        background: colorMode === k ? "rgba(92,240,204,0.12)" : T.bg2, color: colorMode === k ? T.accent : T.sub,
+                      }}>{lab}</button>
                     ))}
                   </div>
-                  <div style={{ fontSize: 10, color: T.sub, opacity: 0.7, fontFamily: MONO, lineHeight: 1.4 }}>
-                    Austauschbarer Integrator: {SOLVERS[solverId].note}. Crank-Nicolson erhaelt die Norm exakt; Euler driftet sichtbar (Vergleich der Verfahren).
+                  <div style={{ fontSize: 10, color: T.sub, opacity: 0.7, marginBottom: 8, fontFamily: MONO, lineHeight: 1.4 }}>
+                    {colorMode === "quad" && "Farbinvariant (State of the Art): Dynamik exakt wie Life, Farbe vererbt nach QuadLife. A2 erzwingt Mehrheit."}
+                    {colorMode === "mix" && "Subtraktiver Hue-Mix: Geburtsfarbe = Mittel der Nachbarfarben (Rot+Gelb=Orange usw.)."}
+                    {colorMode === "drift" && "Verfaerben (experimentell): lebende Zellen driften farblich - bricht bewusst die Farbinvarianz."}
                   </div>
-                  {solverWarn && solverId === "cn" && (
-                    <div style={{ fontSize: 10, color: "#FFB347", fontFamily: MONO, lineHeight: 1.4, marginTop: 4 }}>
-                      Warnung: Crank-Nicolson-Fixpunkt nicht konvergiert (Parameter zu gross). Ergebnis kann ungenau sein.
-                    </div>
-                  )}
-                  {solverDiverged && (
-                    <div style={{ fontSize: 10, color: "#FF6680", fontFamily: MONO, lineHeight: 1.4, marginTop: 4 }}>
-                      Divergenz abgefangen: {SOLVERS[solverId] ? solverId.toUpperCase() : "Der Loeser"} ist fuer die Schroedingergleichung instabil und die Amplitude wuchs unbegrenzt. Das Feld wurde genullt und der Lauf gestoppt. Fuer stabile Langzeitlaeufe Crank-Nicolson (cn) waehlen und neu seeden.
-                    </div>
-                  )}
                 </div>
               )}
-            </>
-          )}
 
-          {/* Regelquelle: Standard B/S abwaehlbar -> nur Watzlawick (nur Lebenswelt) */}
-          {simMode === "life" && (<>
-          <div style={{ fontSize: 11, color: T.sub, fontFamily: MONO, marginBottom: 4 }}>REGELQUELLE</div>
-          <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
-            {[["std", "Standard B/S"], ["watz", "Nur Watzlawick"]].map(([k, lab]) => {
-              const on = (k === "watz") === watzOnly;
-              return (
-                <button key={k} onClick={() => setWatzOnly(k === "watz")} style={{
-                  flex: 1, padding: "8px 6px", borderRadius: 9, fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: MONO,
-                  border: on ? `1px solid ${T.accent}` : "1px solid rgba(92,240,204,0.14)",
-                  background: on ? "rgba(92,240,204,0.12)" : T.bg2, color: on ? T.accent : T.sub,
-                }}>{lab}</button>
-              );
-            })}
-          </div>
-          {/* Regeltyp: totalistisch vs. isotrop-nicht-totalistisch (INT, Callahan o/m/p) */}
-          {!watzOnly && (
-            <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
-              {[["tot", "Totalistisch"], ["int", "INT (o/m/p)"]].map(([k, lab]) => (
-                <button key={k} onClick={() => { setRuleSrc(k); setRuleIdx(0); }} style={{
-                  flex: 1, padding: "7px 6px", borderRadius: 9, fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: MONO,
-                  border: ruleSrc === k ? `1px solid ${T.accent}` : "1px solid rgba(92,240,204,0.14)",
-                  background: ruleSrc === k ? "rgba(92,240,204,0.12)" : T.bg2, color: ruleSrc === k ? T.accent : T.sub,
-                }}>{lab}</button>
-              ))}
-            </div>
-          )}
-          </>)}
-
-          {/* Farbmodus (Farbenlehre) */}
-          <div style={{ fontSize: 11, color: T.sub, fontFamily: MONO, marginBottom: 4 }}>FARBMODUS</div>
-          <div style={{ display: "flex", gap: 6, marginBottom: 4 }}>
-            {[["quad", "QuadLife"], ["mix", "Hue-Mix"], ["drift", "Verfaerben"]].map(([k, lab]) => (
-              <button key={k} onClick={() => setColorMode(k)} style={{
-                flex: 1, padding: "8px 4px", borderRadius: 9, fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: MONO,
-                border: colorMode === k ? `1px solid ${T.accent}` : "1px solid rgba(92,240,204,0.14)",
-                background: colorMode === k ? "rgba(92,240,204,0.12)" : T.bg2, color: colorMode === k ? T.accent : T.sub,
-              }}>{lab}</button>
-            ))}
-          </div>
-          <div style={{ fontSize: 10, color: T.sub, opacity: 0.7, marginBottom: 8, fontFamily: MONO, lineHeight: 1.4 }}>
-            {colorMode === "quad" && "Farbinvariant (State of the Art): Dynamik exakt wie Life, Farbe vererbt nach QuadLife. A2 erzwingt Mehrheit."}
-            {colorMode === "mix" && "Subtraktiver Hue-Mix: Geburtsfarbe = Mittel der Nachbarfarben (Rot+Gelb=Orange usw.)."}
-            {colorMode === "drift" && "Verfaerben (experimentell): lebende Zellen driften farblich - bricht bewusst die Farbinvarianz."}
-          </div>
-          <button onClick={() => setShowLegend((v) => !v)} style={{ width: "100%", textAlign: "left", padding: "8px 10px", borderRadius: 9, border: `1px solid ${T.border}`, background: T.bg2, color: T.text, fontFamily: MONO, fontSize: 11.5, fontWeight: 700, cursor: "pointer", marginBottom: showLegend ? 6 : 8 }}>
-            {showLegend ? "v" : ">"} Legende: alle Regeln &amp; Farbenlehre
-          </button>
-          {showLegend && (
-            <div style={{ border: "1px solid rgba(92,240,204,0.14)", borderRadius: 9, padding: "10px 12px", marginBottom: 10, background: T.bg2, fontFamily: MONO, fontSize: 10.5, color: T.sub, lineHeight: 1.55 }}>
-              <div style={{ color: T.text, fontWeight: 700, marginBottom: 3 }}>B/S-Notation (Hexgitter: 0-6 Nachbarn)</div>
-              <div><b style={{ color: T.accent }}>B</b> Geburt bei dieser Nachbarzahl, <b style={{ color: T.accent }}>S</b> Survival sonst Tod.</div>
-
-              <div style={{ color: T.text, fontWeight: 700, margin: "7px 0 3px" }}>Alle Standard-Rulesets ({RULES.length})</div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "2px 10px" }}>
-                {RULES.map((r, i) => (
-                  <div key={i} style={{ color: (!watzOnly && ruleIdx === i) ? T.accent : T.sub }}>
-                    {(!watzOnly && ruleIdx === i) ? "\u25B8 " : ""}B{r.B.join("")}/S{r.S.join("")}{i === 1 ? " *Bays" : ""}
+              {/* ===================== TAB 2 — FORMEN ===================== */}
+              {activeTab === 2 && (
+                <div data-tab="formen">
+                  <div style={{ fontSize: 11, color: T.sub, fontFamily: MONO, marginBottom: 6 }}>STEMPEL / FIGUREN</div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+                    <label style={{ fontSize: 11, color: T.sub, fontFamily: MONO }}>Pattern
+                      <select value={pattern} onChange={(e) => setPattern(e.target.value)} style={sel}>{Object.keys(PATS).map((k) => <option key={k} value={k}>{k}</option>)}</select>
+                    </label>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                      <span style={{ fontSize: 11, color: T.sub, fontFamily: MONO }}>Aktion</span>
+                      {btn(doPlace, "Stempel setzen", { padding: "7px 8px" })}
+                    </div>
                   </div>
-                ))}
-              </div>
-              <div style={{ opacity: 0.7, marginTop: 2 }}>*B2/S35 = Carter-Bays (Complex Systems 15:245).</div>
-
-              <div style={{ color: T.text, fontWeight: 700, margin: "7px 0 3px" }}>Watzlawick-Regel {watzOnly ? "(aktiv)" : ""}</div>
-              <div style={{ color: watzOnly ? T.accent : T.sub }}>B2,3 / S1-5 - Kommunikationsband: 0 = Isolation = Tod; 6 = Rauschueberlast = Tod; dazwischen lebt der Dialog.</div>
-
-              <div style={{ color: T.text, fontWeight: 700, margin: "7px 0 3px" }}>Axiome (modulieren jede Regel)</div>
-              <div><b style={{ color: ax.a1 ? T.accent : T.sub }}>A1</b> Stille: stille Leerzonen keimen selten spontan.</div>
-              <div><b style={{ color: ax.a2 ? T.accent : T.sub }}>A2</b> Beziehung: Geburtsfarbe per Nachbar-Mehrheit statt Mischung.</div>
-              <div><b style={{ color: ax.a3 ? T.accent : T.sub }}>A3</b> Interpunktion: alte Zellen (Alter &ge;6) +/-1 Survival-Toleranz.</div>
-              <div><b style={{ color: ax.a4 ? T.accent : T.sub }}>A4</b> Analog: sterbende Zelle hinterlaesst 1 Generation Ghost.</div>
-              <div><b style={{ color: a5 !== "off" ? T.accent : T.sub }}>A5</b> Symm./Kompl.: nur gleich- bzw. andersfarbige Nachbarn zaehlen.</div>
-
-              <div style={{ color: T.text, fontWeight: 700, margin: "7px 0 3px" }}>INT-Regeln (isotrop nicht-totalistisch, {INT_RULES.length})</div>
-              <div>Callahan o/m/p: bei genau 2 Nachbarn zaehlt die Anordnung - o=ortho (60grad), m=meta (120grad), p=para (180grad gegenueber). Erzeugt Dynamik, die rein totalistische Regeln nicht erreichen.</div>
-
-              <div style={{ color: T.text, fontWeight: 700, margin: "7px 0 3px" }}>Farbenlehre (Itten-Kreis, 12 Farben)</div>
-              <div>Primaer: <span style={{ color: COLHEX[CR] }}>Rot</span>, <span style={{ color: COLHEX[CY] }}>Gelb</span>, <span style={{ color: COLHEX[CB] }}>Blau</span>. Sekundaer: <span style={{ color: COLHEX[CO] }}>Orange</span>, <span style={{ color: COLHEX[CG] }}>Gruen</span>, <span style={{ color: COLHEX[CV] }}>Violett</span>.</div>
-              <div>Tertiaer (Mischung benachbarter): <span style={{ color: COLHEX[CRO] }}>Rot-Orange</span>, <span style={{ color: COLHEX[CYO] }}>Gelb-Orange</span>, <span style={{ color: COLHEX[CYG] }}>Gelb-Gruen</span>, <span style={{ color: COLHEX[CBG] }}>Blau-Gruen</span>, <span style={{ color: COLHEX[CBV] }}>Blau-Violett</span>, <span style={{ color: COLHEX[CRV] }}>Rot-Violett</span>.</div>
-              <div>Mischung: <span style={{ color: COLHEX[CR] }}>Rot</span>+<span style={{ color: COLHEX[CY] }}>Gelb</span>=<span style={{ color: COLHEX[CO] }}>Orange</span>, <span style={{ color: COLHEX[CY] }}>Gelb</span>+<span style={{ color: COLHEX[CB] }}>Blau</span>=<span style={{ color: COLHEX[CG] }}>Gruen</span>, <span style={{ color: COLHEX[CB] }}>Blau</span>+<span style={{ color: COLHEX[CR] }}>Rot</span>=<span style={{ color: COLHEX[CV] }}>Violett</span>. Benachbarte Toene mischen zur Tertiaerfarbe dazwischen.</div>
-              <div>Komplementaer (180grad, 6 Paare): <span style={{ color: COLHEX[CR] }}>Rot</span>&harr;<span style={{ color: COLHEX[CG] }}>Gruen</span>, <span style={{ color: COLHEX[CY] }}>Gelb</span>&harr;<span style={{ color: COLHEX[CV] }}>Violett</span>, <span style={{ color: COLHEX[CB] }}>Blau</span>&harr;<span style={{ color: COLHEX[CO] }}>Orange</span>, und die drei Tertiaer-Paare.</div>
-              <div style={{ opacity: 0.8, marginTop: 2 }}>Farbkreis-Stempel oben setzt die 12 Toene als Ring oder Scheibe. Farbinvarianz: Farbe ist ein reiner Datenkanal (QuadLife); Modus "quad" wahrt das, "mix"/"drift" sind kuenstlerische Varianten.</div>
-            </div>
-          )}
-
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
-            <label style={{ fontSize: 11, color: T.sub, fontFamily: MONO }}>Regel
-              {watzOnly
-                ? <div style={{ ...sel, opacity: 0.85, color: T.accent }}>Watzlawick B2,3 / S1-5</div>
-                : <select value={ruleIdx} onChange={(e) => setRuleIdx(Number(e.target.value))} style={sel}>{(ruleSrc === "int" ? INT_RULES : RULES).map((r, i) => <option key={i} value={i}>{r.l}</option>)}</select>}
-            </label>
-            <label style={{ fontSize: 11, color: T.sub, fontFamily: MONO }}>Groesse
-              {frameShape === "circle"
-                ? <div style={{ ...sel, opacity: 0.7, color: T.accent }}>Kreis: per Radius unten</div>
-                : <select value={sizeIdx} onChange={(e) => setSizeIdx(Number(e.target.value))} style={sel}>{GRID_SIZES.map((g, i) => <option key={i} value={i}>{g.l} ({g.rows}x{g.cols} = {(g.rows * g.cols).toLocaleString("de-CH")} Zellen)</option>)}</select>}
-            </label>
-            <label style={{ fontSize: 11, color: T.sub, fontFamily: MONO }}>Pattern
-              <select value={pattern} onChange={(e) => setPattern(e.target.value)} style={sel}>{Object.keys(PATS).map((k) => <option key={k} value={k}>{k}</option>)}</select>
-            </label>
-            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-              <span style={{ fontSize: 11, color: T.sub, fontFamily: MONO }}>Aktion</span>
-              {btn(doPlace, "Stempel setzen", { padding: "7px 8px" })}
-            </div>
-          </div>
-          <div style={{ marginBottom: 10 }}>
-            <div style={{ fontSize: 11, color: T.sub, fontFamily: MONO, marginBottom: 4 }}>TOPOLOGIE &amp; RAHMEN</div>
-            <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
-              {[["torus", "Torus"], ["edge", "Rand"]].map(([k, lab]) => {
-                const on = (k === "torus") === torusOn;
-                return (
-                  <button key={k} onClick={() => setTorusOn(k === "torus")} style={{
-                    flex: 1, padding: "8px 6px", borderRadius: 9, fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: MONO,
-                    border: on ? `1px solid ${T.accent}` : "1px solid rgba(92,240,204,0.14)",
-                    background: on ? "rgba(92,240,204,0.12)" : T.bg2, color: on ? T.accent : T.sub,
-                  }}>{lab}</button>
-                );
-              })}
-            </div>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 4 }}>
-              {[["box", "Rechteck"], ["circle", "Kreis"], ["hexagon", "Hexagon"], ["triangle", "Dreieck"]].map(([k, lab]) => (
-                <button key={k} onClick={() => setFrameShape(k)} style={{
-                  flex: "1 1 40%", padding: "8px 6px", borderRadius: 9, fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: MONO,
-                  border: frameShape === k ? `1px solid ${T.accent}` : "1px solid rgba(92,240,204,0.14)",
-                  background: frameShape === k ? "rgba(92,240,204,0.12)" : T.bg2, color: frameShape === k ? T.accent : T.sub,
-                }}>{lab}</button>
-              ))}
-            </div>
-            <div style={{ fontSize: 10, color: T.sub, opacity: 0.7, fontFamily: MONO, lineHeight: 1.4 }}>
-              {frameShape === "circle"
-                ? (torusOn ? "Kreis + Torus: antipodale Identifikation (reelle projektive Ebene, RP2). Reflexionsfrei, aber nicht-orientierbar - Muster kehren am Rand spiegelverkehrt zurueck (Moebius-Eigenschaft)." : "Kreis + Rand: harte runde Wand, Null-Fluss (Neumann), massenerhaltend.")
-                : frameShape === "hexagon"
-                ? "Hexagon: exaktes regelmaessiges Sechseck via Hex-Distanz (Wuerfelkoordinaten), die natuerliche Form des Hexgitters. Berandet (Neumann-Wand), kein Torus - die Form kachelt das Gitter nicht periodisch sauber."
-                : frameShape === "triangle"
-                ? "Dreieck: gleichseitig (Spitze oben) via Schnittmenge dreier Halbebenen. Berandet (Neumann-Wand), kein Torus. Eckzellen haben wenige Nachbarn - sichtbar staerkere Randdynamik."
-                : (torusOn ? "Rechteck + Torus: periodischer Rand (Standard-Wrap)." : "Rechteck + Rand: feste Wand, Null-Fluss (Neumann).")}
-            </div>
-
-            {/* AP-2: Kreis-Radius waehlen (Slider + Zahl, Plain-Sprache). Nur bei Kreis. */}
-            {frameShape === "circle" && (
-              <div style={{ marginTop: 8, padding: "8px 10px", borderRadius: 9, background: T.bg2, border: "1px solid rgba(92,240,204,0.14)" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-                  <span style={{ fontSize: 11, color: T.sub, fontFamily: MONO, whiteSpace: "nowrap" }}>Kreis-Radius</span>
-                  <input type="range" min={10} max={MAX_CIRCLE_RADIUS} step={1} value={circleRadius}
-                    onChange={(e) => setCircleRadius(clamp(Number(e.target.value) || 10, 10, MAX_CIRCLE_RADIUS))}
-                    style={{ flex: 1, accentColor: T.accent }} aria-label="Kreis-Radius" />
-                  <input type="number" min={10} max={MAX_CIRCLE_RADIUS} value={circleRadius}
-                    onChange={(e) => { const v = Number(e.target.value); if (Number.isFinite(v)) setCircleRadius(clamp(Math.round(v), 10, MAX_CIRCLE_RADIUS)); }}
-                    style={{ width: 56, padding: "4px 6px", borderRadius: 7, fontSize: 12, fontFamily: MONO, background: T.bg, color: T.accent, border: `1px solid ${T.border}`, textAlign: "right" }}
-                    aria-label="Kreis-Radius (Zahl)" />
+                  {/* Kreis-Stempel (Ring/Scheibe) — gespiegelt aus dem Pinsel-Block fuer Schnellzugriff */}
+                  <div style={{ fontSize: 10.5, color: T.sub, opacity: 0.7, fontFamily: MONO, lineHeight: 1.4, marginBottom: 6 }}>
+                    Farbkreis-Stempel: 12 Itten-Toene als Ring oder Scheibe an die naechste Tipp-Position setzen.
+                  </div>
+                  <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
+                    <button onClick={() => placeColorWheel("ring")} style={{ flex: 1, padding: "9px 4px", borderRadius: 9, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: MONO, border: `1px solid ${T.border}`, background: T.bg2, color: T.accent }}>Ring</button>
+                    <button onClick={() => placeColorWheel("disc")} style={{ flex: 1, padding: "9px 4px", borderRadius: 9, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: MONO, border: `1px solid ${T.border}`, background: T.bg2, color: T.accent }}>Scheibe</button>
+                  </div>
                 </div>
-                <div style={{ fontSize: 10, color: T.sub, opacity: 0.85, fontFamily: MONO, lineHeight: 1.4 }}>
-                  Wie gross der Kreis ist: 10 (klein) bis {MAX_CIRCLE_RADIUS} (maximal). Standard {DEFAULT_CIRCLE_RADIUS}.
-                  Gitter {R}x{C}, davon ~{(boundaryStat.total || 0).toLocaleString("de-CH")} Zellen im Kreis.
-                </div>
-              </div>
-            )}
+              )}
 
-            {/* AP-2: ehrlicher Speicher-Hinweis bei Riesen-Gittern (fail-closed, kein stiller Crash) */}
-            {N >= 250000 && (
-              <div style={{ marginTop: 8, padding: "7px 10px", borderRadius: 9, background: "rgba(255,180,60,0.10)", border: "1px solid rgba(255,180,60,0.35)", fontSize: 10.5, color: "#f0c674", fontFamily: MONO, lineHeight: 1.4 }}>
-                Sehr grosses Gitter ({(N).toLocaleString("de-CH")} Zellen). Auf aelteren Handys / 8-GB-PCs
-                kann der Browser langsam werden oder den Tab neu laden. Bei Rucklern eine Stufe kleiner waehlen.
-              </div>
-            )}
-            {hqstLocked && simMode === "rval" && rvalRule === "hqst" && (
-              <div style={{ marginTop: 8, padding: "7px 10px", borderRadius: 9, background: "rgba(255,120,120,0.10)", border: "1px solid rgba(255,120,120,0.35)", fontSize: 10.5, color: "#ffb0b0", fontFamily: MONO, lineHeight: 1.4 }}>
-                HQST (Quantenwelle) ist ab {(HQST_CELL_CAP).toLocaleString("de-CH")} Zellen gesperrt - der
-                Crank-Nicolson-Loeser waere hier unzumutbar langsam. Fuer Riesen-Gitter den booleschen
-                Modus (Game of Life) nutzen, oder das Gitter verkleinern.
-              </div>
-            )}
-          </div>
+              {/* ===================== TAB 3 — HEX-REGELN ===================== */}
+              {activeTab === 3 && (
+                <div data-tab="hexregeln">{tab3Content}</div>
+              )}
 
-          {/* Systemtheorie-Modell (Kybernetik / Homeostase) */}
-          <div style={{ marginBottom: 14 }}>
-            <button onClick={() => setSysTheory((v) => !v)} style={{
-              width: "100%", padding: "9px", borderRadius: 9, fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: MONO,
-              border: sysTheory ? `1px solid ${T.accent}` : `1px solid ${T.border}`,
-              background: sysTheory ? "rgba(92,240,204,0.12)" : T.bg2, color: sysTheory ? T.accent : T.sub, marginBottom: sysTheory ? 6 : 0,
-            }}>{sysTheory ? "Systemtheorie: AN (Homeostase)" : "Systemtheorie: AUS"}</button>
-            {sysTheory && (
-              <>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-                  <span style={{ fontSize: 10.5, color: T.sub, fontFamily: MONO, whiteSpace: "nowrap" }}>Sollwert {Math.round(sysSetpoint * 6)}</span>
-                  <input type="range" min="1" max="6" step="1" value={Math.round(sysSetpoint * 6)} onChange={(e) => setSysSetpoint(Number(e.target.value) / 6)} style={{ flex: 1, accentColor: T.accent }} />
-                </div>
-                <div style={{ fontSize: 10, color: T.sub, opacity: 0.7, fontFamily: MONO, lineHeight: 1.4 }}>
-                  Kybernetische Negativ-Rueckkopplung: Unterdichte stuetzt Leben, Ueberdichte entzieht es. Das System regelt sich auf den Sollwert (dynamisches Gleichgewicht), statt frei zu wachsen oder zu sterben.
-                </div>
-              </>
-            )}
-            <button onClick={() => setOpenSys((v) => !v)} style={{
-              width: "100%", marginTop: 6, padding: "9px", borderRadius: 9, fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: MONO,
-              border: openSys ? `1px solid ${T.accent}` : `1px solid ${T.border}`,
-              background: openSys ? "rgba(92,240,204,0.12)" : T.bg2, color: openSys ? T.accent : T.sub,
-            }}>{openSys ? "Offenes System: AN (Dirichlet-Rand)" : "Offenes System: AUS (geschlossen)"}</button>
-            {openSys && (
-              <div style={{ fontSize: 10, color: T.sub, opacity: 0.7, marginTop: 4, fontFamily: MONO, lineHeight: 1.4 }}>
-                Systemtheorie: offenes System. Der Rand haelt einen konstanten Quellwert (Dirichlet) und tauscht mit der Umgebung aus - wirkt in der Physik bei Schnee und Wasser. Geschlossen = Null-Fluss (Neumann).
-              </div>
-            )}
-          </div>
-
-          {/* Forschungsstation: LiouScope-Zeitreihen-Recorder + Export */}
-          <div style={{ marginBottom: 14 }}>
-            <div style={{ fontSize: 11, color: T.sub, fontFamily: MONO, marginBottom: 4 }}>FORSCHUNG &middot; LIOUSCOPE-EXPORT</div>
-            <button onClick={toggleRecord} style={{
-              width: "100%", padding: "9px", borderRadius: 9, fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: MONO,
-              border: recording ? `1px solid ${T.accent}` : `1px solid ${T.border}`,
-              background: recording ? "rgba(92,240,204,0.12)" : T.bg2, color: recording ? T.accent : T.sub, marginBottom: 6,
-            }}>{recording ? "Aufzeichnung: LAEUFT (stoppen)" : "Zeitreihe aufzeichnen (Start)"}</button>
-            <div style={{ display: "flex", gap: 6, marginBottom: 4 }}>
-              <button onClick={exportCSV} style={{ flex: 1, padding: "8px 4px", borderRadius: 9, fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: MONO, border: `1px solid ${T.border}`, background: T.bg2, color: T.accent }}>CSV</button>
-              <button onClick={exportJSON} style={{ flex: 1, padding: "8px 4px", borderRadius: 9, fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: MONO, border: `1px solid ${T.border}`, background: T.bg2, color: T.accent }}>JSON (LiouScope)</button>
-            </div>
-            <div style={{ fontSize: 10, color: T.sub, opacity: 0.75, fontFamily: MONO, lineHeight: 1.4 }}>
-              {recMsg || "Zeichnet pro Schritt Observablen auf (Pop/Dichte/Geburten oder aktive Zellen/Summe). JSON traegt Metadaten fuer reproduzierbare LiouScope-Analyse (Spektrum, Skalierung)."}
+              {/* ===================== TAB 4 — PHYSIK ===================== */}
+              {activeTab === 4 && (
+                <div data-tab="physik">{tab4Content}</div>
+              )}
             </div>
           </div>
-
-          {/* Forschungsstation: Globalarchiv (reproduzierbarer Lauf-Schnappschuss) */}
-          <div style={{ marginBottom: 14 }}>
-            <div style={{ fontSize: 11, color: T.sub, fontFamily: MONO, marginBottom: 4 }}>FORSCHUNG &middot; GLOBALARCHIV</div>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-              <span style={{ fontSize: 10.5, color: T.sub, fontFamily: MONO, whiteSpace: "nowrap" }}>Seed</span>
-              <input type="number" value={seed} onChange={(e) => setSeed(Number(e.target.value) | 0)} style={{ flex: 1, minWidth: 0, padding: "6px 8px", borderRadius: 8, border: `1px solid ${T.border}`, background: T.bg2, color: T.text, fontFamily: MONO, fontSize: 11 }} />
-              <button onClick={() => setSeed((Math.random() * 1e9) | 0)} style={{ padding: "6px 8px", borderRadius: 8, fontSize: 10.5, fontWeight: 700, cursor: "pointer", fontFamily: MONO, border: `1px solid ${T.border}`, background: T.bg2, color: T.accent }}>Wuerfeln</button>
-            </div>
-            <div style={{ display: "flex", gap: 6, marginBottom: 4 }}>
-              <button onClick={exportSnapshot} style={{ flex: 1, padding: "8px 4px", borderRadius: 9, fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: MONO, border: `1px solid ${T.border}`, background: T.bg2, color: T.accent }}>Speichern</button>
-              <label style={{ flex: 1, padding: "8px 4px", borderRadius: 9, fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: MONO, border: `1px solid ${T.border}`, background: T.bg2, color: T.accent, textAlign: "center" }}>
-                Laden<input type="file" accept="application/json,.json" onChange={importSnapshot} style={{ display: "none" }} />
-              </label>
-            </div>
-            <div style={{ fontSize: 10, color: T.sub, opacity: 0.75, fontFamily: MONO, lineHeight: 1.4 }}>
-              {archMsg || "Speichert/laedt die vollstaendige Lauf-Konfiguration (Seed + alle Parameter) als JSON. Mit festem Seed ist jeder Zufallsstart exakt reproduzierbar."}
-            </div>
-          </div>
-        </>
-      )}
-
-      <div style={{ fontSize: 10.5, color: T.sub, opacity: 0.7, lineHeight: 1.6, fontFamily: MONO }}>
-        Pinsel Zyklus: ein Tap schaltet weiter (leer&rarr;blau&rarr;rot&rarr;gelb&rarr;leer), ein Finger pant. Blau/Rot/Gelb/Leer: Tap und Ziehen malen.
-        Zwei Finger oder Rad = Zoom (jetzt bis 0.2x rausgezoomt), Fit zentriert. Regelquelle "Nur Watzlawick" deaktiviert die B/S-Rulesets.
+        )}
       </div>
-      </div>{/* /AP-4 Sekundaer-Container (Bottom-Sheet bei compact, display:contents bei Desktop) */}
+
+      {/* v33 STATISTIK-ZEILE (34px, ueber der Steuerung). Gen · Pop · ±Geburten/Tode ·
+          Gen/s · Regel-Chip (B/S, aktiv) · Rahmen+Groesse-Chip. Werte aus bestehendem
+          State (stats wird pro Generation/throttled gesetzt, nicht pro rAF-Frame —
+          Recherche Thema 6). Horizontal scrollbar bei Ueberlauf, kein Umbruch. */}
+      <div className="ghx-stats" style={{ flexShrink: 0, height: 34, display: "flex", alignItems: "center", gap: 10, padding: "0 4px",
+        marginTop: compact ? 4 : 8, fontFamily: MONO, fontSize: 12, color: T.sub, whiteSpace: "nowrap",
+        overflowX: "auto", overflowY: "hidden", borderTop: `1px solid ${T.border}` }}>
+        <span>Gen <b style={{ color: T.text }}>{gen}</b></span>
+        <span>{stats.rval ? "Aktiv" : "Pop"} <b style={{ color: T.text }}>{total.toLocaleString("de-CH")}</b></span>
+        {!stats.rval && <span style={{ color: "#6fd098" }}>+{stats.births}</span>}
+        {!stats.rval && <span style={{ color: "#e08a8a" }}>−{stats.deaths}</span>}
+        <span>{running ? <><b style={{ color: T.accent }}>{stats.sps.toFixed(0)}</b> Gen/s</> : <span style={{ opacity: 0.55 }}>⏸ pausiert</span>}</span>
+        <span style={{ background: T.bg2, border: `1px solid ${T.accent}`, color: T.accent, borderRadius: 8, padding: "1px 7px", fontSize: 11 }}>{ruleChip}</span>
+        <span style={{ background: T.bg2, border: `1px solid ${T.border}`, color: T.sub, borderRadius: 8, padding: "1px 7px", fontSize: 11 }}>{frameChip}</span>
+      </div>
+
+      {/* v33 STEUERUNG UNTEN. Reihe: 1. Figur (disabled, TODO PR-C) · Undo · Redo
+          (disabled, TODO PR-C) · PLAY (60px, gruen, zentral) · Schritt · Random · Leeren
+          (rot, abgesetzt). Touch-Targets >=48px. Darunter Tempo-Slider (TURBO-Stufe
+          erhalten). safe-area-inset-bottom kommt vom Shell-Padding (compact). */}
+      <div style={{ flexShrink: 0, paddingTop: compact ? 6 : 8 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
+          {/* TODO PR-C: "1. Figur" (Sprung zur Startfigur) — vorerst disabled. */}
+          <button disabled aria-label="Zur ersten Figur (kommt in PR-C)" title="1. Figur — kommt in PR-C"
+            style={{ flex: "1 1 0", minWidth: 0, height: 48, borderRadius: 12, border: `1px solid ${T.border}`, background: T.bg2, color: T.sub, opacity: 0.4, fontFamily: MONO, fontSize: 11, cursor: "not-allowed", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", lineHeight: 1.1 }}>
+            <span style={{ fontSize: 16 }}>⏮</span><span style={{ fontSize: 8 }}>1. Figur</span>
+          </button>
+          <button onClick={doUndo} aria-label="Undo" title="Rueckgaengig"
+            style={{ flex: "1 1 0", minWidth: 0, height: 48, borderRadius: 12, border: `1px solid ${T.border}`, background: T.panel, color: T.text, fontFamily: MONO, fontSize: 18, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>↶</button>
+          {/* TODO PR-C: Redo (Undo-Stack ist aktuell einseitig) — vorerst disabled. */}
+          <button disabled aria-label="Redo (kommt in PR-C)" title="Wiederholen — kommt in PR-C"
+            style={{ flex: "1 1 0", minWidth: 0, height: 48, borderRadius: 12, border: `1px solid ${T.border}`, background: T.bg2, color: T.sub, opacity: 0.4, fontFamily: MONO, fontSize: 18, cursor: "not-allowed", display: "flex", alignItems: "center", justifyContent: "center" }}>↷</button>
+          <button onClick={() => setRunning((r) => !r)} aria-label={running ? "Pause" : "Start"} title={running ? "Pause" : "Start"}
+            style={{ flexShrink: 0, width: 60, height: 60, borderRadius: "50%", border: "none",
+              background: running ? "#e05a5a" : T.accent, color: running ? "#2a0707" : "#04110d",
+              fontSize: 24, fontWeight: 700, cursor: "pointer", boxShadow: `0 0 18px ${running ? "#e05a5a" : T.accent}66`,
+              display: "flex", alignItems: "center", justifyContent: "center" }}>{running ? "❚❚" : "▶"}</button>
+          <button onClick={doStep} aria-label="Schritt" title="Ein Schritt"
+            style={{ flex: "1 1 0", minWidth: 0, height: 48, borderRadius: 12, border: `1px solid ${T.border}`, background: T.panel, color: T.text, fontFamily: MONO, fontSize: 11, cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", lineHeight: 1.1 }}>
+            <span style={{ fontSize: 16 }}>⏭</span><span style={{ fontSize: 8 }}>Schritt</span>
+          </button>
+          <button onClick={doRandom} aria-label="Random" title="Zufalls-Fuellung"
+            style={{ flex: "1 1 0", minWidth: 0, height: 48, borderRadius: 12, border: `1px solid ${T.border}`, background: T.panel, color: T.text, fontFamily: MONO, fontSize: 11, cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", lineHeight: 1.1 }}>
+            <span style={{ fontSize: 15 }}>🎲</span><span style={{ fontSize: 8 }}>Random</span>
+          </button>
+          {/* Leeren rot abgesetzt (Mis-Tap-Schutz, Recherche Thema 2: nicht neben Play) */}
+          <button onClick={doClear} aria-label="Leeren" title="Feld leeren"
+            style={{ flex: "1 1 0", minWidth: 0, height: 48, borderRadius: 12, border: "1px solid rgba(224,90,90,0.45)", background: "rgba(224,90,90,0.12)", color: "#FFB3C0", fontFamily: MONO, fontSize: 11, cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", lineHeight: 1.1 }}>
+            <span style={{ fontSize: 15 }}>🗑</span><span style={{ fontSize: 8 }}>Leeren</span>
+          </button>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 9, padding: "0 2px", fontFamily: MONO }}>
+          <span style={{ fontSize: 11, color: T.sub, width: 42 }}>Tempo</span>
+          <input type="range" min={0} max={SPEEDS.length - 1} value={speedIdx} onChange={(e) => setSpeedIdx(Number(e.target.value))} aria-label="Tempo" style={{ flex: 1, accentColor: T.accent }} />
+          <span style={{ fontSize: 11, color: T.text, width: 46, textAlign: "right" }}>{SPLBL[speedIdx]}</span>
+        </div>
+      </div>
+
     </div>
   );
 }

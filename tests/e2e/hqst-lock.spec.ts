@@ -16,12 +16,16 @@ test.describe("GolHex HQST-Sperre (>90k Zellen)", () => {
     await page.goto("/");
     await page.waitForTimeout(400);
 
-    // Physik-Modus -> HQST aktivieren.
+    // v33: Physik/HQST liegen im Tab 4 (Physik).
+    await page.getByRole("button", { name: "Tab 4 Physik" }).click();
+    await page.waitForTimeout(250);
     await page.getByRole("button", { name: "Physik (reellwertig)", exact: true }).click();
     await page.getByRole("button", { name: "HQST", exact: true }).click();
     await page.waitForTimeout(150);
 
-    // Gitter auf 4XL (160'000 > 90'000 Cap) stellen.
+    // v33: Gitter-Groesse + HQST-Sperr-Meldung liegen im Tab 3 (Hex-Regeln).
+    await page.getByRole("button", { name: "Tab 3 Hex-Regeln" }).click();
+    await page.waitForTimeout(250);
     const sizeSel = page.locator("select").nth(1);
     await sizeSel.selectOption("6"); // index 6 = 4XL (400x400 = 160'000)
     await page.waitForTimeout(400);

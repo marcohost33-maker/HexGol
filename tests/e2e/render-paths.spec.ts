@@ -16,18 +16,25 @@ test.describe("GolHex v31 render-path coexistence", () => {
     await page.goto("/");
     await page.waitForTimeout(500);
 
-    // XXL -> winzige Zellen (hr*s < 3.5) -> Fast-Path-Zone fuer Vollredraws.
-    await page.locator("select").nth(1).selectOption("4");
-    // deterministischer Random-Fill (fester Default-Seed) im life-Modus.
+    // --- Teil A: inkrementeller Pfad (draw(true)) bei laufender Sim auf dem
+    // Default-Grid (M, 8'000 Zellen) — leicht genug, dass der Main-Thread waehrend
+    // des Laufs frei bleibt (kein Actionability-Hang). Tab-Panels bleiben zu, das
+    // Feld laeuft frei sichtbar.
     await page.getByRole("button", { name: "Random", exact: true }).click();
-    await page.waitForTimeout(200);
-
-    // Sim laufen lassen -> stepDirtyRef -> draw(true) inkrementell (pxR<4).
+    await page.waitForTimeout(150);
     await page.getByRole("button", { name: "Start", exact: true }).click();
-    await page.waitForTimeout(1200);
+    await page.waitForTimeout(900); // mehrere Schritte -> stepDirtyRef -> draw(true)
+    await page.getByRole("button", { name: "Pause", exact: true }).click();
+    await page.waitForTimeout(150);
 
-    // Ansichtswechsel erzwingt Vollredraw (dirtyRef) -> ImageData-Fast-Path.
-    // Neue v31-Rahmenformen: Hexagon, dann Dreieck, dann zurueck Rechteck.
+    // --- Teil B: Vollredraw-Fast-Path (draw(false), ImageData) + neue Rahmenformen.
+    // Bei PAUSIERTER Sim (kein Main-Thread-Stau) das Tab 3 oeffnen: XXL waehlen ->
+    // winzige Zellen (hr*s < 3.5) -> Raster-Fast-Path; jeder Form-Wechsel erzwingt
+    // einen Vollredraw (dirtyRef), unabhaengig vom Laufzustand.
+    await page.getByRole("button", { name: "Tab 3 Hex-Regeln" }).click();
+    await page.waitForTimeout(250);
+    await page.locator("select").nth(1).selectOption("4"); // XXL
+    await page.waitForTimeout(300);
     await page.getByRole("button", { name: "Hexagon", exact: true }).click();
     await page.waitForTimeout(400);
     await page.getByRole("button", { name: "Dreieck", exact: true }).click();

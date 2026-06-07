@@ -21,6 +21,9 @@ test.describe("GolHex Auto-Worker (M-2) bei Riesen-Gittern", () => {
 
     await page.goto("/");
     await page.waitForTimeout(400);
+    // v33: Groesse + Worker-Schalter + Auto-Worker-Hinweise leben im Tab 3 (Hex-Regeln).
+    await page.getByRole("button", { name: "Tab 3 Hex-Regeln" }).click();
+    await page.waitForTimeout(250);
 
     // Ausgangslage: kleines Default-Gitter (M) -> Worker AUS (Automatik darf
     // nicht greifen, weil M unter dem Cap liegt).
@@ -63,6 +66,9 @@ test.describe("GolHex Auto-Worker (M-2) bei Riesen-Gittern", () => {
 
     await page.goto("/");
     await page.waitForTimeout(400);
+    // v33: Groesse + Worker-Schalter im Tab 3 (Hex-Regeln).
+    await page.getByRole("button", { name: "Tab 3 Hex-Regeln" }).click();
+    await page.waitForTimeout(250);
 
     const toggle = page.getByRole("button", { name: /Worker (AN|AUS) \(Beta\)/ });
     await expect(toggle).toBeVisible();
@@ -94,6 +100,9 @@ test.describe("GolHex Auto-Worker (M-2) bei Riesen-Gittern", () => {
 
     await page.goto("/");
     await page.waitForTimeout(400);
+    // v33: Groesse + Worker-Bereich im Tab 3 (Hex-Regeln).
+    await page.getByRole("button", { name: "Tab 3 Hex-Regeln" }).click();
+    await page.waitForTimeout(250);
 
     // Beta-Schalter ist ausgeblendet (Feature-Detection negativ).
     await expect(page.getByRole("button", { name: /Worker (AN|AUS) \(Beta\)/ })).toHaveCount(0);
