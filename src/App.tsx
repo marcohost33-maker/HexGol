@@ -15,6 +15,12 @@ import {
 } from "./lib/sim-engine.js";
 import { renderRaster } from "./lib/raster-render.js"; // geteilter Raster-Pfad (Worker + Main)
 import { supportsOffscreenWorker } from "./lib/worker-support.js"; // Feature-Detection (fail-closed)
+// v33 PR-C: Spielstand-Speichern (IndexedDB + Datei-Export/Import + Urzustand).
+import {
+  serializeSave, deserializeSave, makeOriginSnapshot, shouldCaptureOrigin,
+  idbPut, idbGet, idbList, idbDelete, idbRename,
+  SAVE_FILE_EXT, AUTOSAVE_KEY,
+} from "./lib/savestate.js";
 // Re-Export der von den Unit-Tests importierten Engine-Funktionen, damit die
 // bestehenden Test-Importpfade (tests/unit/*.test.js -> "../../src/App.tsx")
 // unveraendert weiterlaufen (PR#41-Kontrakt, named exports, export-only).
@@ -283,6 +289,18 @@ export default function GolHex() {
   const [seed, setSeed] = useState(12345);
   // Globalarchiv-Rueckmeldung
   const [archMsg, setArchMsg] = useState("");
+  // v33 PR-C: "1. Figur" / Urzustand. Snapshot des Feldes UNMITTELBAR vor dem
+  // ERSTEN Play eines Laufes (klar getrennt von Undo/Redo). Ref, weil der Play-
+  // Toggle ihn synchron im selben Tick setzen/lesen muss (kein Re-Render-Lag).
+  // null = noch kein Urzustand fuer den aktuellen Lauf -> naechstes Play setzt ihn.
+  const originRef = useRef(null);
+  const [hasOrigin, setHasOrigin] = useState(false); // nur fuer Button-Enable/Tooltip
+  // v33 PR-C: Spielstand-Speichern-UI (IndexedDB). Panel ueber 💾 in der Top-Leiste.
+  const [saveOpen, setSaveOpen] = useState(false);
+  const [saveName, setSaveName] = useState("");
+  const [saveSlots, setSaveSlots] = useState([]); // [{key, meta}]
+  const [saveMsg, setSaveMsg] = useState("");
+  const fileInputRef = useRef(null); // versteckter <input type=file> fuer Import
   // Solver-Konvergenzwarnung (CN-Fixpunkt nicht konvergiert -> Parameter zu gross)
   const [solverWarn, setSolverWarn] = useState(false);
   // Divergenzwarnung: explizites Verfahren (Euler) ist fuer die Schroedinger-
@@ -476,7 +494,8 @@ export default function GolHex() {
       for (let i = 0; i < N; i++) { const ctr = hexCenter((i / C) | 0, i % C, HR); cx[i] = ctr.x; cy[i] = ctr.y; }
       cellCxRef.current = cx; cellCyRef.current = cy; }
     rasterImgRef.current = null; // bei Grid-Wechsel ImageData neu anlegen
-    undoRef.current = []; tickRef.current = 0; setGen(0);
+    undoRef.current = []; originRef.current = null; setHasOrigin(false); // Gitter neu -> Urzustand verwerfen
+    tickRef.current = 0; setGen(0);
     histRef.current = []; statsRef.current = { births: 0, deaths: 0 };
     setStats({ pop: 0, cnt: [0,0,0,0,0,0,0,0,0,0,0,0,0], density: 0, births: 0, deaths: 0, sps: 0, hist: [] });
     setRunning(false); dirtyRef.current = true;
@@ -1450,14 +1469,19 @@ export default function GolHex() {
   };
 
   // --- Aktionen -------------------------------------------------------------
-  const doStep = () => { pushUndo(); step(); setGen(tickRef.current); pushStats(statsRef.current.births, statsRef.current.deaths); };
+  const doStep = () => { captureOriginIfFirstPlay(); pushUndo(); step(); setGen(tickRef.current); pushStats(statsRef.current.births, statsRef.current.deaths); };
+  // Play/Pause-Toggle: beim Uebergang AUS->AN den Urzustand sichern (erstes Play
+  // eines Laufes). Pause aendert den Urzustand NICHT.
+  const togglePlay = () => {
+    setRunning((r) => { if (!r) captureOriginIfFirstPlay(); return !r; });
+  };
   const doClear = () => {
-    pushUndo();
+    pushUndo(); resetOrigin(); // neuer Lauf -> Urzustand-Slot zuruecksetzen
     if (simMode === "rval") { fieldRef.current.fill(0); fieldImRef.current.fill(0); tickRef.current = 0; setGen(0); dirtyRef.current = true; return; }
     colorRef.current.fill(0); ghostRef.current.fill(0); ageRef.current.fill(0); tickRef.current = 0; setGen(0); updatePop(); dirtyRef.current = true;
   };
   const doRandom = () => {
-    pushUndo();
+    pushUndo(); resetOrigin(); // neuer Lauf -> Urzustand-Slot zuruecksetzen
     if (simMode === "rval") { rvalSeed(); return; }
     const col = colorRef.current; ghostRef.current.fill(0); ageRef.current.fill(0);
     const dmask = neighRef.current.mask;
@@ -1489,6 +1513,185 @@ export default function GolHex() {
     if (u && u.rval) { fieldRef.current.set(u.fld); fieldImRef.current.set(u.fim); dirtyRef.current = true; return; }
     colorRef.current.set(u); ghostRef.current.fill(0); updatePop(); dirtyRef.current = true;
   };
+
+  // --- v33 PR-C: "1. Figur" / Urzustand ------------------------------------
+  // Snapshot des aktuellen Feldes als "Urzustand" eines Laufes. Aufgerufen beim
+  // ERSTEN Play (captureOriginIfFirstPlay) und vom Restore verwendet.
+  const captureOrigin = () => {
+    const meta = {
+      gen: tickRef.current, simMode, rvalRule, ruleIdx, ruleSrc, watzOnly,
+      torusOn, boundaryMode, colorMode, frameShape, circleRadius, sizeIdx,
+    };
+    originRef.current = makeOriginSnapshot({
+      cells: simRef.current === "rval" ? null : colorRef.current,
+      ghost: simRef.current === "rval" ? null : ghostRef.current,
+      age: simRef.current === "rval" ? null : ageRef.current,
+      field: simRef.current === "rval" ? fieldRef.current : null,
+      fieldIm: simRef.current === "rval" ? fieldImRef.current : null,
+      meta,
+    });
+    setHasOrigin(true);
+  };
+  // Setzt beim ersten Play den Urzustand (nur wenn noch keiner existiert). Klar
+  // getrennt vom Undo-Stack (der bei jeder Mal-/Step-Aktion waechst).
+  const captureOriginIfFirstPlay = () => {
+    if (shouldCaptureOrigin(originRef.current)) captureOrigin();
+  };
+  // Verwirft den Urzustand-Slot (naechstes Play setzt einen neuen). Aufzurufen bei
+  // jeder Aktion, die "ein neuer Lauf" bedeutet: Leeren, Random, Stempel/Figur setzen.
+  const resetOrigin = () => { originRef.current = null; setHasOrigin(false); };
+  // Stellt EXAKT den Urzustand (vor dem ersten Play) wieder her. Stoppt den Lauf,
+  // setzt Generation 0 zurueck. Lebenswelt: Zellen+Geister+Alter; rval: Felder.
+  const restoreOrigin = () => {
+    const o = originRef.current; if (!o) return;
+    setRunning(false); runRef.current = false;
+    if (o.field) { fieldRef.current.set(o.field); if (o.fieldIm) fieldImRef.current.set(o.fieldIm); }
+    if (o.cells) { colorRef.current.set(o.cells); }
+    if (o.ghost) { ghostRef.current.set(o.ghost); }
+    if (o.age) { ageRef.current.set(o.age); }
+    tickRef.current = o.meta && o.meta.gen != null ? o.meta.gen : 0;
+    setGen(tickRef.current);
+    undoRef.current = []; // Undo-Stack gehoert zum vergangenen Lauf -> leeren
+    dirtyRef.current = true; updatePop(); syncWorkerState();
+  };
+
+  // --- v33 PR-C: Spielstand-Speichern (IndexedDB + Datei) -------------------
+  // Aktuelle Meta + Zellen einsammeln. Lebenswelt: colorRef (Uint8). rval ist
+  // reellwertig (Float32) — fuer den kompakten TypedArray-Save quantisieren wir
+  // hier NICHT, sondern speichern nur den Lebenswelt-Modus voll (rval-Save waere
+  // ein eigenes Float-Format; bewusst out-of-scope, ehrliche UI-Meldung).
+  const currentSaveMeta = (name) => ({
+    name, ts: Date.now(), width: C, height: R, bitDepth: 8,
+    sizeIdx, frameShape, circleRadius, ruleIdx, ruleSrc, watzOnly,
+    torusOn, boundaryMode, colorMode, simMode, rvalRule, seed, gen: tickRef.current, zoom: zoomLbl,
+  });
+  // Speichert in einen IndexedDB-Slot. Grosse Felder: idbPut kopiert + IDB ist
+  // async (kein UI-Block). Quota-Fehler -> ehrliche User-Meldung.
+  const saveToSlot = async (name) => {
+    if (simMode === "rval") { setSaveMsg("Speichern aktuell nur im Lebenswelt-Modus (rval folgt)."); return false; }
+    const key = name && name.trim() ? name.trim() : `Stand ${new Date().toLocaleString("de-CH")}`;
+    try {
+      await idbPut({ key, cells: colorRef.current, meta: currentSaveMeta(key) });
+      await refreshSlots();
+      setSaveMsg(`Gespeichert: "${key}" (${(R * C).toLocaleString("de-CH")} Zellen).`);
+      return true;
+    } catch (e) {
+      setSaveMsg(e && e.code === "QUOTA" ? e.message : `Speichern fehlgeschlagen: ${e && e.message}`);
+      return false;
+    }
+  };
+  // Rehydriert die Engine aus einem Slot/Objekt: erst Sim-Parameter (Groesse/Form/
+  // Regel/Rahmen), dann — NACH dem dadurch ausgeloesten Grid-Reset — die Zellen.
+  // Da der Grid-Effekt asynchron die Buffer neu allokiert, schreiben wir die Zellen
+  // in einem Microtask nach dem State-Flush (requestAnimationFrame-aequivalent).
+  const applyLoadedState = (cells, meta) => {
+    setRunning(false); runRef.current = false;
+    resetOrigin();
+    // 1) Sim-Parameter setzen (loest ggf. Grid-Reallokation aus).
+    if (typeof meta.sizeIdx === "number") setSizeIdx(meta.sizeIdx);
+    if (meta.frameShape) setFrameShape(meta.frameShape);
+    if (typeof meta.circleRadius === "number") setCircleRadius(clamp(Math.round(meta.circleRadius), 1, MAX_CIRCLE_RADIUS));
+    if (typeof meta.ruleIdx === "number") setRuleIdx(meta.ruleIdx);
+    if (meta.ruleSrc) setRuleSrc(meta.ruleSrc);
+    if (typeof meta.watzOnly === "boolean") setWatzOnly(meta.watzOnly);
+    if (typeof meta.torusOn === "boolean") setTorusOn(meta.torusOn);
+    if (meta.boundaryMode) setBoundaryMode(meta.boundaryMode);
+    if (meta.colorMode) setColorMode(meta.colorMode);
+    if (typeof meta.seed === "number") setSeed(meta.seed);
+    // 2) Zellen nach dem Grid-Reset einspielen. Der Grid-Effekt setzt N/Buffer neu;
+    //    wir warten zwei Frames (State-Flush + Effekt) und schreiben dann exakt.
+    const targetLen = cells.length;
+    const writeCells = () => {
+      // Buffer muss zur geladenen Laenge passen (sonst noch im Reflow) -> retry.
+      if (colorRef.current.length !== targetLen) { requestAnimationFrame(writeCells); return; }
+      colorRef.current.set(cells);
+      ghostRef.current.fill(0);
+      // Alter: lebende Zellen als "1" markieren, damit Render/Glow konsistent ist.
+      const age = ageRef.current; for (let i = 0; i < age.length; i++) age[i] = cells[i] ? 1 : 0;
+      tickRef.current = meta.gen | 0; setGen(tickRef.current);
+      dirtyRef.current = true; updatePop(); fitView(); syncWorkerState();
+    };
+    requestAnimationFrame(writeCells);
+  };
+  const loadFromSlot = async (key) => {
+    try {
+      const rec = await idbGet(key);
+      if (!rec) { setSaveMsg(`Slot "${key}" nicht gefunden.`); return; }
+      applyLoadedState(new Uint8Array(rec.cells), rec.meta || {});
+      setSaveMsg(`Geladen: "${key}".`);
+      setSaveOpen(false);
+    } catch (e) { setSaveMsg(`Laden fehlgeschlagen: ${e && e.message}`); }
+  };
+  const deleteSlot = async (key) => {
+    try { await idbDelete(key); await refreshSlots(); setSaveMsg(`Geloescht: "${key}".`); }
+    catch (e) { setSaveMsg(`Loeschen fehlgeschlagen: ${e && e.message}`); }
+  };
+  const renameSlot = async (oldKey) => {
+    const neu = (typeof window !== "undefined" && window.prompt) ? window.prompt("Neuer Name:", oldKey) : null;
+    if (!neu || !neu.trim() || neu.trim() === oldKey) return;
+    try { await idbRename(oldKey, neu.trim()); await refreshSlots(); setSaveMsg(`Umbenannt: "${oldKey}" -> "${neu.trim()}".`); }
+    catch (e) { setSaveMsg(`Umbenennen fehlgeschlagen: ${e && e.message}`); }
+  };
+  const refreshSlots = async () => {
+    try { setSaveSlots(await idbList()); }
+    catch (e) { setSaveMsg(`Slot-Liste nicht verfuegbar: ${e && e.message}`); }
+  };
+  // Datei-Export: Spielstand als .golhex.json herunterladen (Blob + <a download>,
+  // KEINE Lib). Vorwaertskompatibel ueber das version-Feld im Format.
+  const exportSaveFile = () => {
+    if (simMode === "rval") { setSaveMsg("Datei-Export aktuell nur im Lebenswelt-Modus."); return; }
+    const name = (saveName && saveName.trim()) || `golhex_${Date.now()}`;
+    const obj = serializeSave({ cells: colorRef.current, meta: currentSaveMeta(name) });
+    downloadBlob(JSON.stringify(obj), `${name}${SAVE_FILE_EXT}`, "application/json");
+    setSaveMsg(`Datei exportiert: ${name}${SAVE_FILE_EXT}.`);
+  };
+  // Datei-Import: .golhex.json laden (FileReader). Validierung via deserializeSave
+  // (Fail-Closed bei fremdem/korruptem/zukuenftigem Format).
+  const importSaveFile = (ev) => {
+    const file = ev.target.files && ev.target.files[0]; if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const { cells, meta } = deserializeSave(JSON.parse(String(reader.result)));
+        applyLoadedState(cells, meta);
+        setSaveMsg(`Datei geladen: "${meta.name || file.name}".`);
+        setSaveOpen(false);
+      } catch (e) { setSaveMsg(`Import fehlgeschlagen: ${e && e.message}`); }
+    };
+    reader.onerror = () => setSaveMsg("Datei konnte nicht gelesen werden.");
+    reader.readAsText(file); ev.target.value = "";
+  };
+  // 💾-Toggle: Panel oeffnen, Slots laden, Namensfeld mit Datum vorbelegen (Klick-
+  // Effizienz: 💾 -> Name vorbelegt -> Enter).
+  const toggleSavePanel = () => {
+    setSaveOpen((o) => {
+      const next = !o;
+      if (next) { setSaveName(`Stand ${new Date().toLocaleDateString("de-CH")}`); refreshSlots(); setSaveMsg(""); }
+      return next;
+    });
+  };
+  // Autosave-Slot: letzter Stand beim Pausieren/Verlassen. Debounced ueber den
+  // running-Wechsel + beforeunload. Nur Lebenswelt-Modus.
+  const autosave = useCallback(() => {
+    if (simRef.current === "rval") return;
+    try { idbPut({ key: AUTOSAVE_KEY, cells: colorRef.current, meta: { ...currentSaveMeta("Autosave"), autosave: true } }).catch(() => {}); }
+    catch { /* IDB evtl. nicht verfuegbar -> still */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [R, C, sizeIdx, frameShape, circleRadius, ruleIdx, ruleSrc, watzOnly, torusOn, boundaryMode, colorMode, simMode, rvalRule, seed, zoomLbl]);
+  // Beim Verlassen der Seite den letzten Stand sichern.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onLeave = () => autosave();
+    window.addEventListener("beforeunload", onLeave);
+    window.addEventListener("pagehide", onLeave);
+    return () => { window.removeEventListener("beforeunload", onLeave); window.removeEventListener("pagehide", onLeave); };
+  }, [autosave]);
+  // Beim Pausieren (running true->false) ebenfalls autosaven.
+  const prevRunningRef = useRef(running);
+  useEffect(() => {
+    if (prevRunningRef.current && !running) autosave();
+    prevRunningRef.current = running;
+  }, [running, autosave]);
 
   // --- LiouScope-Anbindung: Zeitreihen-Export ------------------------------
   // Exportiert die aufgezeichnete Trajektorie als CSV oder JSON. Das JSON traegt
@@ -1577,7 +1780,7 @@ export default function GolHex() {
     reader.readAsText(file); ev.target.value = "";
   };
   const doPlace = () => {
-    pushUndo(); const offs = PATS[pattern], col = colorRef.current;
+    pushUndo(); resetOrigin(); const offs = PATS[pattern], col = colorRef.current;
     const pc = (typeof brush === "number" && brush >= 1 && brush <= 12) ? brush : CB;
     let mR = 0, mC = 0; offs.forEach(([dr, dc]) => { mR = Math.max(mR, dr); mC = Math.max(mC, dc); });
     const r0 = (R - mR) >> 1, c0 = (C - mC) >> 1;
@@ -1589,7 +1792,7 @@ export default function GolHex() {
   // mode "ring" = Farben nur auf dem Kreisrand; "disc" = gefuellte Scheibe,
   // jede Zelle nach ihrem Winkel zum Zentrum eingefaerbt (Itten-Anordnung).
   const placeColorWheel = (mode) => {
-    pushUndo();
+    pushUndo(); resetOrigin();
     const col = colorRef.current, age = ageRef.current;
     const dmask = neighRef.current.mask; // Audit-P1.1: Domaenen-Maske respektieren
     const cr = (R - 1) / 2, cc = (C - 1) / 2;
@@ -2435,13 +2638,60 @@ export default function GolHex() {
           {/* TODO PR-C: Snapshot (canvas.toBlob -> Web Share / Download). Vorerst disabled. */}
           <button disabled aria-label="Snapshot (kommt in PR-C)" title="Snapshot — kommt in PR-C"
             style={{ width: 42, border: "none", borderLeft: `1px solid ${T.border}`, background: "transparent", color: T.sub, opacity: 0.35, fontSize: 16, cursor: "not-allowed" }}>📷</button>
-          {/* TODO PR-D: Spielstand speichern (IndexedDB + browser-fs-access). Vorerst disabled. */}
-          <button disabled aria-label="Speichern (kommt in PR-D)" title="Speichern — kommt in PR-D"
-            style={{ width: 42, border: "none", borderLeft: `1px solid ${T.border}`, background: "transparent", color: T.sub, opacity: 0.35, fontSize: 16, cursor: "not-allowed" }}>💾</button>
+          {/* v33 PR-C: Spielstand speichern (IndexedDB + Datei-Export/Import). */}
+          <button onClick={toggleSavePanel} aria-label="Spielstand speichern" aria-pressed={saveOpen}
+            title="Speichern (Spielstand: Feld + Regel + Rahmen)"
+            style={{ width: 42, border: "none", borderLeft: `1px solid ${T.border}`, background: saveOpen ? T.bg2 : "transparent", color: saveOpen ? T.accent : T.text, fontSize: 16, cursor: "pointer" }}>💾</button>
           <button onClick={closeApp} aria-label="App schliessen" title="Schliessen"
             style={{ width: 46, border: "none", borderLeft: `1px solid ${T.border}`, background: "rgba(255,51,85,0.12)", color: "#FFC2CE", fontSize: 17, fontWeight: 700, fontFamily: MONO, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>&times;</button>
         </div>
       </div>
+
+      {/* v33 PR-C: Spielstand-Panel (IndexedDB-Slots + Datei-Export/Import).
+          "Speichern = kompletter Spielstand" (Feld + Regel + Rahmen + Groesse).
+          Klick-Effizienz: Name vorbelegt -> Enter speichert; Slot-Tipp laedt. */}
+      {saveOpen && (
+        <div data-testid="save-panel" style={{ flexShrink: 0, marginBottom: compact ? 6 : 8, padding: 12, borderRadius: 12, border: `1px solid ${T.accent}`, background: T.panel, fontFamily: MONO }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+            <span style={{ fontSize: 12, fontWeight: 700, color: T.accent }}>Spielstand speichern</span>
+            <span style={{ fontSize: 10, color: T.sub }}>Feld + Regel + Rahmen + Groesse</span>
+            <button onClick={() => setSaveOpen(false)} aria-label="Speichern-Panel schliessen"
+              style={{ marginLeft: "auto", width: 28, height: 28, borderRadius: 7, border: `1px solid ${T.border}`, background: "transparent", color: T.sub, cursor: "pointer", fontSize: 14 }}>&times;</button>
+          </div>
+          <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+            <input value={saveName} onChange={(e) => setSaveName(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") saveToSlot(saveName); }}
+              aria-label="Name fuer Spielstand" placeholder="Name"
+              style={{ flex: 1, minWidth: 0, height: 38, borderRadius: 9, border: `1px solid ${T.border}`, background: T.bg2, color: T.text, padding: "0 10px", fontFamily: MONO, fontSize: 12 }} />
+            <button onClick={() => saveToSlot(saveName)} aria-label="Speichern"
+              style={{ height: 38, padding: "0 12px", borderRadius: 9, border: "none", background: T.accent, color: "#04110d", fontWeight: 700, fontFamily: MONO, fontSize: 12, cursor: "pointer" }}>Speichern</button>
+          </div>
+          <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+            <button onClick={exportSaveFile} aria-label="Als Datei exportieren"
+              style={{ flex: 1, height: 34, borderRadius: 9, border: `1px solid ${T.border}`, background: T.bg2, color: T.text, fontFamily: MONO, fontSize: 11, cursor: "pointer" }}>⬇ Datei</button>
+            <button onClick={() => fileInputRef.current && fileInputRef.current.click()} aria-label="Datei importieren"
+              style={{ flex: 1, height: 34, borderRadius: 9, border: `1px solid ${T.border}`, background: T.bg2, color: T.text, fontFamily: MONO, fontSize: 11, cursor: "pointer" }}>⬆ Laden</button>
+            <input ref={fileInputRef} type="file" accept=".json,application/json" onChange={importSaveFile} style={{ display: "none" }} aria-label="Spielstand-Datei" />
+          </div>
+          {/* Slot-Liste: Tipp = laden; ✎ umbenennen; 🗑 loeschen. */}
+          <div data-testid="save-slots" style={{ maxHeight: 160, overflowY: "auto", display: "flex", flexDirection: "column", gap: 4 }}>
+            {saveSlots.length === 0 && <span style={{ fontSize: 11, color: T.sub, padding: "4px 2px" }}>Noch keine Spielstaende.</span>}
+            {saveSlots.map((s) => (
+              <div key={s.key} style={{ display: "flex", alignItems: "center", gap: 6, background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 9, padding: "5px 8px" }}>
+                <button onClick={() => loadFromSlot(s.key)} aria-label={`Laden ${s.key}`} title="Laden"
+                  style={{ flex: 1, minWidth: 0, textAlign: "left", border: "none", background: "transparent", color: T.text, cursor: "pointer", fontFamily: MONO, fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {s.key}{s.meta && s.meta.gen ? ` · Gen ${s.meta.gen}` : ""}
+                </button>
+                <button onClick={() => renameSlot(s.key)} aria-label={`Umbenennen ${s.key}`} title="Umbenennen"
+                  style={{ width: 30, height: 30, borderRadius: 7, border: `1px solid ${T.border}`, background: "transparent", color: T.sub, cursor: "pointer", fontSize: 12 }}>✎</button>
+                <button onClick={() => deleteSlot(s.key)} aria-label={`Loeschen ${s.key}`} title="Loeschen"
+                  style={{ width: 30, height: 30, borderRadius: 7, border: "1px solid rgba(224,90,90,0.45)", background: "rgba(224,90,90,0.10)", color: "#FFB3C0", cursor: "pointer", fontSize: 12 }}>🗑</button>
+              </div>
+            ))}
+          </div>
+          {saveMsg && <div data-testid="save-msg" style={{ marginTop: 8, fontSize: 11, color: T.sub }}>{saveMsg}</div>}
+        </div>
+      )}
 
       <div ref={wrapRef} className="ghx-canvas" style={{ position: "relative", width: "100%", flex: compact ? "1 1 0" : "none", minHeight: compact ? 0 : 360, borderRadius: compact ? 10 : 14, overflow: "hidden", border: `1px solid ${T.border}`, background: T.bg, boxShadow: `0 0 30px rgba(92,240,204,0.06) inset` }}>
         <canvas key={canvasKey} ref={canvasRef} onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp}
@@ -2666,9 +2916,11 @@ export default function GolHex() {
           erhalten). safe-area-inset-bottom kommt vom Shell-Padding (compact). */}
       <div style={{ flexShrink: 0, paddingTop: compact ? 6 : 8 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
-          {/* TODO PR-C: "1. Figur" (Sprung zur Startfigur) — vorerst disabled. */}
-          <button disabled aria-label="Zur ersten Figur (kommt in PR-C)" title="1. Figur — kommt in PR-C"
-            style={{ flex: "1 1 0", minWidth: 0, height: 48, borderRadius: 12, border: `1px solid ${T.border}`, background: T.bg2, color: T.sub, opacity: 0.4, fontFamily: MONO, fontSize: 11, cursor: "not-allowed", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", lineHeight: 1.1 }}>
+          {/* v33 PR-C: "1. Figur" — stellt den Urzustand (Feld vor dem ersten Play)
+              wieder her. Aktiv erst, sobald ein Urzustand gesichert wurde. */}
+          <button onClick={restoreOrigin} disabled={!hasOrigin}
+            aria-label="Zur ersten Figur" title={hasOrigin ? "Zurueck zum Feld vor dem ersten Play" : "1. Figur — erst nach dem ersten Play verfuegbar"}
+            style={{ flex: "1 1 0", minWidth: 0, height: 48, borderRadius: 12, border: `1px solid ${T.border}`, background: hasOrigin ? T.panel : T.bg2, color: hasOrigin ? T.text : T.sub, opacity: hasOrigin ? 1 : 0.4, fontFamily: MONO, fontSize: 11, cursor: hasOrigin ? "pointer" : "not-allowed", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", lineHeight: 1.1 }}>
             <span style={{ fontSize: 16 }}>⏮</span><span style={{ fontSize: 8 }}>1. Figur</span>
           </button>
           <button onClick={doUndo} aria-label="Undo" title="Rueckgaengig"
@@ -2676,7 +2928,7 @@ export default function GolHex() {
           {/* TODO PR-C: Redo (Undo-Stack ist aktuell einseitig) — vorerst disabled. */}
           <button disabled aria-label="Redo (kommt in PR-C)" title="Wiederholen — kommt in PR-C"
             style={{ flex: "1 1 0", minWidth: 0, height: 48, borderRadius: 12, border: `1px solid ${T.border}`, background: T.bg2, color: T.sub, opacity: 0.4, fontFamily: MONO, fontSize: 18, cursor: "not-allowed", display: "flex", alignItems: "center", justifyContent: "center" }}>↷</button>
-          <button onClick={() => setRunning((r) => !r)} aria-label={running ? "Pause" : "Start"} title={running ? "Pause" : "Start"}
+          <button onClick={togglePlay} aria-label={running ? "Pause" : "Start"} title={running ? "Pause" : "Start"}
             style={{ flexShrink: 0, width: 60, height: 60, borderRadius: "50%", border: "none",
               background: running ? "#e05a5a" : T.accent, color: running ? "#2a0707" : "#04110d",
               fontSize: 24, fontWeight: 700, cursor: "pointer", boxShadow: `0 0 18px ${running ? "#e05a5a" : T.accent}66`,

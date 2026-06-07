@@ -76,8 +76,9 @@ new colour. Cancel by tapping outside the ring (or releasing without a pick).
 The UI is a **single screen with no scrolling** on phone and desktop alike:
 
 1. **Top bar (52px):** four content tabs — *1 Farben · 2 Formen · 3 Hex-Regeln ·
-   4 Physik* — plus right-aligned action icons *📷 Snapshot* and *💾 Speichern*
-   (both **disabled placeholders**, arriving in PR-C/PR-D) and *✕ App schliessen*.
+   4 Physik* — plus right-aligned action icons *📷 Snapshot* (disabled placeholder)
+   and *💾 Speichern* (**functional, PR-C** — opens the save-state panel) and
+   *✕ App schliessen*.
    Tabs **3/4** open as an **overlay over the field**; tabs **1/2** open the
    **left drawer** (PR-B, see below). Tapping the active tab again closes it.
 2. **Field maximal:** the canvas fills the space between the top bar and the stats
@@ -85,10 +86,35 @@ The UI is a **single screen with no scrolling** on phone and desktop alike:
 3. **Stats line (34px):** *Gen · Pop · +births / −deaths · Gen/s · rule chip
    (B/S) · frame+size chip*. Updated throttled (~4 Hz, decoupled from the rAF draw
    loop) so a running sim never thrashes the DOM.
-4. **Bottom controls:** *1. Figur (disabled, PR-C) · Undo · Redo (disabled, PR-C)
-   · **▶ Play** (60px, centre) · Schritt · Random · Leeren (red, set apart)*, plus
-   a Tempo slider (TURBO step preserved). Touch targets ≥48px,
+4. **Bottom controls:** *⏮ 1. Figur (**functional, PR-C**) · Undo · Redo (disabled,
+   PR-C) · **▶ Play** (60px, centre) · Schritt · Random · Leeren (red, set apart)*,
+   plus a Tempo slider (TURBO step preserved). Touch targets ≥48px,
    `padding-bottom: env(safe-area-inset-bottom)`.
+
+### v33 (PR-C): save states (IndexedDB) + file export + "1. Figur" restore
+
+- **💾 Speichern (save-state panel).** Named slots stored in **IndexedDB** (not
+  localStorage — 50k–680k cells exceed the 5 MB string limit). The grid is kept as
+  a compact **`Uint8Array`** (native binary in the store), the meta carries name,
+  rule, frame, size, zoom, generation, seed. Save under a name (pre-filled with the
+  date, **Enter** confirms), tap a slot to **load**, ✎ rename, 🗑 delete. An
+  **autosave** slot is written on pause and on `beforeunload`/`pagehide`.
+  `QuotaExceededError` surfaces as a plain user hint instead of failing silently.
+- **File export / import.** Save as **`<name>.golhex.json`** (Blob + `<a download>`,
+  no library) and re-load via `<input type=file>` + `FileReader`. The format carries
+  a `version` field for forward-compatibility; loading a *newer* file fails closed
+  with a clear message. Cells are Base64-encoded inside the JSON envelope; a
+  680k-cell round-trip serialises in ~30 ms (measured, bit-exact).
+- **⏮ "1. Figur" (Urzustand restore).** On the **first** Play (or Step) of a run, the
+  field state — cells + ghosts + age + active rule + frame + size — is snapshotted as
+  the *Urzustand*. ⏮ restores **exactly** that pre-first-Play state and stops the run.
+  It is **distinct from Undo/Redo**: clearing, Random, or placing a figure/stamp
+  resets the Urzustand slot (the next Play captures a fresh one). The button is
+  disabled until a Urzustand exists.
+
+> Live physics (`rval`) save is intentionally out of scope here — those fields are
+> `Float32`, which needs its own format; the save/load/export path covers the
+> boolean **Lebenswelt** mode and reports an honest message in physics mode.
 
 Where the old controls moved: brush/colours + colour mode → **Tab 1**; pattern
 stamp + ring/disc colour-wheel stamp → **Tab 2**; rule source/INT, rule + **size

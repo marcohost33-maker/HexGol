@@ -148,13 +148,26 @@ test.describe("GolHex v33 1-Seiten-Mobile-Layout (390x844)", () => {
     expect(errors).toEqual([]);
   });
 
-  // v33 PR-A: noch nicht implementierte Aktionen sind sichtbar disabled (TODO PR-C/D),
-  // damit kein stiller Funktions-Vortaeuschung entsteht (Silent-Failure-Gate).
-  test("PR-C/D-Platzhalter (Snapshot/Speichern/Redo/1.Figur) sind disabled", async ({ page }) => {
+  // v33 PR-C-Update: Speichern (💾) + "1. Figur" (⏮) sind jetzt FUNKTIONAL
+  // (Spielstand-Speichern in IndexedDB + Urzustand-Restore). Snapshot (📷) + Redo
+  // bleiben bewusst disabled (eigene Folge-PRs) — kein stilles Vortaeuschen,
+  // Silent-Failure-Gate gewahrt.
+  test("PR-C: Snapshot/Redo disabled; Speichern + 1.Figur aktiv", async ({ page }) => {
     await page.goto("/");
     await page.waitForTimeout(400);
-    for (const name of [/Snapshot \(kommt in PR-C\)/, /Speichern \(kommt in PR-D\)/, /Redo \(kommt in PR-C\)/, /Zur ersten Figur \(kommt in PR-C\)/]) {
+    // Noch nicht implementiert -> sichtbar disabled.
+    for (const name of [/Snapshot \(kommt in PR-C\)/, /Redo \(kommt in PR-C\)/]) {
       await expect(page.getByRole("button", { name }), `${name} disabled`).toBeDisabled();
     }
+    // Speichern ist jetzt aktiv (oeffnet das Spielstand-Panel).
+    await expect(page.getByRole("button", { name: "Spielstand speichern" })).toBeEnabled();
+    // "1. Figur" ist anfangs disabled (kein Urzustand), wird nach dem ersten Play aktiv.
+    const firstFigure = page.getByRole("button", { name: "Zur ersten Figur" });
+    await expect(firstFigure).toBeDisabled();
+    await page.getByRole("button", { name: "Random", exact: true }).click();
+    await page.getByRole("button", { name: "Start" }).click();
+    await page.waitForTimeout(300);
+    await page.getByRole("button", { name: "Pause" }).click();
+    await expect(firstFigure).toBeEnabled();
   });
 });
