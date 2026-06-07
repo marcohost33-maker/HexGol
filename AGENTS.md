@@ -27,7 +27,9 @@ priority_when_in_conflict: 1
   and 16 classic hex birth/survival rules (`B2/S34` … `B1/S245`) plus one
   formula rule. The simulation exposes hooks (`telemetry`, `perfStats`) so
   Playwright tests can drive it deterministically.
-- **Version:** 19.1.0 (see `package.json`)
+- **Version:** 31.0.0 (see `package.json`) — engine + UI live in `src/App.tsx`;
+  pure cores extracted to `src/lib/sim-core.js` (HQST applyH/solveCN) and
+  `src/lib/hex-geom.js` (hex cube geometry), both unit-tested.
 - **License:** MIT
 - **Visibility:** PRIVATE (marcohost33-maker/HexGol)
 - **KANON anchor:** `ENGINE-HEXGOL` in `Vero/Meta/KANON/KANON_APPS.yaml`
@@ -39,9 +41,11 @@ index.html                # app entry
 vite.config.js            # Vite build config
 playwright.config.ts      # e2e + visual-regression config
 src/
-  └── lib/hex.js          # hex topology core — step() and classify()
-                          #   honour the active birth/survival rule
-src/ (rest)               # UI + telemetry pipeline
+  ├── App.tsx             # engine + UI: step()/draw() honour the active
+  │                       #   birth/survival rule (load-bearing core)
+  └── lib/
+      ├── sim-core.js     # HQST tight-binding applyH + Crank-Nicolson solveCN
+      └── hex-geom.js     # hex cube-coordinate geometry (Red Blob Games)
 tests/                    # Vitest unit tests + Playwright e2e + visual baselines
 experimental/             # spikes — not shipped in the main bundle
 docs/
@@ -76,16 +80,17 @@ npm run test:e2e:update   # refresh Playwright snapshots (use deliberately)
 3. **Visual baselines are intentional.** Do not blanket-run
    `test:e2e:update` to make red turn green. Update a snapshot only when the
    visual change is the *intended* result of your diff, and say so in the PR.
-4. **The rule entry is load-bearing.** `step()` and `classify()` in
-   `src/lib/hex.js` honour the active birth/survival rule — changing one
-   without the other corrupts the automaton. Add/adjust unit tests together.
+4. **The rule entry is load-bearing.** `step()` in `src/App.tsx` honours the
+   active birth/survival rule (B/S thresholds + INT configuration constraints);
+   changing one half without the other corrupts the automaton. Add/adjust unit
+   tests together. The HQST solver core lives in `src/lib/sim-core.js`.
 5. **Reality-Anchor.** Prefer "unit + e2e green (verified <date>)" over
    "should work". No claims without test-belege.
 6. **Plain paths in code-blocks** for file references (clickable in CLI).
 
 ## §2 Conventions
 
-- **Single-file-leaning core.** Keep the hex logic cohesive in `src/lib/hex.js`;
+- **Single-file-leaning core.** Keep the hex logic cohesive in `src/App.tsx` + `src/lib/`;
   split only when a module boundary genuinely helps (Coworkerz GolHex style).
 - **Determinism for tests.** Drive the simulation through the exposed hooks
   (`telemetry`, `perfStats`); do not rely on timing/animation frames in assertions.
@@ -116,7 +121,7 @@ npm run test:e2e:update   # refresh Playwright snapshots (use deliberately)
 
 ## §4 Do
 
-- Do add/adjust Vitest unit tests with any change to `hex.js` rule logic.
+- Do add/adjust Vitest unit tests with any change to rule logic (`src/App.tsx` / `src/lib/`).
 - Do update Playwright baselines only for intended visual changes, and note it.
 - Do keep `README.md` rule/controls documentation in sync.
 - Do run `npm test` and `npm run test:e2e` locally before pushing.
@@ -124,7 +129,7 @@ npm run test:e2e:update   # refresh Playwright snapshots (use deliberately)
 ## §5 When stuck
 
 - See `README.md` for the rule set, controls, and topology overview.
-- Inspect `src/lib/hex.js` (`step()`, `classify()`) for the automaton core.
+- Inspect `src/App.tsx` (`step()`, `draw()`) for the automaton core.
 - Check `playwright.config.ts` + `tests/` for how the simulation is driven.
 - **Escalate after 3 failed attempts at the same step** — stop and ask in a PR
   draft or issue instead of looping.
@@ -138,7 +143,7 @@ A change is "done" only when **all** of the following hold:
 | 1 | `npm test` (Vitest) runs cleanly | exit 0 |
 | 2 | `npm run build` produces a bundle | exit 0, `dist/` written |
 | 3 | Required CI checks green on the PR | `unit` + `e2e` |
-| 4 | `hex.js` rule changes carry matching unit tests | tests present, `unit` green |
+| 4 | engine rule changes carry matching unit tests | tests present, `unit` green |
 | 5 | Visual-baseline changes are intentional and explained | PR body notes the change |
 | 6 | `README.md` updated if rules/controls/hooks changed | PR diff contains doc update |
 | 7 | PR body contains Summary + Test plan checklist | manual review |

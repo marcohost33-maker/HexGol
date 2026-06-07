@@ -393,7 +393,7 @@ function worldSize(R, C, hr) {
 //   torus: Nachbar ausserhalb Domaene -> bei "box" Standard-Wrap; bei "circle"
 //          antipodale Identifikation (Strahl durch Zentrum, gegenueberliegende
 //          Randzelle) -> periodische Scheibe (RP2-artig), reflexionsfrei.
-function buildNeighbors(R, C, shape) {
+export function buildNeighbors(R, C, shape) {
   const N = R * C, torus = new Int32Array(N * 6), edge = new Int32Array(N * 6);
   const mask = new Uint8Array(N);
   const oddOff = [[-1, 0], [-1, 1], [0, -1], [0, 1], [1, 0], [1, 1]];
@@ -670,7 +670,7 @@ const SOLVERS = {
   euler: { fn: solveEuler, l: "Euler (explizit)", note: "driftet stark - Vergleich" },
 };
 // Work-Buffer fuer alle HQST-Solver (CN nutzt b*, alle nutzen h*, RK4 k*/t*).
-function mkHqstWork(n) {
+export function mkHqstWork(n) {
   return {
     bRe: new Float64Array(n), bIm: new Float64Array(n), hRe: new Float64Array(n), hIm: new Float64Array(n),
     k1r: new Float64Array(n), k1i: new Float64Array(n), k2r: new Float64Array(n), k2i: new Float64Array(n),
@@ -679,7 +679,7 @@ function mkHqstWork(n) {
   };
 }
 // Einheitlicher Einstiegspunkt; solverId waehlt den Adapter.
-function stepHQST(re, im, NL, J, V, dt, reBuf, imBuf, work, solverId) {
+export function stepHQST(re, im, NL, J, V, dt, reBuf, imBuf, work, solverId) {
   const s = SOLVERS[solverId] || SOLVERS.cn;
   return s.fn(re, im, NL, J, V, dt, reBuf, imBuf, work); // Konvergenz-Flag (cn) bzw. undefined
 }
@@ -839,6 +839,20 @@ export default function GolHex() {
   const [archMsg, setArchMsg] = useState("");
   // Solver-Konvergenzwarnung (CN-Fixpunkt nicht konvergiert -> Parameter zu gross)
   const [solverWarn, setSolverWarn] = useState(false);
+  // Divergenzwarnung: explizites Verfahren (Euler) ist fuer die Schroedinger-
+  // gleichung instabil und entgleist ueber lange Laeufe (Inf/NaN). Wird abgefangen.
+  const [solverDiverged, setSolverDiverged] = useState(false);
+  // Waehlbare Randbedingung fuer den booleschen Modus (web-fundiert, 4 kanonische
+  // BCs): "null" = feste Wand (fehlende Nachbarn zaehlen als tot, Standard) |
+  // "adiabatic" = reflektierende Wand (fehlender Nachbar spiegelt die Randzelle
+  // selbst). Im rval-Modus sind die Diffusionsregeln bereits adiabatisch.
+  const [boundaryMode, setBoundaryMode] = useState("null");
+  // Randzellen-Kennzahl, gesetzt im Grid/Form-Effekt (NICHT pro Render berechnet).
+  const [boundaryStat, setBoundaryStat] = useState({ count: 0, total: 0 });
+  // Erweiterte Palette (Sekundaer/Tertiaer + Kreis-Stempel) schrittweise offenlegen:
+  // standardmaessig eingeklappt, damit die Leinwand oben sichtbar bleibt (visuelle
+  // Hierarchie + progressive disclosure, web-fundiert).
+  const [showMoreColors, setShowMoreColors] = useState(false);
   const [brush, setBrush] = useState("cycle"); // cycle | CR | CB | CY | erase
   const [pattern, setPattern] = useState("BaysGlider");
   const [gen, setGen] = useState(0);
@@ -902,7 +916,7 @@ export default function GolHex() {
   const undoRef = useRef([]);
 
   const cfg = useRef({ ruleIdx, torusOn, ax, a5, R, C, watzOnly, ruleSrc });
-  useEffect(() => { cfg.current = { ruleIdx, torusOn, ax: { ...ax, colorMode }, a5, R, C, watzOnly, ruleSrc, sysT: sysTheory, sysSp: sysSetpoint, openSys, solverId }; }, [ruleIdx, torusOn, ax, a5, R, C, watzOnly, colorMode, ruleSrc, sysTheory, sysSetpoint, openSys, solverId]);
+  useEffect(() => { cfg.current = { ruleIdx, torusOn, ax: { ...ax, colorMode }, a5, R, C, watzOnly, ruleSrc, sysT: sysTheory, sysSp: sysSetpoint, openSys, solverId, bcMode: boundaryMode }; }, [ruleIdx, torusOn, ax, a5, R, C, watzOnly, colorMode, ruleSrc, sysTheory, sysSetpoint, openSys, solverId, boundaryMode]);
   const runRef = useRef(running); useEffect(() => { runRef.current = running; }, [running]);
   const spRef = useRef(SPEEDS[speedIdx]); useEffect(() => { spRef.current = SPEEDS[speedIdx]; }, [speedIdx]);
   const brushRef = useRef(brush); useEffect(() => { brushRef.current = brush; }, [brush]);
@@ -910,6 +924,7 @@ export default function GolHex() {
   const frameRef = useRef(frameShape); useEffect(() => { frameRef.current = frameShape; }, [frameShape]);
   const seedRef = useRef(seed); useEffect(() => { seedRef.current = seed; }, [seed]);
   const solverWarnRef = useRef(false);
+  const solverDivergedRef = useRef(false);
   const rvalRef = useRef(rvalRule); useEffect(() => { rvalRef.current = rvalRule; }, [rvalRule]);
 
   // Grid-Wechsel: Buffer + Geometrie neu
@@ -923,6 +938,9 @@ export default function GolHex() {
     fRecRef.current = new Uint8Array(N);
     hqstWorkRef.current = mkHqstWork(N);
     neighRef.current = buildNeighbors(R, C, frameShape);
+    // Randzellen-Zahl GENAU HIER berechnen, wo das Feld neu entsteht (frischer Wert,
+    // keine Render-Reihenfolge-Falle). Speist die transparente Randanzeige.
+    { const nb = neighRef.current; let bc = 0; const bd = nb.bnd; for (let i = 0; i < bd.length; i++) if (bd[i]) bc++; setBoundaryStat({ count: bc, total: nb.inCount || 0 }); }
     // Welt-Zentren je Zelle (einmal pro Grid) fuer den ImageData-Raster-Fast-Path.
     { const cx = new Float32Array(N), cy = new Float32Array(N);
       for (let i = 0; i < N; i++) { const ctr = hexCenter((i / C) | 0, i % C, HR); cx[i] = ctr.x; cy[i] = ctr.y; }
@@ -998,6 +1016,27 @@ export default function GolHex() {
         if (conv === false && !solverWarnRef.current) { solverWarnRef.current = true; }
         [fieldRef.current, fBufRef.current] = [fBufRef.current, fieldRef.current];
         [fieldImRef.current, fBufImRef.current] = [fBufImRef.current, fieldImRef.current];
+        // DIVERGENZ-WAECHTER (web-fundiert, arxiv 1101.3161 NaNChecker-Muster):
+        // explizite Verfahren wie Euler sind fuer die Schroedingergleichung
+        // instabil und wachsen exponentiell, bis Float32 ueberlaeuft (Inf/NaN).
+        // Eine ungueltige Zahl ist "ansteckend" und wuerde Statistik + Recorder
+        // verseuchen. Daher: nach jedem Schritt die Amplitude pruefen; entgleist
+        // -> Feld nullen, Lauf stoppen, ehrliche Warnung an den Nutzer.
+        {
+          const re = fieldRef.current, im = fieldImRef.current; let maxA = 0, bad = false;
+          for (let i = 0; i < n; i++) {
+            const a = Math.abs(re[i]) + Math.abs(im[i]);
+            if (a > maxA) maxA = a;
+            if (!Number.isFinite(a)) { bad = true; break; }
+          }
+          // Schranke 1e4: normerhaltende Wellen bleiben O(1); ein Anwachsen auf
+          // >1e4 ist eindeutig Verfahrensdivergenz (CN/RK4 bleiben weit darunter).
+          if (bad || maxA > 1e4) {
+            re.fill(0); im.fill(0);
+            solverDivergedRef.current = true;
+            runRef.current = false; // Lauf anhalten, sonst sofortige Re-Divergenz
+          }
+        }
       } else if (rule === "water") {
         const out = stepWater(fieldRef.current, NL, C2, fBufRef.current);
         fBufRef.current = fieldRef.current; fieldRef.current = out;
@@ -1023,7 +1062,7 @@ export default function GolHex() {
       tickRef.current += 1; dirtyRef.current = true; loopStepRef.current += 1;
       return;
     }
-    const { ruleIdx: ri, torusOn: to, ax: A, a5: A5, watzOnly: wO, ruleSrc: rs, sysT, sysSp } = cfg.current;
+    const { ruleIdx: ri, torusOn: to, ax: A, a5: A5, watzOnly: wO, ruleSrc: rs, sysT, sysSp, bcMode: bc } = cfg.current;
     const meta = wO ? WATZ_META : (rs === "int" ? INT_META[ri] : RMETA[ri]);
     const { bL, sL, smin, smax } = meta;
     const isINT = !!meta.isINT, b2 = meta.b2 || null, s2 = meta.s2 || null;
@@ -1044,14 +1083,24 @@ export default function GolHex() {
       const base = i * 6;
       const cnt = [0,0,0,0,0,0,0,0,0,0,0,0,0];
       let live = 0, sx = 0, sy = 0, mask = 0;
+      const self = col[i], selfAlive = self !== 0;
+      const adia = bc === "adiabatic";
       for (let k = 0; k < 6; k++) {
         const j = NL[base + k];
-        if (j < 0) continue;
+        if (j < 0) {
+          // Adiabatische (reflektierende) Wand: der fehlende Nachbar ist eine
+          // Spiegelung der Randzelle selbst (web-fundiert: arxiv 2406.06195,
+          // 1607.02291). Bei "null" (Standard) traegt er nichts bei = tote Wand.
+          if (adia) {
+            if (selfAlive) { cnt[self]++; live++; sx += COSH[self]; sy += SINH[self]; mask |= (1 << k); }
+            else if (A.a4 && gh[i]) live++;
+          }
+          continue;
+        }
         const cj = col[j];
         if (cj !== 0) { cnt[cj]++; live++; sx += COSH[cj]; sy += SINH[cj]; mask |= (1 << k); }
         else if (A.a4 && gh[j]) live++;
       }
-      const self = col[i], selfAlive = self !== 0;
       const cntSelf = selfAlive ? cnt[self] : 0;
       let maxN = 0; for (let c = 1; c <= 12; c++) if (cnt[c] > maxN) maxN = cnt[c];
       let eff = live;
@@ -1424,6 +1473,11 @@ export default function GolHex() {
       if (dt > 0) { spsRef.current = loopStepRef.current / dt; loopStepRef.current = 0; loopT0Ref.current = now; }
       if (runRef.current) { setGen(tickRef.current); pushStats(statsRef.current.births, statsRef.current.deaths); }
       if (solverWarnRef.current) setSolverWarn(true);
+      // Divergenz EINMALIG pro Ereignis behandeln: die Ref ist der Ausloeser und
+      // wird sofort zurueckgesetzt, damit setRunning(false) nicht bei jedem Tick
+      // feuert (sonst koennte der Nutzer nicht neu starten). Die Warnung
+      // (solverDiverged) bleibt sichtbar, bis neu geseedet/Solver gewechselt wird.
+      if (solverDivergedRef.current) { solverDivergedRef.current = false; setSolverDiverged(true); setRunning(false); dirtyRef.current = true; }
     }, 250);
     return () => clearInterval(id);
   }, [pushStats]);
@@ -1621,6 +1675,7 @@ export default function GolHex() {
     else { fld[mid] = 1; }
     tickRef.current = 0; setGen(0); dirtyRef.current = true; fitView();
     solverWarnRef.current = false; setSolverWarn(false);
+    solverDivergedRef.current = false; setSolverDiverged(false);
   };
   // Beim Wechsel in den rval-Modus / der Regel automatisch sinnvoll seeden.
   useEffect(() => { if (simMode === "rval") { rvalSeed(); setRunning(false); } else { dirtyRef.current = true; } // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1781,6 +1836,10 @@ export default function GolHex() {
   const MONO = "'JetBrains Mono', ui-monospace, Menlo, monospace";
   const total = stats.pop;
   const pct = (x) => (total ? Math.round((x / total) * 100) : 0);
+  // Randzellen-Info kommt aus dem Zustand boundaryStat, der GENAU DANN gesetzt wird,
+  // wenn das Randfeld neu aufgebaut wird (im Grid/Form-Effekt). Berechnung am Ort der
+  // Datenaenderung ist robust gegen die Render-Reihenfolge-Falle (stale useMemo).
+  const boundaryInfo = boundaryStat;
   // Sparkline-Pfad (Population-Verlauf)
   const sparkPath = (() => {
     const h = stats.hist; if (!h || h.length < 2) return "";
@@ -1852,6 +1911,10 @@ export default function GolHex() {
         {swatch(CY, "Gelb", COLHEX[CY])}
         {swatch("erase", "Leer", null)}
       </div>
+      <button onClick={() => setShowMoreColors((v) => !v)} style={{ width: "100%", textAlign: "left", padding: "7px 10px", borderRadius: 9, border: "1px solid rgba(92,240,204,0.14)", background: T.bg2, color: T.sub, fontFamily: MONO, fontSize: 10.5, fontWeight: 700, cursor: "pointer", marginBottom: 8, letterSpacing: "0.03em" }}>
+        {showMoreColors ? "v" : ">"} WEITERE FARBEN & KREIS-STEMPEL
+      </button>
+      {showMoreColors && (<>
       <div style={{ fontSize: 10, color: T.sub, opacity: 0.7, marginBottom: 3, fontFamily: MONO }}>SEKUNDAER</div>
       <div style={{ display: "flex", gap: 5, marginBottom: 6 }}>
         {swatch(CO, "Orange", COLHEX[CO])}
@@ -1879,6 +1942,7 @@ export default function GolHex() {
           border: `1px solid ${T.border}`, background: T.bg2, color: T.accent,
         }}>Scheibe</button>
       </div>
+      </>)}
       </>)}
       {simMode === "rval" && (
         <div style={{ fontSize: 11, color: T.sub, marginBottom: 10, fontFamily: MONO, lineHeight: 1.5, padding: "8px 10px", borderRadius: 9, border: `1px solid ${T.border}`, background: T.bg2 }}>
@@ -1912,6 +1976,37 @@ export default function GolHex() {
           <span>Dichte <b style={{ color: T.text }}>{(stats.density * 100).toFixed(1)}%</b></span>
           <span>{running ? <span style={{ color: T.accent }}>{stats.sps.toFixed(0)}/s</span> : <span style={{ opacity: 0.5 }}>pausiert</span>}</span>
         </div>
+        {/* Randbedingung transparent machen: bei berandeten Formen (oder Rechteck
+            ohne Torus) wirkt an den Randzellen die feste Wand (Null-Randbedingung,
+            fehlende Nachbarn zaehlen als tot - kanonisch korrekt). Beim Torus gibt
+            es keinen Rand (periodisch). */}
+        {!stats.rval && boundaryInfo.count > 0 && (
+          <div style={{ fontSize: 10, color: T.sub, opacity: 0.7, marginBottom: 8, lineHeight: 1.4 }}>
+            Randzellen: <b style={{ color: T.text }}>{boundaryInfo.count}</b> von {boundaryInfo.total} &middot; {
+              (frameShape === "box" && torusOn)
+                ? "periodischer Rand (Torus, kein fester Rand)"
+                : (frameShape === "circle" && torusOn)
+                ? "antipodaler Rand (RP2)"
+                : (boundaryMode === "adiabatic")
+                ? "reflektierende Wand (adiabatisch: fehlender Nachbar spiegelt die Zelle)"
+                : "feste Wand (Null-Randbedingung: fehlende Nachbarn = tot)"
+            }
+          </div>
+        )}
+        {/* Wahl der Randbedingung - nur sinnvoll im booleschen Modus an einer
+            echten Wand (nicht im Torus, wo es keinen Rand gibt). Standard "null"
+            erhaelt das bisherige Verhalten exakt; "adiabatic" reflektiert. */}
+        {!stats.rval && boundaryInfo.count > 0 && !((frameShape === "box" || frameShape === "circle") && torusOn) && (
+          <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+            {[["null", "Feste Wand"], ["adiabatic", "Reflektierend"]].map(([k, lab]) => (
+              <button key={k} onClick={() => setBoundaryMode(k)} style={{
+                flex: 1, padding: "6px 6px", borderRadius: 8, fontSize: 10.5, fontWeight: 700, cursor: "pointer", fontFamily: MONO,
+                border: boundaryMode === k ? `1px solid ${T.accent}` : "1px solid rgba(92,240,204,0.14)",
+                background: boundaryMode === k ? "rgba(92,240,204,0.12)" : T.bg2, color: boundaryMode === k ? T.accent : T.sub,
+              }}>{lab}</button>
+            ))}
+          </div>
+        )}
         {stats.rval ? (
           <div style={{ fontSize: 11, color: T.sub, marginBottom: 8, lineHeight: 1.5 }}>
             {rvalRule === "snow" && <span>Eiszellen: <b style={{ color: T.text }}>{total}</b> &middot; reellwertige Diffusion</span>}
@@ -1947,7 +2042,7 @@ export default function GolHex() {
         {btn(() => setRunning((r) => !r), running ? "Pause" : "Start", { flex: "1 1 80px", background: running ? "rgba(255,51,85,0.16)" : "rgba(92,240,204,0.14)", borderColor: running ? "rgba(255,51,85,0.4)" : T.accent, color: running ? "#FFC2CE" : T.accent, fontWeight: 700 })}
         {btn(doStep, "Schritt", { flex: "1 1 70px" })}
         {btn(doRandom, "Random", { flex: "1 1 70px" })}
-        {btn(doClear, "Leeren", { flex: "1 1 70px" })}
+        {btn(doClear, "Leeren", { flex: "1 1 70px", color: "#FFB3C0", borderColor: "rgba(255,51,85,0.28)" })}
         {btn(doUndo, "Undo", { flex: "1 1 60px" })}
       </div>
 
@@ -2050,6 +2145,11 @@ export default function GolHex() {
                   {solverWarn && solverId === "cn" && (
                     <div style={{ fontSize: 10, color: "#FFB347", fontFamily: MONO, lineHeight: 1.4, marginTop: 4 }}>
                       Warnung: Crank-Nicolson-Fixpunkt nicht konvergiert (Parameter zu gross). Ergebnis kann ungenau sein.
+                    </div>
+                  )}
+                  {solverDiverged && (
+                    <div style={{ fontSize: 10, color: "#FF6680", fontFamily: MONO, lineHeight: 1.4, marginTop: 4 }}>
+                      Divergenz abgefangen: {SOLVERS[solverId] ? solverId.toUpperCase() : "Der Loeser"} ist fuer die Schroedingergleichung instabil und die Amplitude wuchs unbegrenzt. Das Feld wurde genullt und der Lauf gestoppt. Fuer stabile Langzeitlaeufe Crank-Nicolson (cn) waehlen und neu seeden.
                     </div>
                   )}
                 </div>
