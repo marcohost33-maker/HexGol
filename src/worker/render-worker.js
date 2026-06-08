@@ -204,6 +204,25 @@ function performanceNow() { return (typeof performance !== "undefined" && perfor
 function startLoop() { if (!timer && running) { t0 = performanceNow(); timer = setTimeout(frame, 0); } }
 function stopLoop() { if (timer) { clearTimeout(timer); timer = null; } }
 
+// v33 PR-E: buildNeighbors-opts aus der init/config-Nachricht ableiten. Spiegelt
+// App.tsx (frameOpts) -> EINE Logik fuer Kreis-Radius / Ellipse-Achsen / Freiform-
+// Polygon, damit Worker-Maske == Main-Thread-Maske.
+function frameOpts(m) {
+  if (m.shape === "circle") {
+    return Number.isFinite(m.circleRadius) ? { circleRadius: m.circleRadius } : undefined;
+  }
+  if (m.shape === "ellipse") {
+    const o = {};
+    if (Number.isFinite(m.ellipseA)) o.ellipseA = m.ellipseA;
+    if (Number.isFinite(m.ellipseB)) o.ellipseB = m.ellipseB;
+    return o;
+  }
+  if (m.shape === "freeform") {
+    return Array.isArray(m.polygon) && m.polygon.length >= 3 ? { polygon: m.polygon } : undefined;
+  }
+  return undefined;
+}
+
 // --- Nachrichten-Bruecke -----------------------------------------------------
 self.onmessage = (e) => {
   const m = e.data;
@@ -214,7 +233,7 @@ self.onmessage = (e) => {
       catch (err) { postMessage({ type: "error", message: "getContext failed: " + err.message }); return; }
       R = m.R; C = m.C; N = R * C; hr = m.hr; dpr = m.dpr || 1;
       cfg = m.cfg; mode = m.mode; rule = m.rule; speedMs = m.speedMs ?? 16;
-      neigh = buildNeighbors(R, C, m.shape, m.shape === "circle" && Number.isFinite(m.circleRadius) ? { circleRadius: m.circleRadius } : undefined);
+      neigh = buildNeighbors(R, C, m.shape, frameOpts(m));
       // Zustands-Arrays uebernehmen (per Transfer; sonst frisch).
       col = m.col ? new Uint8Array(m.col) : new Uint8Array(N);
       gh = m.gh ? new Uint8Array(m.gh) : new Uint8Array(N);

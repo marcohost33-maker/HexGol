@@ -6,9 +6,9 @@
 // Logik byte-identisch zur v31-Basis (reiner Move, keine Verhaltensaenderung).
 // =============================================================================
 import { applyH, solveCN } from "./sim-core.js"; // HQST-Kern (unit-getestet)
-import { oddRToCube, cubeToOddR, hexDist, CUBE_DIRS, cubeRing, cubeDisk, kColorByIndex, sectorByAngle } from "./hex-geom.js"; // Hex-Wuerfelgeometrie (unit-getestet)
+import { oddRToCube, cubeToOddR, hexDist, CUBE_DIRS, cubeRing, cubeDisk, kColorByIndex, sectorByAngle, pointInPolygonWN, windingNumber } from "./hex-geom.js"; // Hex-Wuerfelgeometrie (unit-getestet)
 // Geometrie aus hex-geom wird hier re-exportiert, damit App.tsx einen Import hat.
-export { oddRToCube, cubeToOddR, hexDist, CUBE_DIRS, cubeRing, cubeDisk, kColorByIndex, sectorByAngle };
+export { oddRToCube, cubeToOddR, hexDist, CUBE_DIRS, cubeRing, cubeDisk, kColorByIndex, sectorByAngle, pointInPolygonWN, windingNumber };
 
 const S3 = Math.sqrt(3);
 const PI2 = Math.PI * 2, PI3 = Math.PI / 3, PI6 = Math.PI / 6;
@@ -237,7 +237,8 @@ function circleGridDims(radius) {
 }
 
 // Rahmenform + Topologie -> Nachbar-Lookups mit korrekter Randphysik.
-// shape: "box" (volle Rechteck-Domaene) | "circle" (eingeschriebene Scheibe).
+// shape: "box" (volle Rechteck-Domaene) | "circle" (eingeschriebene Scheibe)
+//        | "hexagon" | "triangle" | "ellipse" (v33 PR-E) | "freeform" (v33 PR-E).
 // Liefert: { torus, edge, mask, inCount }.
 //   mask[i]=1 wenn Zelle in der Domaene. Zellen ausserhalb sind permanente Waende.
 //   edge:  Nachbar ausserhalb Domaene -> -1 (Rand: Neumann/reflektierend; boolesch
@@ -251,6 +252,13 @@ function circleGridDims(radius) {
 //     Kreis auf den eingeschriebenen Maximal-Radius (bisheriges Verhalten) zurueck.
 //     Ein Wert > eingeschriebenem Maximum wird auf das Maximum geklemmt (der Kreis
 //     kann nicht ueber das Gitter hinausragen).
+//   opts.ellipseA / opts.ellipseB (v33 PR-E): Halbachsen in GITTERSCHRITTEN fuer
+//     shape==="ellipse" (a = horizontal, b = vertikal), je auf die Gitter-Halbachse
+//     geklemmt (fail-closed). Fehlen -> Maximum (fuellt das Gitter).
+//   opts.polygon (v33 PR-E): Array von Welt-{x,y}-Punkten fuer shape==="freeform";
+//     Maske via Winding-Number (Hormann-Agathos), Punkt-auf-Kante == innen. Fehlt
+//     oder < 3 Punkte -> leere Domaene (fail-closed). Torus(ellipse|freeform) =
+//     berandet (wie hexagon/triangle; die Form kachelt die Ebene nicht periodisch).
 function buildNeighbors(R, C, shape, opts) {
   const N = R * C, torus = new Int32Array(N * 6), edge = new Int32Array(N * 6);
   const mask = new Uint8Array(N);
@@ -276,6 +284,22 @@ function buildNeighbors(R, C, shape, opts) {
   if (opts && Number.isFinite(opts.circleRadius) && opts.circleRadius > 0) {
     circleRad = Math.min(opts.circleRadius * 1.5, radiusMax);
   }
+  // v33 PR-E: Ellipse-Halbachsen (Welt). a = horizontal (Spalten), b = vertikal
+  // (Reihen). Werte in Gitterschritten *1.5 (wie circleRad), je Achse auf die
+  // Halbachsen der Bounding-Box geklemmt (fail-closed: keine Ellipse ueber den
+  // Gitterrand). Default = Maximum (fuellt das Gitter wie der Kreis).
+  let ellA = halfW, ellB = halfH;
+  if (opts && Number.isFinite(opts.ellipseA) && opts.ellipseA > 0) {
+    ellA = Math.min(opts.ellipseA * 1.5, halfW);
+  }
+  if (opts && Number.isFinite(opts.ellipseB) && opts.ellipseB > 0) {
+    ellB = Math.min(opts.ellipseB * 1.5, halfH);
+  }
+  // v33 PR-E: Freiform-Polygon (Array Welt-{x,y}). Maske via Winding-Number
+  // (Hormann-Agathos), Punkt-auf-Kante == innen. Fehlt/zu kurz -> leere Domaene
+  // (fail-closed: kein "alles drin"-Versehen).
+  const polygon = (opts && Array.isArray(opts.polygon) && opts.polygon.length >= 3)
+    ? opts.polygon : null;
   // Hexagon-Rahmen: groesster eingeschriebener Hex-Radius (in Gitterschritten).
   // Begrenzt durch Reihen (R) und Spalten; konservativ das Minimum.
   const centerCube = oddRToCube(cc, cr);
@@ -293,6 +317,19 @@ function buildNeighbors(R, C, shape, opts) {
       const dx = wx(r, c) - cx, dy = wy(r) - cy;
       return Math.hypot(dx, dy) <= circleRad;
     }
+    if (shape === "ellipse") {
+      // Welt-Test ((wx-cx)/a)^2 + ((wy-cy)/b)^2 <= 1 (Audit Mathe TEIL B(a)).
+      // wx/wy inkl. odd-row-0.5-Versatz -> keine Verzerrung durch das
+      // Achsverhaeltnis 1.5 (Reihe) vs sqrt(3) (Spalte).
+      const dx = (wx(r, c) - cx) / ellA, dy = (wy(r) - cy) / ellB;
+      return dx * dx + dy * dy <= 1;
+    }
+    if (shape === "freeform") {
+      // Freiform: Winding-Number gegen das Nutzer-Polygon in Welt-Koordinaten.
+      // Kein Polygon -> leere Domaene (fail-closed).
+      if (!polygon) return false;
+      return pointInPolygonWN(wx(r, c), wy(r), polygon);
+    }
     if (shape === "hexagon") {
       return hexDist(oddRToCube(c, r), centerCube) <= hexRad;
     }
@@ -308,18 +345,34 @@ function buildNeighbors(R, C, shape, opts) {
   };
   let inCount = 0;
   for (let r = 0; r < R; r++) for (let c = 0; c < C; c++) { if (inDomain(r, c)) { mask[r * C + c] = 1; inCount++; } }
-  // Antipodale In-Domaenen-Zelle fuer circle-torus: gegenueberliegender Strahl.
+  // Antipodale In-Domaenen-Zelle fuer circle-torus: gegenueberliegende Randzelle.
+  // v33 Mathe-Audit P1.5: direkte Berechnung der Punktspiegelung am Zentrum
+  //   (ax,ay) = (2cx-wx, 2cy-wy) -> Welt->odd-r ruecktransformieren -> kleine
+  //   lokale Korrektur (Rundung + Maske). Ersetzt die alte O(circleRad)-
+  //   Strahlsuche (bis 1500 Iterationen/Randzelle bei r=500). Reziprozitaet bleibt
+  //   0 (Geometrie-Aequivalenz, test_antipode-Orakel) — die Punktspiegelung ist
+  //   involutorisch und die lokale 3x3-Suche faengt Rundungs-Randfaelle ab.
+  const worldToOddR = (ax, ay) => {
+    const rr = Math.round(ay / 1.5);
+    const cc2 = Math.round(ax / S3 - ((rr & 1) ? 0.5 : 0));
+    return [rr, cc2];
+  };
   const antipode = (r, c) => {
-    const dx = wx(r, c) - cx, dy = wy(r) - cy;
-    // gegenueberliegende Richtung, am Rand entlang nach innen suchen
-    for (let t = circleRad; t > 0; t -= 0.5) {
-      const ax = cx - dx * (t / (Math.hypot(dx, dy) || 1));
-      const ay = cy - dy * (t / (Math.hypot(dx, dy) || 1));
-      const rr = Math.round(ay / 1.5);
-      const cc2 = Math.round(ax / S3 - ((rr & 1) ? 0.5 : 0));
-      if (inDomain(rr, cc2)) return rr * C + cc2;
+    const ax = 2 * cx - wx(r, c), ay = 2 * cy - wy(r);
+    let [rr, cc2] = worldToOddR(ax, ay);
+    if (inDomain(rr, cc2)) return rr * C + cc2;
+    // Lokale Korrektur: die naechste In-Domaenen-Zelle in einer kleinen Umgebung
+    // (Rundung kann am Rand 1 Schritt daneben liegen). Best = minimaler
+    // Welt-Abstand zum exakt gespiegelten Punkt -> stabile, eindeutige Wahl.
+    let bestIdx = -1, bestD = Infinity;
+    for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
+      const nr = rr + dr, nc = cc2 + dc;
+      if (!inDomain(nr, nc)) continue;
+      const ddx = wx(nr, nc) - ax, ddy = wy(nr) - ay;
+      const d = ddx * ddx + ddy * ddy;
+      if (d < bestD) { bestD = d; bestIdx = nr * C + nc; }
     }
-    return r * C + c;
+    return bestIdx >= 0 ? bestIdx : r * C + c;
   };
   for (let r = 0; r < R; r++) {
     const off = (r & 1) ? oddOff : evenOff;

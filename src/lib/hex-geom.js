@@ -93,3 +93,82 @@ export function sectorByAngle(cube, center, k, wxFn, wyFn) {
   ang %= (2 * Math.PI); if (ang < 0) ang += 2 * Math.PI;
   return Math.min(k - 1, Math.floor((ang / (2 * Math.PI)) * k));
 }
+
+// --- v33 PR-E: Punkt-in-Polygon via Winding-Number (Hormann-Agathos 2001) -----
+// Robuste Punkt-in-Polygon-Klassifikation fuer BELIEBIGE (auch selbst-
+// ueberschneidende) Polygone. Liefert die WINDING NUMBER (Umlaufzahl): wie oft
+// das Polygon den Testpunkt umlaeuft. != 0 => innen (nonzero-Regel).
+//
+// Warum Winding statt Even-Odd: selbst-ueberschneidende Formen (z.B. ein Stern,
+// frei gezeichnet) klassifiziert Even-Odd in den ueberlappenden Innenflaechen
+// FALSCH als "aussen". Winding ist hier korrekt (Audit Mathe TEIL B(b)).
+//
+// Robustheits-Kern (Hormann-Agathos): KEINE Gleitkomma-Schnittpunkte berechnen.
+// Stattdessen pro Kante nur das VORZEICHEN der Lage des Punkts relativ zur Kante
+// pruefen (Kreuzprodukt `isLeft`) und zaehlen, ob die Kante den horizontalen
+// Strahl nach rechts kreuzt. Fuer GolHex liegen Hex-Zellzentren auf einem
+// ganzzahligen Cube-Gitter -> wenn das Polygon ebenfalls auf Integer-Koordinaten
+// uebergeben wird, sind alle Tests exakt (keine epsilon-Toleranz noetig).
+// Quelle: Hormann & Agathos, *The Point in Polygon Problem for Arbitrary
+//   Polygons*, Comp. Geometry 2001 (Algorithm 6 / det-basierter wn-Zaehler).
+//   https://www.inf.usi.ch/hormann/papers/Hormann.2001.TPI.pdf
+//
+// `polygon`: Array von {x, y}-Punkten (offen ODER geschlossen — letztes==erstes
+//   wird toleriert). Mindestens 3 Eckpunkte.
+//
+// `isLeft`: > 0 wenn (px,py) links von der gerichteten Kante a->b liegt, < 0
+// rechts, == 0 exakt AUF der Kantengeraden (kollinear).
+function isLeft(ax, ay, bx, by, px, py) {
+  return (bx - ax) * (py - ay) - (px - ax) * (by - ay);
+}
+
+// Reine Umlaufzahl (ohne Boundary-Sonderbehandlung).
+export function windingNumber(px, py, polygon) {
+  if (!polygon || polygon.length < 3) return 0;
+  let wn = 0;
+  const n = polygon.length;
+  // Geschlossen-Toleranz: wenn letzter == erster Punkt, diesen nicht doppelt zaehlen.
+  const last = polygon[n - 1], first = polygon[0];
+  const m = (last.x === first.x && last.y === first.y) ? n - 1 : n;
+  for (let i = 0; i < m; i++) {
+    const a = polygon[i];
+    const b = polygon[(i + 1) % m];
+    if (a.y <= py) {
+      // aufsteigende Kante kreuzt den Strahl nach rechts?
+      if (b.y > py && isLeft(a.x, a.y, b.x, b.y, px, py) > 0) wn++;
+    } else {
+      // absteigende Kante kreuzt den Strahl nach rechts?
+      if (b.y <= py && isLeft(a.x, a.y, b.x, b.y, px, py) < 0) wn--;
+    }
+  }
+  return wn;
+}
+
+// Punkt-auf-Kante-Test: liegt (px,py) exakt AUF einem Polygon-Segment? Hex-
+// Zellzentren liegen oft EXAKT auf einer gezeichneten Linie (Normalfall, nicht
+// Sonderfall — Audit Mathe TEIL B(b) / Adversarial B1) -> eigener robuster Zweig.
+// kollinear (isLeft==0) UND innerhalb der Bounding-Box des Segments.
+function onSegment(ax, ay, bx, by, px, py) {
+  if (isLeft(ax, ay, bx, by, px, py) !== 0) return false;
+  // Bounding-Box-Inklusion (deckt auch entartete Punkt-Segmente a==b ab).
+  return px >= Math.min(ax, bx) && px <= Math.max(ax, bx)
+    && py >= Math.min(ay, by) && py <= Math.max(ay, by);
+}
+
+// Punkt-in-Polygon mit explizitem Boundary-Branch: Punkt AUF einer Kante zaehlt
+// als INNEN (Konvention fuer die Domaenen-Maske — eine gezeichnete Grenzlinie
+// soll dazugehoeren). Sonst: nonzero-Winding (wn != 0 => innen).
+//   Rueckgabe: true = innen ODER auf dem Rand; false = aussen.
+export function pointInPolygonWN(px, py, polygon) {
+  if (!polygon || polygon.length < 3) return false;
+  const n = polygon.length;
+  const last = polygon[n - 1], first = polygon[0];
+  const m = (last.x === first.x && last.y === first.y) ? n - 1 : n;
+  // 1) Boundary-Branch zuerst (Punkt-auf-Kante == innen).
+  for (let i = 0; i < m; i++) {
+    const a = polygon[i], b = polygon[(i + 1) % m];
+    if (onSegment(a.x, a.y, b.x, b.y, px, py)) return true;
+  }
+  // 2) nonzero-Winding.
+  return windingNumber(px, py, polygon) !== 0;
+}

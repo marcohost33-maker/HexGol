@@ -138,12 +138,18 @@ export async function shareOrDownloadBlob(blob, filename, opts = {}) {
       await nav.share(payload);
       return { method: "share", shared: true };
     } catch (e) {
-      // AbortError = User hat das Share-Sheet geschlossen. Nicht als Fehler werten,
-      // aber auch NICHT automatisch downloaden (er wollte ja nicht teilen).
-      if (e && (e.name === "AbortError" || e.name === "NotAllowedError")) {
+      // AbortError = User hat das Share-Sheet bewusst geschlossen. Echte Geste:
+      // nicht als Fehler werten und NICHT automatisch downloaden (er wollte nicht
+      // teilen) -> cancelled.
+      if (e && e.name === "AbortError") {
         return { method: "share", shared: false, cancelled: true };
       }
-      // Anderer Fehler (z.B. share() warf trotz canShare) -> Download-Fallback.
+      // Audit #8 (iOS-Degradation, adactio/bitsrc): NotAllowedError ist KEINE
+      // Nutzer-Absage, sondern ein gebrochener Gesten-Kontext (toBlob ist async,
+      // iOS verliert die User-Aktivierung). Frueher wurde das faelschlich als
+      // "abgebrochen" gemeldet. Korrekt: in den Download-Fallback degradieren,
+      // damit der Nutzer das Bild trotzdem bekommt.
+      // Jeder andere Fehler (share() warf trotz canShare) -> ebenfalls Fallback.
     }
   }
 

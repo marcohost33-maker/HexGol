@@ -201,10 +201,21 @@ field, while the circle uses an **explicit radius** (see above):
 | **Kreis** (circle) | disc of the chosen radius (10–500, default 250), clamped to the inscribed maximum | antipodal identification = real projective plane (RP²) |
 | **Hexagon** | exact regular hexagon via cube-coord hex distance (`hexDist ≤ r`); 6 corners are `r` steps along the 6 cube directions, derived from the mask (corner-BBox == mask-BBox, verified) | bounded (no wrap) |
 | **Dreieck** (triangle) | equilateral, point-up, via three half-plane sign tests | bounded (no wrap) |
+| **Ellipse** (v33 PR-E) | world-space test `((x−cx)/a)² + ((y−cy)/b)² ≤ 1` with two half-axes `a` (horizontal) / `b` (vertical), each clamped to the grid (fail-closed); `a = b` is exactly a circle | bounded (no wrap) |
+| **Frei** (freeform, v33 PR-E) | user-drawn polygon; mask via **winding-number** (Hormann-Agathos 2001), point-on-edge counts as inside — correct even for self-intersecting shapes (where even-odd fails). Press **Zeichnen**, then drag a closed stroke on the field | bounded (no wrap) |
 
 The hexagon outline and mask share one source of truth
 (`src/lib/hex-geom.js`); the cell count is an exact centered-hexagonal number
-`1 + 3r(r+1)` (unit-tested in `tests/unit/hex-geom.test.js`).
+`1 + 3r(r+1)` (unit-tested in `tests/unit/hex-geom.test.js`). The ellipse and
+freeform outlines are likewise drawn from the same parameters/polygon as their
+masks (outline == mask). Ellipse + freeform masks are unit-tested against
+independent oracles (analytic ellipse area; winding-vs-even-odd on a star
+polygon) in `tests/unit/pr-e-ellipse-freeform.test.js`.
+
+**Ellipse controls:** two sliders **Achse a** (horizontal) / **Achse b**
+(vertical), 5–500 grid steps. **Freeform controls:** **Zeichnen** toggles draw
+mode; drag a closed stroke on the canvas (released stroke closes the polygon and
+builds the mask); **Leeren** clears the drawn shape.
 
 ### Touch / pointer controls
 

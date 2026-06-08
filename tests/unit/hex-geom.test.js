@@ -191,4 +191,23 @@ describe("sectorByAngle (Disk-Faerbung): Winkel-Sektoren, Zentrum stabil", () =>
   it("k=1 -> Sektor 0 fuer alle Zellen", () => {
     for (const cell of cubeDisk(CENTER, 3)) expect(sectorByAngle(cell, CENTER, 1, wx, wy)).toBe(0);
   });
+  // Audit #6 (Silent-Failure-Gate an oeffentlicher Funktionsgrenze): k > Palette
+  // (typische Palette ist k<=3) ODER nicht-ganzzahliges k von EXTERNEN Aufrufern
+  // darf den Index NIE aus [0, k-1] schieben (Math.min(k-1, ...)-Clamp muss greifen).
+  it("Defensiv: k > Palette (z.B. 12/100) + nicht-ganzzahliges k -> Index in [0, k-1]", () => {
+    for (const k of [12, 100, 2.7, 5.5, 7]) {
+      for (const cell of cubeDisk(CENTER, 5)) {
+        const s = sectorByAngle(cell, CENTER, k, wx, wy);
+        expect(s).toBeGreaterThanOrEqual(0);
+        expect(s).toBeLessThanOrEqual(k - 1);
+      }
+    }
+  });
+  it("Defensiv: ganzzahliges k > Palette -> Sektor-Index ist ganzzahlig", () => {
+    for (const k of [12, 24, 100]) {
+      for (const cell of cubeDisk(CENTER, 4)) {
+        expect(Number.isInteger(sectorByAngle(cell, CENTER, k, wx, wy))).toBe(true);
+      }
+    }
+  });
 });
