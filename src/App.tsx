@@ -1234,7 +1234,12 @@ export default function GolHex() {
     if (ov.width !== w || ov.height !== h) { ov.width = w; ov.height = h; ov.style.width = cw + "px"; ov.style.height = ch + "px"; }
     const v = viewRef.current, g = gridRef.current;
     // Redraw-Guard: nur neu zeichnen, wenn sich View/Frame/Grid wirklich änderten.
-    const sig = `${w}x${h}|${v.s.toFixed(4)}|${v.tx.toFixed(2)}|${v.ty.toFixed(2)}|${frameShape}|${g.rows}x${g.cols}|${circleRadius}|${ellipseA}|${ellipseB}|${freeformPolygon.length}`;
+    // Codex-Review P2-A: Freiform-Draft + Polygon-Endpunkt mit in die Signatur, sonst
+    // friert die gestrichelte Live-Vorschau bei gleicher Punktzahl ein.
+    const draft = freeformDraftRef.current;
+    const dlast = draft && draft.length ? draft[draft.length - 1] : null;
+    const plast = freeformPolygon.length ? freeformPolygon[freeformPolygon.length - 1] : null;
+    const sig = `${w}x${h}|${v.s.toFixed(4)}|${v.tx.toFixed(2)}|${v.ty.toFixed(2)}|${frameShape}|${g.rows}x${g.cols}|${circleRadius}|${ellipseA}|${ellipseB}|${freeformPolygon.length}|${plast ? plast.x.toFixed(1) + "," + plast.y.toFixed(1) : "-"}|${draft ? draft.length : 0}|${dlast ? dlast.x.toFixed(1) + "," + dlast.y.toFixed(1) : "-"}`;
     if (!force && sig === overlaySigRef.current) return;
     overlaySigRef.current = sig;
     octx.setTransform(1, 0, 0, 1, 0, 0); octx.clearRect(0, 0, w, h);
@@ -1374,7 +1379,7 @@ export default function GolHex() {
     const { W, H } = worldSize(g.rows, g.cols, g.hr);
     const s = Math.min(cw / W, ch / H) * 0.98;
     viewRef.current = { s, fit: s, tx: (cw - W * s) / 2, ty: (ch - H * s) / 2 };
-    dirtyRef.current = true;
+    dirtyRef.current = true; syncWorkerView();
   }
 
   // --- Pointer / Gesten -----------------------------------------------------
@@ -1483,6 +1488,16 @@ export default function GolHex() {
       fld: fieldRef.current.slice().buffer, fim: fieldImRef.current.slice().buffer,
     });
   };
+  // v33.0.2 (Codex-Review P2-B): View-Transform an den Worker spiegeln. Ohne dies
+  // bewegten sich bei Pan/Zoom im Worker-Modus die Zellen NICHT (Worker bekam die
+  // View nur beim init) -> Umriss (Overlay nutzt viewRef) und Zellen drifteten
+  // auseinander. Jetzt steuern Zoom/Fit/Pan/Pinch/Wheel den Worker live mit.
+  const syncWorkerView = () => {
+    const w = workerRef.current;
+    if (!w || !workerActiveRef.current) return;
+    const v = viewRef.current;
+    w.postMessage({ type: "view", view: { s: v.s, tx: v.tx, ty: v.ty } });
+  };
 
   const onDown = (e) => {
     try { e.currentTarget.setPointerCapture?.(e.pointerId); } catch { /* synthetische Events / nicht aktive Pointer: ignorieren */ }
@@ -1581,7 +1596,7 @@ export default function GolHex() {
       const wx = (mx - v.tx) / v.s, wy = (my - v.ty) / v.s;
       v.tx = mx - wx * ns; v.ty = my - wy * ns; v.s = ns;
       if (ges.current.lastMid) { v.tx += mid.x - ges.current.lastMid.x; v.ty += mid.y - ges.current.lastMid.y; }
-      ges.current.lastMid = mid; dirtyRef.current = true; return;
+      ges.current.lastMid = mid; dirtyRef.current = true; syncWorkerView(); return;
     }
     // v33 PR-E: Freiform-Zeichnen — Punkte sammeln (Min-Abstand gegen Flut) +
     // Live-Vorschau ueber den Draft-Ref (von drawFrame gezeichnet).
@@ -1606,7 +1621,7 @@ export default function GolHex() {
         if (idx >= 0 && idx !== ges.current.lastCell) { paintCell(idx, false); ges.current.lastCell = idx; }
       } else {
         if (ges.current.moved > 6) ges.current.mode = "pan";
-        if (ges.current.mode === "pan") { viewRef.current.tx += e.clientX - prev.x; viewRef.current.ty += e.clientY - prev.y; dirtyRef.current = true; }
+        if (ges.current.mode === "pan") { viewRef.current.tx += e.clientX - prev.x; viewRef.current.ty += e.clientY - prev.y; dirtyRef.current = true; syncWorkerView(); }
       }
     }
   };
@@ -1655,7 +1670,7 @@ export default function GolHex() {
     const factor = Math.exp(-dy * k);                 // proportional + stetig
     const ns = clamp(v.s * factor, v.fit * 0.2, v.fit * 16);
     const wx = (mx - v.tx) / v.s, wy = (my - v.ty) / v.s;
-    v.tx = mx - wx * ns; v.ty = my - wy * ns; v.s = ns; dirtyRef.current = true;
+    v.tx = mx - wx * ns; v.ty = my - wy * ns; v.s = ns; dirtyRef.current = true; syncWorkerView();
   };
 
   // --- Aktionen -------------------------------------------------------------
@@ -2245,7 +2260,7 @@ export default function GolHex() {
     const v = viewRef.current, dpr = window.devicePixelRatio || 1;
     const cw = canvasRef.current.width / dpr, ch = canvasRef.current.height / dpr, mx = cw / 2, my = ch / 2;
     const ns = clamp(v.s * f, v.fit * 0.2, v.fit * 16);
-    const wx = (mx - v.tx) / v.s, wy = (my - v.ty) / v.s; v.tx = mx - wx * ns; v.ty = my - wy * ns; v.s = ns; dirtyRef.current = true;
+    const wx = (mx - v.tx) / v.s, wy = (my - v.ty) / v.s; v.tx = mx - wx * ns; v.ty = my - wy * ns; v.s = ns; dirtyRef.current = true; syncWorkerView();
   };
 
   // --- Fonts ---------------------------------------------------------------
