@@ -505,6 +505,9 @@ export default function GolHex() {
 
   const viewRef = useRef({ s: 1, tx: 0, ty: 0, fit: 1 });
   const canvasRef = useRef(null);
+  const overlayRef = useRef(null); // v33.0.2: Rahmen-Umriss-Overlay (immer Main-Thread,
+  // auch wenn die Feld-Canvas an den Worker übergeben ist -> Umriss bleibt sichtbar)
+  const overlaySigRef = useRef(""); // Redraw-Guard: nur bei View-/Frame-/Grid-Änderung
   const wrapRef = useRef(null);
   const refitRef = useRef(null); // AP-4: aktuelle fit()-Funktion (Layout-Reflow-Refit)
   const undoRef = useRef([]);
@@ -1211,11 +1214,43 @@ export default function GolHex() {
     }
   }, []);
 
+  // v33.0.2: Rahmen-Umriss auf das Overlay zeichnen — NUR im Worker-Modus nötig
+  // (dort besitzt der Worker die Feld-Canvas und zeichnet den dünnen Umriss nicht;
+  // die Zellen zeigen zwar die Form, aber bei leerem Feld fehlte jede Rahmen-Linie).
+  // Eine Quelle der Wahrheit: dieselbe drawFrame() wie der Main-Thread, nur auf eine
+  // separate, immer-Main-Thread Overlay-Canvas mit identischer View-Transform.
+  const drawOverlayOutline = useCallback((force) => {
+    const ov = overlayRef.current; if (!ov) return;
+    const active = workerActiveRef.current;
+    const octx = ov.getContext("2d"); if (!octx) return;
+    if (!active) {
+      // Main-Thread-Pfad zeichnet den Umriss selbst auf die Feld-Canvas -> Overlay leer.
+      if (overlaySigRef.current !== "") { octx.setTransform(1, 0, 0, 1, 0, 0); octx.clearRect(0, 0, ov.width, ov.height); overlaySigRef.current = ""; }
+      return;
+    }
+    const dpr = window.devicePixelRatio || 1;
+    const { cw, ch } = canvasCssSize();
+    const w = Math.round(cw * dpr), h = Math.round(ch * dpr);
+    if (ov.width !== w || ov.height !== h) { ov.width = w; ov.height = h; ov.style.width = cw + "px"; ov.style.height = ch + "px"; }
+    const v = viewRef.current, g = gridRef.current;
+    // Redraw-Guard: nur neu zeichnen, wenn sich View/Frame/Grid wirklich änderten.
+    const sig = `${w}x${h}|${v.s.toFixed(4)}|${v.tx.toFixed(2)}|${v.ty.toFixed(2)}|${frameShape}|${g.rows}x${g.cols}|${circleRadius}|${ellipseA}|${ellipseB}|${freeformPolygon.length}`;
+    if (!force && sig === overlaySigRef.current) return;
+    overlaySigRef.current = sig;
+    octx.setTransform(1, 0, 0, 1, 0, 0); octx.clearRect(0, 0, w, h);
+    octx.setTransform(dpr * v.s, 0, 0, dpr * v.s, dpr * v.tx, dpr * v.ty);
+    drawFrame(octx, v.s);
+    octx.setTransform(1, 0, 0, 1, 0, 0);
+  }, [drawFrame, frameShape, circleRadius, ellipseA, ellipseB, freeformPolygon]);
+
   // --- Loop -----------------------------------------------------------------
   useEffect(() => {
     let raf, last = performance.now(), acc = 0;
     const loop = (now) => {
       const dt = now - last; last = now;
+      // v33.0.2: Rahmen-Umriss-Overlay aktuell halten (zeichnet nur im Worker-Modus,
+      // leert sich im Main-Modus selbst; Redraw-Guard verhindert Arbeit pro Frame).
+      drawOverlayOutline();
       // Worker aktiv ODER beabsichtigt: Sim + Render laufen off-main-thread -> die
       // Main-Loop macht hier nichts. workerModeRef deckt das Zeitfenster zwischen
       // transferControlToOffscreen und der "ready"-Meldung ab: in diesem Fenster ist
@@ -1245,7 +1280,7 @@ export default function GolHex() {
     };
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
-  }, [step, draw]);
+  }, [step, draw, drawOverlayOutline]);
 
   // Statistik + Zoom-Label (throttled, 250ms)
   useEffect(() => {
@@ -3027,6 +3062,15 @@ export default function GolHex() {
         <canvas key={canvasKey} ref={canvasRef} onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp}
           onContextMenu={(e) => e.preventDefault()}
           style={{ display: "block", touchAction: "none", cursor: brush === "cycle" ? "pointer" : "crosshair" }} />
+        {/* v33.0.2: Rahmen-Umriss-Overlay. Liegt über der Feld-Canvas, leitet keine
+            Pointer-Events ab (transparent). Nötig, weil im Worker-Modus die Feld-Canvas
+            an den Worker übergeben ist und der Worker den dünnen Umriss nicht zeichnet.
+            NUR im Worker-Modus gemountet -> im Main-Modus bleibt es bei EINER Canvas
+            (Kontrakt/Visual-Baselines unberührt; der Main-Pfad zeichnet den Umriss selbst). */}
+        {workerMode && (
+          <canvas ref={overlayRef} aria-hidden="true"
+            style={{ position: "absolute", inset: 0, zIndex: 5, pointerEvents: "none" }} />
+        )}
         {/* AP-3: Long-Press-Farbrad. Radiale 12-Farb-Auswahl, zentriert auf dem
             Druckpunkt; deckt die Leinwand mit einem Abbruch-Layer (Tipp ausserhalb
             schliesst ohne Auswahl). Erscheint NUR bei aktivem Long-Press -> nicht

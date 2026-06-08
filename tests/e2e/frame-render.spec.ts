@@ -52,6 +52,23 @@ test.describe("GolHex Rahmen-Render (v33 Regression)", () => {
     expect(errors).toEqual([]);
   });
 
+  // v33.0.2: Worker-Outline. Im Worker-Modus (Kreis-Default) zeichnet der Worker
+  // den dünnen Rahmen-Umriss NICHT -> Overlay-Canvas (Main-Thread) übernimmt. Auf
+  // LEEREM Feld muss der Umriss trotzdem sichtbar sein (vorher: komplett blank).
+  test("Worker-Modus: Rahmen-Umriss sichtbar auch auf leerem Feld (Overlay)", async ({ page }) => {
+    await page.goto("/"); await page.waitForTimeout(400);
+    // Referenz: leeres Box-Default (klein) — wie viel "Chrome" ist ohne Umriss da?
+    await page.getByRole("button", { name: "Tab 3 Hex-Regeln" }).click(); await page.waitForTimeout(120);
+    await page.getByRole("button", { name: "Kreis", exact: true }).click(); await page.waitForTimeout(300);
+    await page.getByRole("button", { name: "Tab 3 Hex-Regeln" }).click(); await page.waitForTimeout(120);
+    await page.getByRole("button", { name: "Leeren", exact: true }).click(); await page.waitForTimeout(400);
+    // Feld-Bereich (Wrap = Feld-Canvas + Overlay) screenshotten -> Umriss = Inhalt.
+    const shot = (await page.locator(".ghx-canvas").screenshot()).length;
+    // Ein leeres Feld OHNE Umriss komprimiert sehr klein (~7-9 KB). Mit teal-Kreis
+    // deutlich grösser. Schwelle konservativ.
+    expect(shot, `Umriss auf leerem Worker-Feld sichtbar (PNG ${shot}B)`).toBeGreaterThan(11000);
+  });
+
   test("Ellipse + Freiform-Rahmen rendern sichtbar (Main-Thread)", async ({ page }) => {
     await page.goto("/"); await page.waitForTimeout(400);
     await pickShapeRandom(page, "Ellipse");

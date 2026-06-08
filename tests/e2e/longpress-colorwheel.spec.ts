@@ -252,7 +252,7 @@ test.describe("GolHex AP-3 Long-Press-Farbrad", () => {
 
     // Worker rendert weiter ohne Fehler (state-Update verarbeitet).
     await page.waitForTimeout(300);
-    await expect(page.locator("canvas")).toHaveCount(1);
+    await expect(page.locator('canvas:not([aria-hidden="true"])')).toHaveCount(1);
     expect(errors, "keine Fehler im Worker-Pfad bei Long-Press-Auswahl").toEqual([]);
   });
 
@@ -269,7 +269,7 @@ test.describe("GolHex AP-3 Long-Press-Farbrad", () => {
     await page.getByRole("button", { name: "Leeren", exact: true }).click();
     await page.waitForTimeout(200);
 
-    const cbox = await page.locator("canvas").boundingBox();
+    const cbox = await page.locator("canvas").first().boundingBox();
     const DX = Math.round(cbox!.width / 2), DY = Math.round(cbox!.height / 2);
     const RED = [255, 0, 0]; // CR = rgb(255,0,0) (Itten-Rot, sim-engine COLA[CR])
     // Vorzustand: keine roten Pixel um den Druckpunkt (leere Leinwand).

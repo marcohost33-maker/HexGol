@@ -45,7 +45,7 @@ test.describe("GolHex v33 1-Seiten-Mobile-Layout (390x844)", () => {
     expect(scrollableY, `kein vertikaler Scroll (scrollH=${scrollH}, clientH=${clientH})`).toBeLessThanOrEqual(4);
 
     // (b) Kern-Controls im Viewport sichtbar (Startansicht, kein Panel offen).
-    const canvas = page.locator("canvas");
+    const canvas = page.locator("canvas").first();
     const start = page.getByRole("button", { name: "Start", exact: true });
     const schritt = page.getByRole("button", { name: "Schritt", exact: true });
     const random = page.getByRole("button", { name: "Random", exact: true });

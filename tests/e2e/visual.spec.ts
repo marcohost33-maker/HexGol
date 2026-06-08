@@ -12,7 +12,7 @@ test.describe("GolHex v29L.2 visual baselines", () => {
     // fester Default-Seed -> Random ist reproduzierbar (kein Wuerfeln)
     await page.getByRole("button", { name: "Random", exact: true }).click();
     await page.waitForTimeout(500);
-    await expect(page.locator("canvas")).toHaveScreenshot("life-random-default.png");
+    await expect(page.locator("canvas").first()).toHaveScreenshot("life-random-default.png");
   });
 
   test("XXL + Kreis-Rahmen (ImageData-Raster-Pfad, statisch)", async ({ page }) => {
@@ -26,6 +26,6 @@ test.describe("GolHex v29L.2 visual baselines", () => {
     await page.getByRole("button", { name: "Kreis", exact: true }).click();
     await page.getByRole("button", { name: "Tab 3 Hex-Regeln" }).click(); // Panel zu
     await page.waitForTimeout(600);
-    await expect(page.locator("canvas")).toHaveScreenshot("xxl-circle-frame.png");
+    await expect(page.locator("canvas").first()).toHaveScreenshot("xxl-circle-frame.png");
   });
 });
