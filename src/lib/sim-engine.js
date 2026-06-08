@@ -601,6 +601,14 @@ const RVAL_RULES = [
 // Wert + gamma; nichtrezeptive diffundieren (Laplace, rezeptive Nachbarn = 0,
 // Rand = Selbstwert mit korrektem Divisor). Vorab-Pass fuer Rezeptivitaet, damit
 // die Diffusionsnachbarn konsistent klassifiziert sind (Paritaet mit Referenz).
+// BEKANNTE ABWEICHUNG vom kanonischen Reiter (Chaos Solitons Fractals 23): dort
+// faengt eine rezeptive Zelle den EINSTROEMENDEN Diffusionsanteil ihrer nicht-
+// rezeptiven Nachbarn mit auf (s' = s + gamma + diffundiert-ein), womit das Modell
+// bis auf den gamma-Term massenerhaltend ist. Hier ist ns = s + gamma OHNE den
+// Einstrom -> die Gesamtmasse ist NICHT erhalten (sie sinkt am Eisrand). Das
+// monotone Eiswachstum bleibt korrekt (Invariante in tests/unit/rval-physics).
+// Bewusst belassen (Aesthetik der bisherigen "Schnee"-Optik); ein Umstieg auf die
+// massenerhaltende Variante waere eine sichtbare Verhaltensaenderung -> eigener PR.
 function stepReiter(s, NL, alpha, gamma, buf, recBuf) {
   const n = s.length, ns = buf, rec = recBuf;
   for (let i = 0; i < n; i++) {
