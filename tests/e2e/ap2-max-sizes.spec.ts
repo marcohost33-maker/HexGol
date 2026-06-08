@@ -30,7 +30,7 @@ test.describe("GolHex AP-2 max sizes", () => {
 
     // Grid baut (Canvas lebt) + ehrlicher Speicher-Hinweis sichtbar (fail-closed).
     // Der Hinweis nennt die Zellzahl; auf de-CH ist der Tausender-Trenner U+2019.
-    await expect(page.locator("canvas")).toHaveCount(1);
+    await expect(page.locator('canvas:not([aria-hidden="true"])')).toHaveCount(1);
     await expect(page.getByText(/Sehr grosses Gitter/)).toBeVisible();
     await expect(page.getByText(/Auf aelteren Handys/)).toBeVisible();
     expect(errors, "keine Fehler beim 5XL-Aufbau").toEqual([]);
@@ -52,7 +52,7 @@ test.describe("GolHex AP-2 max sizes", () => {
     for (const v of ["5", "6", "7"]) {
       await sizeSel.selectOption(v);
       await page.waitForTimeout(350);
-      await expect(page.locator("canvas")).toHaveCount(1);
+      await expect(page.locator('canvas:not([aria-hidden="true"])')).toHaveCount(1);
     }
     expect(errors, "keine Fehler beim Aufbau der neuen Stufen").toEqual([]);
   });
@@ -81,14 +81,14 @@ test.describe("GolHex AP-2 max sizes", () => {
     await num.blur();
     await page.waitForTimeout(300);
     await expect(num).toHaveValue("60");
-    await expect(page.locator("canvas")).toHaveCount(1);
+    await expect(page.locator('canvas:not([aria-hidden="true"])')).toHaveCount(1);
 
     // mittlerer Radius -> groesseres Grid, weiter stabil.
     await num.fill("120");
     await num.blur();
     await page.waitForTimeout(400);
     await expect(num).toHaveValue("120");
-    await expect(page.locator("canvas")).toHaveCount(1);
+    await expect(page.locator('canvas:not([aria-hidden="true"])')).toHaveCount(1);
 
     // Hinweis: Klemmen >500 -> 500 ist im Unit-Test belegt (ap2-sizes.test.js);
     // das schwere r=500-Grid wird headless in ap2-instantiation.mjs tool-belegt

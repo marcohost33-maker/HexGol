@@ -505,6 +505,9 @@ export default function GolHex() {
 
   const viewRef = useRef({ s: 1, tx: 0, ty: 0, fit: 1 });
   const canvasRef = useRef(null);
+  const overlayRef = useRef(null); // v33.0.2: Rahmen-Umriss-Overlay (immer Main-Thread,
+  // auch wenn die Feld-Canvas an den Worker übergeben ist -> Umriss bleibt sichtbar)
+  const overlaySigRef = useRef(""); // Redraw-Guard: nur bei View-/Frame-/Grid-Änderung
   const wrapRef = useRef(null);
   const refitRef = useRef(null); // AP-4: aktuelle fit()-Funktion (Layout-Reflow-Refit)
   const undoRef = useRef([]);
@@ -1211,11 +1214,48 @@ export default function GolHex() {
     }
   }, []);
 
+  // v33.0.2: Rahmen-Umriss auf das Overlay zeichnen — NUR im Worker-Modus nötig
+  // (dort besitzt der Worker die Feld-Canvas und zeichnet den dünnen Umriss nicht;
+  // die Zellen zeigen zwar die Form, aber bei leerem Feld fehlte jede Rahmen-Linie).
+  // Eine Quelle der Wahrheit: dieselbe drawFrame() wie der Main-Thread, nur auf eine
+  // separate, immer-Main-Thread Overlay-Canvas mit identischer View-Transform.
+  const drawOverlayOutline = useCallback((force) => {
+    const ov = overlayRef.current; if (!ov) return;
+    const active = workerActiveRef.current;
+    const octx = ov.getContext("2d"); if (!octx) return;
+    if (!active) {
+      // Main-Thread-Pfad zeichnet den Umriss selbst auf die Feld-Canvas -> Overlay leer.
+      if (overlaySigRef.current !== "") { octx.setTransform(1, 0, 0, 1, 0, 0); octx.clearRect(0, 0, ov.width, ov.height); overlaySigRef.current = ""; }
+      return;
+    }
+    const dpr = window.devicePixelRatio || 1;
+    const { cw, ch } = canvasCssSize();
+    const w = Math.round(cw * dpr), h = Math.round(ch * dpr);
+    if (ov.width !== w || ov.height !== h) { ov.width = w; ov.height = h; ov.style.width = cw + "px"; ov.style.height = ch + "px"; }
+    const v = viewRef.current, g = gridRef.current;
+    // Redraw-Guard: nur neu zeichnen, wenn sich View/Frame/Grid wirklich änderten.
+    // Codex-Review P2-A: Freiform-Draft + Polygon-Endpunkt mit in die Signatur, sonst
+    // friert die gestrichelte Live-Vorschau bei gleicher Punktzahl ein.
+    const draft = freeformDraftRef.current;
+    const dlast = draft && draft.length ? draft[draft.length - 1] : null;
+    const plast = freeformPolygon.length ? freeformPolygon[freeformPolygon.length - 1] : null;
+    const sig = `${w}x${h}|${v.s.toFixed(4)}|${v.tx.toFixed(2)}|${v.ty.toFixed(2)}|${frameShape}|${g.rows}x${g.cols}|${circleRadius}|${ellipseA}|${ellipseB}|${freeformPolygon.length}|${plast ? plast.x.toFixed(1) + "," + plast.y.toFixed(1) : "-"}|${draft ? draft.length : 0}|${dlast ? dlast.x.toFixed(1) + "," + dlast.y.toFixed(1) : "-"}`;
+    if (!force && sig === overlaySigRef.current) return;
+    overlaySigRef.current = sig;
+    octx.setTransform(1, 0, 0, 1, 0, 0); octx.clearRect(0, 0, w, h);
+    octx.setTransform(dpr * v.s, 0, 0, dpr * v.s, dpr * v.tx, dpr * v.ty);
+    drawFrame(octx, v.s);
+    octx.setTransform(1, 0, 0, 1, 0, 0);
+  }, [drawFrame, frameShape, circleRadius, ellipseA, ellipseB, freeformPolygon]);
+
   // --- Loop -----------------------------------------------------------------
   useEffect(() => {
     let raf, last = performance.now(), acc = 0;
     const loop = (now) => {
       const dt = now - last; last = now;
+      // v33.0.2: Rahmen-Umriss-Overlay aktuell halten (zeichnet nur im Worker-Modus,
+      // leert sich im Main-Modus selbst; Redraw-Guard verhindert Arbeit pro Frame).
+      drawOverlayOutline();
       // Worker aktiv ODER beabsichtigt: Sim + Render laufen off-main-thread -> die
       // Main-Loop macht hier nichts. workerModeRef deckt das Zeitfenster zwischen
       // transferControlToOffscreen und der "ready"-Meldung ab: in diesem Fenster ist
@@ -1245,7 +1285,7 @@ export default function GolHex() {
     };
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
-  }, [step, draw]);
+  }, [step, draw, drawOverlayOutline]);
 
   // Statistik + Zoom-Label (throttled, 250ms)
   useEffect(() => {
@@ -1339,7 +1379,7 @@ export default function GolHex() {
     const { W, H } = worldSize(g.rows, g.cols, g.hr);
     const s = Math.min(cw / W, ch / H) * 0.98;
     viewRef.current = { s, fit: s, tx: (cw - W * s) / 2, ty: (ch - H * s) / 2 };
-    dirtyRef.current = true;
+    dirtyRef.current = true; syncWorkerView();
   }
 
   // --- Pointer / Gesten -----------------------------------------------------
@@ -1448,6 +1488,16 @@ export default function GolHex() {
       fld: fieldRef.current.slice().buffer, fim: fieldImRef.current.slice().buffer,
     });
   };
+  // v33.0.2 (Codex-Review P2-B): View-Transform an den Worker spiegeln. Ohne dies
+  // bewegten sich bei Pan/Zoom im Worker-Modus die Zellen NICHT (Worker bekam die
+  // View nur beim init) -> Umriss (Overlay nutzt viewRef) und Zellen drifteten
+  // auseinander. Jetzt steuern Zoom/Fit/Pan/Pinch/Wheel den Worker live mit.
+  const syncWorkerView = () => {
+    const w = workerRef.current;
+    if (!w || !workerActiveRef.current) return;
+    const v = viewRef.current;
+    w.postMessage({ type: "view", view: { s: v.s, tx: v.tx, ty: v.ty } });
+  };
 
   const onDown = (e) => {
     try { e.currentTarget.setPointerCapture?.(e.pointerId); } catch { /* synthetische Events / nicht aktive Pointer: ignorieren */ }
@@ -1546,7 +1596,7 @@ export default function GolHex() {
       const wx = (mx - v.tx) / v.s, wy = (my - v.ty) / v.s;
       v.tx = mx - wx * ns; v.ty = my - wy * ns; v.s = ns;
       if (ges.current.lastMid) { v.tx += mid.x - ges.current.lastMid.x; v.ty += mid.y - ges.current.lastMid.y; }
-      ges.current.lastMid = mid; dirtyRef.current = true; return;
+      ges.current.lastMid = mid; dirtyRef.current = true; syncWorkerView(); return;
     }
     // v33 PR-E: Freiform-Zeichnen — Punkte sammeln (Min-Abstand gegen Flut) +
     // Live-Vorschau ueber den Draft-Ref (von drawFrame gezeichnet).
@@ -1571,7 +1621,7 @@ export default function GolHex() {
         if (idx >= 0 && idx !== ges.current.lastCell) { paintCell(idx, false); ges.current.lastCell = idx; }
       } else {
         if (ges.current.moved > 6) ges.current.mode = "pan";
-        if (ges.current.mode === "pan") { viewRef.current.tx += e.clientX - prev.x; viewRef.current.ty += e.clientY - prev.y; dirtyRef.current = true; }
+        if (ges.current.mode === "pan") { viewRef.current.tx += e.clientX - prev.x; viewRef.current.ty += e.clientY - prev.y; dirtyRef.current = true; syncWorkerView(); }
       }
     }
   };
@@ -1620,7 +1670,7 @@ export default function GolHex() {
     const factor = Math.exp(-dy * k);                 // proportional + stetig
     const ns = clamp(v.s * factor, v.fit * 0.2, v.fit * 16);
     const wx = (mx - v.tx) / v.s, wy = (my - v.ty) / v.s;
-    v.tx = mx - wx * ns; v.ty = my - wy * ns; v.s = ns; dirtyRef.current = true;
+    v.tx = mx - wx * ns; v.ty = my - wy * ns; v.s = ns; dirtyRef.current = true; syncWorkerView();
   };
 
   // --- Aktionen -------------------------------------------------------------
@@ -2210,7 +2260,7 @@ export default function GolHex() {
     const v = viewRef.current, dpr = window.devicePixelRatio || 1;
     const cw = canvasRef.current.width / dpr, ch = canvasRef.current.height / dpr, mx = cw / 2, my = ch / 2;
     const ns = clamp(v.s * f, v.fit * 0.2, v.fit * 16);
-    const wx = (mx - v.tx) / v.s, wy = (my - v.ty) / v.s; v.tx = mx - wx * ns; v.ty = my - wy * ns; v.s = ns; dirtyRef.current = true;
+    const wx = (mx - v.tx) / v.s, wy = (my - v.ty) / v.s; v.tx = mx - wx * ns; v.ty = my - wy * ns; v.s = ns; dirtyRef.current = true; syncWorkerView();
   };
 
   // --- Fonts ---------------------------------------------------------------
@@ -3027,6 +3077,15 @@ export default function GolHex() {
         <canvas key={canvasKey} ref={canvasRef} onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp}
           onContextMenu={(e) => e.preventDefault()}
           style={{ display: "block", touchAction: "none", cursor: brush === "cycle" ? "pointer" : "crosshair" }} />
+        {/* v33.0.2: Rahmen-Umriss-Overlay. Liegt über der Feld-Canvas, leitet keine
+            Pointer-Events ab (transparent). Nötig, weil im Worker-Modus die Feld-Canvas
+            an den Worker übergeben ist und der Worker den dünnen Umriss nicht zeichnet.
+            NUR im Worker-Modus gemountet -> im Main-Modus bleibt es bei EINER Canvas
+            (Kontrakt/Visual-Baselines unberührt; der Main-Pfad zeichnet den Umriss selbst). */}
+        {workerMode && (
+          <canvas ref={overlayRef} aria-hidden="true"
+            style={{ position: "absolute", inset: 0, zIndex: 5, pointerEvents: "none" }} />
+        )}
         {/* AP-3: Long-Press-Farbrad. Radiale 12-Farb-Auswahl, zentriert auf dem
             Druckpunkt; deckt die Leinwand mit einem Abbruch-Layer (Tipp ausserhalb
             schliesst ohne Auswahl). Erscheint NUR bei aktivem Long-Press -> nicht

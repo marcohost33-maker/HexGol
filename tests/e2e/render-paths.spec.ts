@@ -43,7 +43,7 @@ test.describe("GolHex v31 render-path coexistence", () => {
     await page.waitForTimeout(400);
 
     // Canvas lebt weiterhin, keine Fehler aus dem zusammengefuehrten Render-Pfad.
-    await expect(page.locator("canvas")).toHaveCount(1);
+    await expect(page.locator('canvas:not([aria-hidden="true"])')).toHaveCount(1);
     expect(errors, "keine Konsolen-/Page-Fehler im Render-Pfad").toEqual([]);
   });
 });

@@ -17,7 +17,7 @@ test.describe("GolHex v33 smoke", () => {
     await page.waitForTimeout(800);
 
     // App mountet (Canvas-Renderer da)
-    await expect(page.locator("canvas")).toHaveCount(1);
+    await expect(page.locator('canvas:not([aria-hidden="true"])')).toHaveCount(1);
 
     // v33 Top-Leiste: 4 inhaltliche Tabs vorhanden.
     for (const t of ["Tab 1 Farben", "Tab 2 Formen", "Tab 3 Hex-Regeln", "Tab 4 Physik"]) {

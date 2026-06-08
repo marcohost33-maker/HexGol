@@ -65,7 +65,7 @@ test.describe("GolHex AP-1 OffscreenCanvas worker", () => {
     // Canvas lebt, Main-Thread-Sim laeuft wieder (kurz starten).
     await page.getByRole("button", { name: "Start", exact: true }).click();
     await page.waitForTimeout(500);
-    await expect(page.locator("canvas")).toHaveCount(1);
+    await expect(page.locator('canvas:not([aria-hidden="true"])')).toHaveCount(1);
 
     expect(errors, "keine Konsolen-/Page-Fehler im Worker-Pfad").toEqual([]);
   });
