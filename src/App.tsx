@@ -30,6 +30,36 @@ import {
 // unveraendert weiterlaufen (PR#41-Kontrakt, named exports, export-only).
 export { buildNeighbors, mkHqstWork, stepHQST };
 
+// --- HQST-Parameter + Divergenz-Schranke (v33 PR-E / Mathe-Audit P1.4) -------
+// Tight-Binding-Parameter der HQST-Quantenwelle (siehe stepHQST-Aufruf in step()).
+// J = Hopping, V = On-Site-Potential, dt = Zeitschritt. Hier ZENTRAL benannt,
+// damit die Divergenz-Schranke unten nachweislich aus DIESEN Annahmen folgt
+// (statt einer magischen 1e4).
+const HQST_J = 0.15, HQST_V = 0.0, HQST_DT = 0.5;
+// Crank-Nicolson ist unitaer/normerhaltend: ||psi||_2 = const. Damit bleibt die
+// Amplitude pro Zelle O(1) (Norm auf die Zellzahl verteilt). Konvergenz der
+// CN-Fixpunkt-Iteration ist garantiert, solange a*||H|| < 1 mit a = dt/2 und
+// ||H||_op <= 6J + |V| (6 Nachbarn). Hier: a = 0.25, ||H|| <= 6*0.15 = 0.9 ->
+// a*||H|| = 0.225 < 1 (Audit A5, /tmp/verify6.mjs: Norm-Drift -2.4e-3 %).
+// Ein expliziter Loeser (Euler/RK4) bricht diese Schranke und waechst
+// exponentiell. Eine entgleiste Amplitude > HQST_DIVERGENCE_BOUND ist also
+// EINDEUTIG Verfahrensdivergenz: weit ueber dem O(1)-Normband, aber noch unter
+// dem Float32-Ueberlauf (~3.4e38), damit der Waechter VOR Inf/NaN greift.
+const HQST_DIVERGENCE_BOUND = 1e4;
+
+// v33 PR-E: buildNeighbors-opts aus dem aktuellen Form-Zustand ableiten. EINE
+// Quelle fuer Main-Thread (Grid-Effekt) UND Worker-init-Nachricht -> Maske
+// deckungsgleich. circle: {circleRadius}; ellipse: {ellipseA,ellipseB};
+// freeform: {polygon} (>=3 Punkte, sonst undefined -> leere Domaene, fail-closed).
+function frameOptsFor(shape, { circleRadius, ellipseA, ellipseB, polygon }) {
+  if (shape === "circle") return { circleRadius };
+  if (shape === "ellipse") return { ellipseA, ellipseB };
+  if (shape === "freeform") {
+    return Array.isArray(polygon) && polygon.length >= 3 ? { polygon } : undefined;
+  }
+  return undefined;
+}
+
 // =============================================================================
 // GolHex v31 - Hexagonal Game of Life (Forschungsstation, Produktionsreife)
 // Coworker Research / Coworkerz - 2026-05-31
@@ -253,11 +283,21 @@ function closeApp() {
 // =============================================================================
 export default function GolHex() {
   const [sizeIdx, setSizeIdx] = useState(1); // M default
-  const [frameShape, setFrameShape] = useState("box"); // "box" Rechteck | "circle" Scheibe | "hexagon" | "triangle"
+  const [frameShape, setFrameShape] = useState("box"); // "box" Rechteck | "circle" Scheibe | "hexagon" | "triangle" | "ellipse" (v33 PR-E) | "freeform" (v33 PR-E)
   // AP-2: EXPLIZITER Kreis-Radius (Gitterschritte, Marco: Default 250, Max 500).
   // Nur fuer frameShape==="circle" wirksam; das Gitter wird dann aus dem Radius
   // abgeleitet (circleGridDims), statt aus der GRID_SIZES-Stufe.
   const [circleRadius, setCircleRadius] = useState(DEFAULT_CIRCLE_RADIUS);
+  // v33 PR-E: Ellipse-Halbachsen (Gitterschritte). Nur fuer frameShape==="ellipse".
+  // a = horizontal (Spalten), b = vertikal (Reihen). Default a>b (liegende Ellipse).
+  const [ellipseA, setEllipseA] = useState(80);
+  const [ellipseB, setEllipseB] = useState(50);
+  // v33 PR-E: Freiform-Polygon in WELT-Koordinaten ([{x,y},...], >=3 Punkte).
+  // Wird im Zeichen-Modus auf dem Canvas gesammelt; bei pointerup geschlossen.
+  // Leer -> leere Domaene (fail-closed; UI fordert zum Zeichnen auf).
+  const [freeformPolygon, setFreeformPolygon] = useState([]);
+  // Zeichen-Modus aktiv (Frei-Rahmen gewaehlt, User zieht gerade den Polygonzug).
+  const [freeformDrawing, setFreeformDrawing] = useState(false);
   // Effektive Gitter-Geometrie: bei "circle" aus dem Radius, sonst aus der Stufe.
   const G = (frameShape === "circle")
     ? (() => { const d = circleGridDims(circleRadius); return { l: `r=${d.radius}`, rows: d.rows, cols: d.cols, hr: d.hr }; })()
@@ -477,6 +517,11 @@ export default function GolHex() {
   const simRef = useRef(simMode); useEffect(() => { simRef.current = simMode; }, [simMode]);
   const frameRef = useRef(frameShape); useEffect(() => { frameRef.current = frameShape; }, [frameShape]);
   const circleRadiusRef = useRef(circleRadius); useEffect(() => { circleRadiusRef.current = circleRadius; }, [circleRadius]);
+  const ellipseARef = useRef(ellipseA); useEffect(() => { ellipseARef.current = ellipseA; }, [ellipseA]);
+  const ellipseBRef = useRef(ellipseB); useEffect(() => { ellipseBRef.current = ellipseB; }, [ellipseB]);
+  const freeformPolyRef = useRef(freeformPolygon); useEffect(() => { freeformPolyRef.current = freeformPolygon; }, [freeformPolygon]);
+  const freeformDrawRef = useRef(freeformDrawing); useEffect(() => { freeformDrawRef.current = freeformDrawing; }, [freeformDrawing]);
+  const freeformDraftRef = useRef(null); // laufender Polygonzug (Live-Vorschau)
   const hqstLockedRef = useRef(hqstLocked); useEffect(() => { hqstLockedRef.current = hqstLocked; }, [hqstLocked]);
   const seedRef = useRef(seed); useEffect(() => { seedRef.current = seed; }, [seed]);
   const solverWarnRef = useRef(false);
@@ -493,7 +538,7 @@ export default function GolHex() {
     fBufRef.current = new Float32Array(N); fBufImRef.current = new Float32Array(N);
     fRecRef.current = new Uint8Array(N);
     hqstWorkRef.current = mkHqstWork(N);
-    neighRef.current = buildNeighbors(R, C, frameShape, frameShape === "circle" ? { circleRadius } : undefined);
+    neighRef.current = buildNeighbors(R, C, frameShape, frameOptsFor(frameShape, { circleRadius, ellipseA, ellipseB, polygon: freeformPolygon }));
     // Randzellen-Zahl GENAU HIER berechnen, wo das Feld neu entsteht (frischer Wert,
     // keine Render-Reihenfolge-Falle). Speist die transparente Randanzeige.
     { const nb = neighRef.current; let bc = 0; const bd = nb.bnd; for (let i = 0; i < bd.length; i++) if (bd[i]) bc++; setBoundaryStat({ count: bc, total: nb.inCount || 0 }); }
@@ -509,7 +554,7 @@ export default function GolHex() {
     setRunning(false); dirtyRef.current = true;
     fitView();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sizeIdx, frameShape, circleRadius]);
+  }, [sizeIdx, frameShape, circleRadius, ellipseA, ellipseB, freeformPolygon]);
 
   // AP-1: aktuellen Engine-Config-Snapshot fuer den Worker bauen (Spiegel von
   // cfg.current). Reine Daten (struktur-klonbar), kein Funktions-/Ref-Inhalt.
@@ -610,7 +655,7 @@ export default function GolHex() {
       viewRef.current = { ...view, fit: vs };
       worker.postMessage({
         type: "init", canvas: off,
-        R, C, hr: HR, shape: frameShape, circleRadius, dpr,
+        R, C, hr: HR, shape: frameShape, circleRadius, ellipseA, ellipseB, polygon: freeformPolygon, dpr,
         cfg: buildWorkerCfg(), mode: simMode, rule: rvalRule,
         speedMs: SPEEDS[speedIdx], view, tick: tickRef.current,
         col: colorRef.current.slice().buffer, gh: ghostRef.current.slice().buffer, age: ageRef.current.slice().buffer,
@@ -711,7 +756,7 @@ export default function GolHex() {
         // AP-2: HQST bei Riesen-Gittern gesperrt (Crank-Nicolson zu langsam) -> Step
         // ueberspringen statt den Tab einzufrieren. Die UI zeigt die ehrliche Meldung.
         if (hqstLockedRef.current) { runRef.current = false; setRunning(false); return; }
-        const conv = stepHQST(fieldRef.current, fieldImRef.current, NL, 0.15, 0.0, 0.5, fBufRef.current, fBufImRef.current, hqstWorkRef.current, cfg.current.solverId);
+        const conv = stepHQST(fieldRef.current, fieldImRef.current, NL, HQST_J, HQST_V, HQST_DT, fBufRef.current, fBufImRef.current, hqstWorkRef.current, cfg.current.solverId);
         // Nur der CN-Solver liefert ein Flag; false = Fixpunkt nicht konvergiert.
         if (conv === false && !solverWarnRef.current) { solverWarnRef.current = true; }
         [fieldRef.current, fBufRef.current] = [fBufRef.current, fieldRef.current];
@@ -729,9 +774,10 @@ export default function GolHex() {
             if (a > maxA) maxA = a;
             if (!Number.isFinite(a)) { bad = true; break; }
           }
-          // Schranke 1e4: normerhaltende Wellen bleiben O(1); ein Anwachsen auf
-          // >1e4 ist eindeutig Verfahrensdivergenz (CN/RK4 bleiben weit darunter).
-          if (bad || maxA > 1e4) {
+          // Schranke aus HQST_DIVERGENCE_BOUND (aus J/V/dt abgeleitet, s.o.):
+          // normerhaltende Wellen bleiben O(1); ein Anwachsen darueber ist
+          // eindeutig Verfahrensdivergenz (CN/RK4 bleiben weit darunter).
+          if (bad || maxA > HQST_DIVERGENCE_BOUND) {
             re.fill(0); im.fill(0);
             solverDivergedRef.current = true;
             runRef.current = false; // Lauf anhalten, sonst sofortige Re-Divergenz
@@ -1086,6 +1132,30 @@ export default function GolHex() {
       // — EXAKT die Formel aus buildNeighbors (circleRad), Umriss == Maske.
       const circleWorld = Math.min(circleRadiusRef.current * 1.5, radiusMaxWorld);
       ctx.beginPath(); ctx.arc(ctr.x, ctr.y, circleWorld * hr, 0, PI2); ctx.stroke();
+    } else if (sh === "ellipse") {
+      // v33 PR-E: Halbachsen EXAKT wie buildNeighbors (ellA/ellB, je geklemmt) —
+      // Umriss == Maske. ctx.ellipse(cx,cy, rx,ry, rotation, start, end).
+      const ellAw = Math.min(ellipseARef.current * 1.5, halfW);
+      const ellBw = Math.min(ellipseBRef.current * 1.5, halfH);
+      ctx.beginPath(); ctx.ellipse(ctr.x, ctr.y, ellAw * hr, ellBw * hr, 0, 0, PI2); ctx.stroke();
+    } else if (sh === "freeform") {
+      // v33 PR-E: Nutzer-Polygon (Welt-Koords) -> Pixel: pad + px*hr (gleiche
+      // Transform wie hexCenter). Maske == Umriss (beide gegen dasselbe Polygon).
+      // Live-Vorschau (Draft) hat Vorrang, sonst das committete Polygon.
+      const draft = freeformDraftRef.current;
+      const poly = (draft && draft.length >= 2) ? draft : freeformPolyRef.current;
+      if (poly && poly.length >= 2) {
+        const pad = PAD(hr);
+        if (draft) ctx.setLineDash([6 / s, 4 / s]); // Vorschau gestrichelt
+        ctx.beginPath();
+        poly.forEach((p, idx) => {
+          const x = pad + p.x * hr, y = pad + p.y * hr;
+          if (idx === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        });
+        if (poly.length >= 3 && !draft) ctx.closePath();
+        ctx.stroke();
+        if (draft) ctx.setLineDash([]);
+      }
     } else if (sh === "triangle") {
       // Gleiche 3 Ecken wie der Punkt-im-Dreieck-Test (Spitze oben).
       ctx.beginPath();
@@ -1358,6 +1428,19 @@ export default function GolHex() {
     // Bei offenem Rad faengt das Overlay die Klicks (Auswahl/Ausserhalb) ab; ein
     // erneutes Down auf der Leinwand soll das Rad NICHT zugleich neu starten.
     if (wheelRef.current) return;
+    // v33 PR-E: Freiform-Zeichen-Modus ("Frei"-Rahmen + Zeichnen aktiv). Ein
+    // Single-Pointer-Down beginnt einen neuen Polygonzug; onMove sammelt Punkte;
+    // onUp schliesst und baut die Maske. Unterdrueckt Paint/Pan/Long-Press.
+    if (freeformDrawRef.current && frameRef.current === "freeform" && ptrs.current.size === 1) {
+      clearLongPress();
+      ges.current.mode = "freeform"; ges.current.moved = 0;
+      ges.current.down = { x: e.clientX, y: e.clientY };
+      const { wx, wy } = toWorld(e.clientX, e.clientY);
+      const hr = gridRef.current.hr, pad = PAD(hr);
+      // Welt-Koords der Maske: raw = (canvasWelt - pad) / hr.
+      ges.current.draftPoly = [{ x: (wx - pad) / hr, y: (wy - pad) / hr }];
+      return;
+    }
     if (ptrs.current.size === 1) {
       ges.current.moved = 0; ges.current.down = { x: e.clientX, y: e.clientY }; ges.current.lastCell = -1;
       // AP-3: Long-Press-Timer fuer JEDEN Single-Pointer-Down starten (Maus + Touch,
@@ -1393,7 +1476,15 @@ export default function GolHex() {
         clearLongPress();
         const { wx, wy } = toWorld(e.clientX, e.clientY);
         const idx = pixelToOddR(wx, wy, HR, R, C);
-        if (idx >= 0) { placeStamp(idx); ges.current.mode = "stamped"; }
+        if (idx >= 0) {
+          // Audit #4 (Phantom-Undo): placeStamp ruft intern pushUndo(). Setzt der
+          // Stempel 0 Zellen (ganz ausserhalb der Domaene), den eben erzeugten
+          // Undo-Eintrag wieder verwerfen -> kein "toter" Undo-Klick.
+          const undoLenBefore = undoRef.current.length;
+          const painted = placeStamp(idx);
+          if (!painted && undoRef.current.length > undoLenBefore) undoRef.current.pop();
+          ges.current.mode = "stamped";
+        }
         else ges.current.mode = "maybe-tap";
       } else if (brushRef.current !== "cycle" || simRef.current === "rval") {
         pushUndo();
@@ -1430,6 +1521,22 @@ export default function GolHex() {
       if (ges.current.lastMid) { v.tx += mid.x - ges.current.lastMid.x; v.ty += mid.y - ges.current.lastMid.y; }
       ges.current.lastMid = mid; dirtyRef.current = true; return;
     }
+    // v33 PR-E: Freiform-Zeichnen — Punkte sammeln (Min-Abstand gegen Flut) +
+    // Live-Vorschau ueber den Draft-Ref (von drawFrame gezeichnet).
+    if (ges.current.mode === "freeform" && ges.current.draftPoly) {
+      const { wx, wy } = toWorld(e.clientX, e.clientY);
+      const hr = gridRef.current.hr, pad = PAD(hr);
+      const p = { x: (wx - pad) / hr, y: (wy - pad) / hr };
+      const dp = ges.current.draftPoly, lastP = dp[dp.length - 1];
+      // Min-Abstand ~ halbe Hexbreite (in raw-Welt-Einheiten ~ S3/2), damit der Zug
+      // nicht aus Hunderten Mikro-Segmenten besteht.
+      if (Math.hypot(p.x - lastP.x, p.y - lastP.y) >= S3 * 0.5) {
+        dp.push(p);
+        freeformDraftRef.current = dp;
+        dirtyRef.current = true;
+      }
+      return;
+    }
     if (ptrs.current.size === 1) {
       ges.current.moved = Math.hypot(e.clientX - ges.current.down.x, e.clientY - ges.current.down.y);
       if (ges.current.mode === "paint") {
@@ -1444,6 +1551,19 @@ export default function GolHex() {
   const onUp = (e) => {
     const was = ptrs.current.size; ptrs.current.delete(e.pointerId);
     clearLongPress(); // Loslassen bricht einen noch laufenden Long-Press-Timer ab
+    // v33 PR-E: Freiform-Zug fertig -> Polygon schliessen + Maske bauen. <3 Punkte
+    // (nur getippt, kein Zug) -> Zeichnen aktiv lassen, nichts bauen (kein Crash).
+    if (ges.current.mode === "freeform") {
+      const dp = ges.current.draftPoly || [];
+      ges.current.draftPoly = null; freeformDraftRef.current = null; ges.current.mode = "";
+      if (dp.length >= 3) {
+        setFreeformPolygon(dp.map((p) => ({ x: p.x, y: p.y })));
+        setFreeformDrawing(false); // Zug abgeschlossen, Zeichen-Modus verlassen
+      } else {
+        dirtyRef.current = true; // zu wenige Punkte -> Vorschau verwerfen
+      }
+      return;
+    }
     // Rad bereits offen (Long-Press hat gefeuert): das Loslassen schliesst das Rad
     // NICHT und malt NICHT -> der Nutzer waehlt im Overlay aus oder tippt ausserhalb.
     if (ges.current.mode === "wheel-open") { ges.current.mode = ptrs.current.size === 1 ? "maybe-tap" : ""; return; }
@@ -1570,7 +1690,8 @@ export default function GolHex() {
   // ein eigenes Float-Format; bewusst out-of-scope, ehrliche UI-Meldung).
   const currentSaveMeta = (name) => ({
     name, ts: Date.now(), width: C, height: R, bitDepth: 8,
-    sizeIdx, frameShape, circleRadius, ruleIdx, ruleSrc, watzOnly,
+    sizeIdx, frameShape, circleRadius, ellipseA, ellipseB, polygon: freeformPolygon,
+    ruleIdx, ruleSrc, watzOnly,
     torusOn, boundaryMode, colorMode, simMode, rvalRule, seed, gen: tickRef.current, zoom: zoomLbl,
   });
   // Speichert in einen IndexedDB-Slot. Grosse Felder: idbPut kopiert + IDB ist
@@ -1595,10 +1716,35 @@ export default function GolHex() {
   const applyLoadedState = (cells, meta) => {
     setRunning(false); runRef.current = false;
     resetOrigin();
+    // Audit #5: Gespeicherte Staende sind IMMER Lebenswelt (rval-Save ist
+    // blockiert). Laedt man waehrend rval aktiv ist, ohne den Modus zu wechseln,
+    // weicht der sichtbare Modus vom geladenen ab. -> simMode mitladen (Default
+    // "life"), und falls aktuell rval, ehrlich melden, dass gewechselt wird.
+    const targetSim = meta.simMode === "rval" ? "rval" : "life";
+    if (simRef.current !== targetSim) {
+      setSimMode(targetSim);
+      if (simRef.current === "rval" && targetSim === "life") {
+        setSaveMsg("In den Lebenswelt-Modus gewechselt (gespeicherter Stand).");
+      }
+    }
     // 1) Sim-Parameter setzen (loest ggf. Grid-Reallokation aus).
     if (typeof meta.sizeIdx === "number") setSizeIdx(meta.sizeIdx);
     if (meta.frameShape) setFrameShape(meta.frameShape);
     if (typeof meta.circleRadius === "number") setCircleRadius(clamp(Math.round(meta.circleRadius), 1, MAX_CIRCLE_RADIUS));
+    // v33 PR-E: Ellipse-Achsen + Freiform-Polygon mitladen (sonst weicht die
+    // Maske vom gespeicherten Stand ab und die Zellzahl kann differieren). NUR
+    // setzen, wenn der gespeicherte Rahmen das tatsaechlich nutzt — sonst wuerde
+    // ein neuer (leerer) Polygon-/Achsen-State unnoetig den Grid-Effekt erneut
+    // ausloesen und die soeben geschriebenen Zellen ueberschreiben (Grid-Effekt
+    // haengt an diesen Deps). Default-Werte gespeicherter Box-/Kreis-Staende
+    // bleiben so unangetastet.
+    if (meta.frameShape === "ellipse") {
+      if (typeof meta.ellipseA === "number") setEllipseA(clamp(Math.round(meta.ellipseA), 5, MAX_CIRCLE_RADIUS));
+      if (typeof meta.ellipseB === "number") setEllipseB(clamp(Math.round(meta.ellipseB), 5, MAX_CIRCLE_RADIUS));
+    }
+    if (meta.frameShape === "freeform" && Array.isArray(meta.polygon) && meta.polygon.length >= 3) {
+      setFreeformPolygon(meta.polygon.map((p) => ({ x: p.x, y: p.y })));
+    }
     if (typeof meta.ruleIdx === "number") setRuleIdx(meta.ruleIdx);
     if (meta.ruleSrc) setRuleSrc(meta.ruleSrc);
     if (typeof meta.watzOnly === "boolean") setWatzOnly(meta.watzOnly);
@@ -1759,7 +1905,7 @@ export default function GolHex() {
       config: {
         simMode, rvalRule, ruleIdx, ruleSrc, watzOnly, ax, a5, colorMode,
         torusOn, frameShape, openSys, sysTheory, sysSetpoint, solverId,
-        sizeIdx, circleRadius, seed,
+        sizeIdx, circleRadius, ellipseA, ellipseB, polygon: freeformPolygon, seed,
       },
     };
     downloadBlob(JSON.stringify(snap, null, 2), `golhex_snapshot_${seed}_${Date.now()}.json`, "application/json");
@@ -1783,6 +1929,9 @@ export default function GolHex() {
     if (cfgObj.solverId) setSolverId(cfgObj.solverId);
     if (typeof cfgObj.sizeIdx === "number") setSizeIdx(cfgObj.sizeIdx);
     if (typeof cfgObj.circleRadius === "number") setCircleRadius(clamp(Math.round(cfgObj.circleRadius), 1, MAX_CIRCLE_RADIUS));
+    if (typeof cfgObj.ellipseA === "number") setEllipseA(clamp(Math.round(cfgObj.ellipseA), 5, MAX_CIRCLE_RADIUS));
+    if (typeof cfgObj.ellipseB === "number") setEllipseB(clamp(Math.round(cfgObj.ellipseB), 5, MAX_CIRCLE_RADIUS));
+    if (Array.isArray(cfgObj.polygon)) setFreeformPolygon(cfgObj.polygon.map((p) => ({ x: p.x, y: p.y })));
     if (typeof cfgObj.seed === "number") setSeed(cfgObj.seed);
     setArchMsg(`Schnappschuss geladen (Seed ${cfgObj.seed}). "Neu initialisieren" reproduziert den Lauf.`);
   };
@@ -1820,6 +1969,10 @@ export default function GolHex() {
     if (!src) { setSnapMsg("Snapshot: keine Leinwand gefunden."); return; }
     snapBusyRef.current = true;
     setSnapMsg("Snapshot wird erstellt …");
+    // Audit #7 (Snapshot-Determinismus): Gen-Label SYNCHRON einfrieren, bevor der
+    // async toBlob/share-Pfad laeuft. Sonst kann tickRef bis zum Resolve
+    // weitergelaufen sein -> Dateiname gen42, Bild zeigt gen45.
+    const snapGen = tickRef.current;
     try {
       // Optionales Wasserzeichen: auf eine Kopie zeichnen, damit der Live-Canvas
       // unberuehrt bleibt (kein Flackern im Spielfeld).
@@ -1830,7 +1983,7 @@ export default function GolHex() {
         const octx = off.getContext("2d");
         if (octx) {
           octx.drawImage(src, 0, 0);
-          const label = buildWatermarkLabel(tickRef.current, currentRuleLabel());
+          const label = buildWatermarkLabel(snapGen, currentRuleLabel());
           const fs = Math.max(11, Math.round(src.width / 48));
           octx.font = `${fs}px ui-monospace, monospace`;
           octx.textBaseline = "bottom";
@@ -1846,10 +1999,10 @@ export default function GolHex() {
         }
       }
       const blob = await canvasToBlob(target, "image/png");
-      const filename = buildSnapshotFilename(new Date(), tickRef.current, "png");
+      const filename = buildSnapshotFilename(new Date(), snapGen, "png");
       const res = await shareOrDownloadBlob(blob, filename, {
         title: "GolHex",
-        text: buildWatermarkLabel(tickRef.current, currentRuleLabel()),
+        text: buildWatermarkLabel(snapGen, currentRuleLabel()),
       });
       if (res.method === "share" && res.shared) setSnapMsg("Geteilt.");
       else if (res.method === "share" && res.cancelled) setSnapMsg("Teilen abgebrochen.");
@@ -2303,9 +2456,9 @@ export default function GolHex() {
           })}
         </div>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 4 }}>
-          {[["box", "Rechteck"], ["circle", "Kreis"], ["hexagon", "Hexagon"], ["triangle", "Dreieck"]].map(([k, lab]) => (
-            <button key={k} onClick={() => setFrameShape(k)} style={{
-              flex: "1 1 40%", padding: "8px 6px", borderRadius: 9, fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: MONO,
+          {[["box", "Rechteck"], ["circle", "Kreis"], ["hexagon", "Hexagon"], ["triangle", "Dreieck"], ["ellipse", "Ellipse"], ["freeform", "Frei"]].map(([k, lab]) => (
+            <button key={k} onClick={() => { setFrameShape(k); if (k !== "freeform") setFreeformDrawing(false); }} style={{
+              flex: "1 1 30%", padding: "8px 6px", borderRadius: 9, fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: MONO,
               border: frameShape === k ? `1px solid ${T.accent}` : "1px solid rgba(92,240,204,0.14)",
               background: frameShape === k ? "rgba(92,240,204,0.12)" : T.bg2, color: frameShape === k ? T.accent : T.sub,
             }}>{lab}</button>
@@ -2314,6 +2467,10 @@ export default function GolHex() {
         <div style={{ fontSize: 10, color: T.sub, opacity: 0.7, fontFamily: MONO, lineHeight: 1.4 }}>
           {frameShape === "circle"
             ? (torusOn ? "Kreis + Torus: antipodale Identifikation (reelle projektive Ebene, RP2). Reflexionsfrei, aber nicht-orientierbar - Muster kehren am Rand spiegelverkehrt zurueck (Moebius-Eigenschaft)." : "Kreis + Rand: harte runde Wand, Null-Fluss (Neumann), massenerhaltend.")
+            : frameShape === "ellipse"
+            ? "Ellipse: Welt-Test ((x-cx)/a)^2 + ((y-cy)/b)^2 <= 1 mit zwei Halbachsen a (waagerecht) / b (senkrecht). Berandet (Neumann-Wand), kein Torus. a=b ergibt exakt einen Kreis."
+            : frameShape === "freeform"
+            ? "Frei: selbst gezeichnete Form. Knopf 'Zeichnen' druecken, dann mit gedruecktem Finger/Maus einen geschlossenen Zug auf das Feld ziehen. Maske via Winding-Number (auch selbst-ueberschneidende Formen korrekt). Berandet, kein Torus."
             : frameShape === "hexagon"
             ? "Hexagon: exaktes regelmaessiges Sechseck via Hex-Distanz (Wuerfelkoordinaten), die natuerliche Form des Hexgitters. Berandet (Neumann-Wand), kein Torus - die Form kachelt das Gitter nicht periodisch sauber."
             : frameShape === "triangle"
@@ -2337,6 +2494,60 @@ export default function GolHex() {
             <div style={{ fontSize: 10, color: T.sub, opacity: 0.85, fontFamily: MONO, lineHeight: 1.4 }}>
               Wie gross der Kreis ist: 10 (klein) bis {MAX_CIRCLE_RADIUS} (maximal). Standard {DEFAULT_CIRCLE_RADIUS}.
               Gitter {R}x{C}, davon ~{(boundaryStat.total || 0).toLocaleString("de-CH")} Zellen im Kreis.
+            </div>
+          </div>
+        )}
+
+        {/* v33 PR-E: Ellipse-Halbachsen a/b waehlen (zwei Regler). Nur bei Ellipse. */}
+        {frameShape === "ellipse" && (
+          <div style={{ marginTop: 8, padding: "8px 10px", borderRadius: 9, background: T.bg2, border: "1px solid rgba(92,240,204,0.14)" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+              <span style={{ fontSize: 11, color: T.sub, fontFamily: MONO, whiteSpace: "nowrap" }}>Achse a (waagerecht)</span>
+              <input type="range" min={5} max={MAX_CIRCLE_RADIUS} step={1} value={ellipseA}
+                onChange={(e) => setEllipseA(clamp(Number(e.target.value) || 5, 5, MAX_CIRCLE_RADIUS))}
+                style={{ flex: 1, accentColor: T.accent }} aria-label="Ellipse Achse a" />
+              <input type="number" min={5} max={MAX_CIRCLE_RADIUS} value={ellipseA}
+                onChange={(e) => { const v = Number(e.target.value); if (Number.isFinite(v)) setEllipseA(clamp(Math.round(v), 5, MAX_CIRCLE_RADIUS)); }}
+                style={{ width: 56, padding: "4px 6px", borderRadius: 7, fontSize: 12, fontFamily: MONO, background: T.bg, color: T.accent, border: `1px solid ${T.border}`, textAlign: "right" }}
+                aria-label="Ellipse Achse a (Zahl)" />
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+              <span style={{ fontSize: 11, color: T.sub, fontFamily: MONO, whiteSpace: "nowrap" }}>Achse b (senkrecht)</span>
+              <input type="range" min={5} max={MAX_CIRCLE_RADIUS} step={1} value={ellipseB}
+                onChange={(e) => setEllipseB(clamp(Number(e.target.value) || 5, 5, MAX_CIRCLE_RADIUS))}
+                style={{ flex: 1, accentColor: T.accent }} aria-label="Ellipse Achse b" />
+              <input type="number" min={5} max={MAX_CIRCLE_RADIUS} value={ellipseB}
+                onChange={(e) => { const v = Number(e.target.value); if (Number.isFinite(v)) setEllipseB(clamp(Math.round(v), 5, MAX_CIRCLE_RADIUS)); }}
+                style={{ width: 56, padding: "4px 6px", borderRadius: 7, fontSize: 12, fontFamily: MONO, background: T.bg, color: T.accent, border: `1px solid ${T.border}`, textAlign: "right" }}
+                aria-label="Ellipse Achse b (Zahl)" />
+            </div>
+            <div style={{ fontSize: 10, color: T.sub, opacity: 0.85, fontFamily: MONO, lineHeight: 1.4 }}>
+              a = waagerechte, b = senkrechte Halbachse (Gitterschritte, je auf das Gitter geklemmt).
+              a = b ergibt einen Kreis. Gitter {R}x{C}, ~{(boundaryStat.total || 0).toLocaleString("de-CH")} Zellen in der Ellipse.
+            </div>
+          </div>
+        )}
+
+        {/* v33 PR-E: Freiform — Zeichnen-Knopf + Status. Nur bei "Frei". */}
+        {frameShape === "freeform" && (
+          <div style={{ marginTop: 8, padding: "8px 10px", borderRadius: 9, background: T.bg2, border: "1px solid rgba(92,240,204,0.14)" }}>
+            <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
+              <button aria-label="Freiform zeichnen" aria-pressed={freeformDrawing} onClick={() => setFreeformDrawing((v) => !v)} style={{
+                flex: 1, padding: "8px 6px", borderRadius: 9, fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: MONO,
+                border: freeformDrawing ? `1px solid ${T.accent}` : "1px solid rgba(92,240,204,0.14)",
+                background: freeformDrawing ? "rgba(92,240,204,0.12)" : T.bg, color: freeformDrawing ? T.accent : T.sub,
+              }}>{freeformDrawing ? "Zeichnen aktiv…" : "✎ Zeichnen"}</button>
+              <button aria-label="Freiform loeschen" onClick={() => { setFreeformPolygon([]); setFreeformDrawing(false); }} style={{
+                flex: 1, padding: "8px 6px", borderRadius: 9, fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: MONO,
+                border: "1px solid rgba(92,240,204,0.14)", background: T.bg, color: T.sub,
+              }}>Leeren</button>
+            </div>
+            <div style={{ fontSize: 10, color: T.sub, opacity: 0.85, fontFamily: MONO, lineHeight: 1.4 }}>
+              {freeformDrawing
+                ? "Jetzt mit gedruecktem Finger/Maus einen geschlossenen Zug auf das Feld ziehen. Loslassen schliesst die Form."
+                : freeformPolygon.length >= 3
+                ? `Form mit ${freeformPolygon.length} Punkten gezeichnet. ~${(boundaryStat.total || 0).toLocaleString("de-CH")} Zellen darin. "Zeichnen" fuer eine neue Form.`
+                : "Noch keine Form. \"Zeichnen\" druecken und auf dem Feld einen Zug ziehen."}
             </div>
           </div>
         )}

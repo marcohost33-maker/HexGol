@@ -136,6 +136,23 @@ describe("shareOrDownloadBlob — Share-Pfad", () => {
     expect(url.createObjectURL).not.toHaveBeenCalled(); // kein Download nach Abbruch
   });
 
+  it("Audit #8: NotAllowedError (iOS-Gestenkontext gebrochen) -> Download-Fallback, NICHT cancelled", async () => {
+    // Frueher wurde NotAllowedError faelschlich als 'abgebrochen' gemeldet -> der
+    // Nutzer bekam gar kein Bild. Korrekt: in den Download degradieren.
+    const err = new Error("not allowed"); err.name = "NotAllowedError";
+    const share = vi.fn().mockRejectedValue(err);
+    const nav = { share, canShare: () => true };
+    const anchor = fakeAnchor();
+    const url = fakeUrl();
+    const res = await shareOrDownloadBlob(pngBlob(), "f.png", {
+      navigatorObj: nav, documentObj: fakeDoc(anchor), urlObj: url,
+    });
+    expect(res).toEqual({ method: "download" });        // Bild kommt trotzdem
+    expect(res.cancelled).toBeUndefined();               // NICHT als Abbruch gemeldet
+    expect(anchor.click).toHaveBeenCalledTimes(1);
+    expect(anchor.download).toBe("f.png");
+  });
+
   it("share() wirft anderen Fehler -> Download-Fallback", async () => {
     const err = new Error("boom"); err.name = "DataError";
     const share = vi.fn().mockRejectedValue(err);
