@@ -96,6 +96,15 @@ npm run test:e2e:update   # refresh Playwright snapshots (use deliberately)
 3. **Visual baselines are intentional.** Do not blanket-run
    `test:e2e:update` to make red turn green. Update a snapshot only when the
    visual change is the *intended* result of your diff, and say so in the PR.
+   **Snapshot-refresh trigger gotcha:** `update-snapshots.yml` commits refreshed
+   baselines back to the branch using the implicit `GITHUB_TOKEN`. A push made
+   with `GITHUB_TOKEN` does **not** trigger further workflow runs (GitHub's
+   recursion guard), so after that bot commit `gh pr checks` shows
+   *"no checks reported"* and the required `unit`/`e2e` checks never run on the
+   new head. **Fix:** close + reopen the PR (`gh pr close N && gh pr reopen N`) —
+   this fires `pull_request: reopened`, which re-runs the checks PR-attached.
+   (`gh workflow run --ref <branch>` runs them too, but as `workflow_dispatch`,
+   not attached to the PR's required-check gate.)
 4. **The rule entry is load-bearing.** `step()` in `src/App.tsx` honours the
    active birth/survival rule (B/S thresholds + INT configuration constraints);
    changing one half without the other corrupts the automaton. Add/adjust unit
