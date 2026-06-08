@@ -80,4 +80,56 @@ test.describe("GolHex Rahmen-Render (v33 Regression)", () => {
     expect(cleared, `Leeren synct Worker zurück (gefüllt ${full}B, geleert ${cleared}B)`).toBeLessThan(full * 0.6);
     expect(errors).toEqual([]);
   });
+
+  // P1 (Codex-Review): nach einem Worker-LAUF leben die evolvierten Zellen nur im
+  // Worker. Bei Pause MUSS der Main-Thread sie zurückpullen (snapshot), sonst
+  // speichert/editiert er den stalen Pre-Run-Stand. Test: Kreis(Worker) -> Random
+  // -> Play -> Pause -> Save -> Leeren -> Laden ergibt ein nicht-leeres, evolviertes
+  // Feld (Gen lief > 0). Ohne den Pull-on-Pause würde Save Pre-Run-Stand sichern.
+  async function popValue(page: import("@playwright/test").Page): Promise<number> {
+    const t = (await page.getByTestId("pop").textContent()) || "0";
+    return Number(t.replace(/[^\d]/g, "")) || 0;
+  }
+  test("Worker-Lauf + Pause: Main-State wird zurückgepullt (Save/Load nach Lauf, kein Korrupt)", async ({ page }) => {
+    const errors: string[] = [];
+    page.on("pageerror", (e) => errors.push("pageerror: " + e.message));
+    await page.goto("/"); await page.waitForTimeout(400);
+
+    await page.getByRole("button", { name: "Tab 3 Hex-Regeln" }).click(); await page.waitForTimeout(120);
+    await page.getByRole("button", { name: "Kreis", exact: true }).click(); await page.waitForTimeout(300);
+    await page.getByRole("button", { name: "Tab 3 Hex-Regeln" }).click(); await page.waitForTimeout(120);
+
+    await page.getByRole("button", { name: "Random", exact: true }).click(); await page.waitForTimeout(300);
+    // Laufen lassen -> Gen advanciert (Worker steppt), dann Pause -> Pull.
+    await page.getByRole("button", { name: "Start", exact: true }).click(); await page.waitForTimeout(1100);
+    const genTxt = await page.evaluate(() => {
+      const el = Array.from(document.querySelectorAll("span")).find((s) => /^Gen\s/.test(s.textContent || ""));
+      return el ? (el.textContent || "") : "";
+    });
+    const gen = Number((genTxt.match(/\d+/) || ["0"])[0]);
+    expect(gen, `Worker-Sim lief (Gen=${gen})`).toBeGreaterThan(0);
+    await page.getByRole("button", { name: "Pause", exact: true }).click(); await page.waitForTimeout(400);
+
+    // Save -> liest colorRef (jetzt gepullt = evolviert) -> Leeren -> Laden.
+    await page.getByRole("button", { name: "Spielstand speichern" }).click(); await page.waitForTimeout(150);
+    await page.getByRole("textbox", { name: "Name fuer Spielstand" }).fill("p1run");
+    await page.getByRole("button", { name: "Speichern", exact: true }).click(); await page.waitForTimeout(300);
+    await page.getByRole("button", { name: "Speichern-Panel schliessen" }).click().catch(() => {});
+    await page.getByRole("button", { name: "Leeren", exact: true }).click(); await page.waitForTimeout(300);
+    await page.getByRole("button", { name: "Spielstand speichern" }).click(); await page.waitForTimeout(150);
+    await page.getByRole("button", { name: "Laden p1run" }).click(); await page.waitForTimeout(500);
+
+    const popLoaded = await popValue(page);
+    expect(popLoaded, `Geladener Stand ist nicht leer (pop=${popLoaded})`).toBeGreaterThan(0);
+    // Diskriminator: meta.gen = tickRef. Telemetry setzt NUR den React-Gen-State,
+    // NICHT tickRef -> ohne Pull-on-Pause bliebe tickRef=0 (vom Random) -> der
+    // gespeicherte+geladene Gen wäre 0. Mit Pull ist tickRef = evolvierte Tick > 0.
+    const genLoadedTxt = await page.evaluate(() => {
+      const el = Array.from(document.querySelectorAll("span")).find((s) => /^Gen\s/.test(s.textContent || ""));
+      return el ? (el.textContent || "") : "";
+    });
+    const genLoaded = Number((genLoadedTxt.match(/\d+/) || ["0"])[0]);
+    expect(genLoaded, `Save nach Lauf hat die EVOLVIERTE Tick gespeichert (Pull griff) -> geladener Gen ${genLoaded} > 0`).toBeGreaterThan(0);
+    expect(errors).toEqual([]);
+  });
 });

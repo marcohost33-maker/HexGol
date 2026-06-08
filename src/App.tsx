@@ -632,12 +632,32 @@ export default function GolHex() {
       workerRef.current = worker;
       worker.onmessage = (e) => {
         const m = e.data;
-        if (m.type === "ready") { workerActiveRef.current = true; }
+        if (m.type === "ready") {
+          workerActiveRef.current = true;
+          // P2 (Codex-Review 2026-06-08): Mutationen im Init-Fenster (Random/Leeren
+          // VOR "ready") liefen ins Leere (syncWorkerState returnte, workerActive=false).
+          // Jetzt den aktuellen Main-Zustand einmal nachreichen -> kein Start-Blank.
+          syncWorkerState();
+        }
         else if (m.type === "telemetry") {
           setGen(m.tick);
           spsRef.current = m.sps;
           if (m.solverWarn) setSolverWarn(true);
           if (m.diverged) { setSolverDiverged(true); setRunning(false); }
+        } else if (m.type === "snapshot") {
+          // P1 (Codex-Review 2026-06-08): Pull des EVOLVIERTEN Worker-Zustands zurück
+          // in die Main-Arrays (bei Pause angefordert). Hält colorRef/age/field frisch,
+          // damit additive Edits (Stempel/Pattern/Undo), Save UND der nächste
+          // syncWorkerState NICHT auf stalem Pre-Run-Stand operieren (= Worker-
+          // Korruption + Gen-Reset). Single source of truth: laufend Worker, bei
+          // Pause zurück an Main.
+          if (m.col) colorRef.current.set(new Uint8Array(m.col));
+          if (m.gh) ghostRef.current.set(new Uint8Array(m.gh));
+          if (m.age) ageRef.current.set(new Uint16Array(m.age));
+          if (m.fld) fieldRef.current.set(new Float32Array(m.fld));
+          if (m.fim) fieldImRef.current.set(new Float32Array(m.fim));
+          if (typeof m.tick === "number") { tickRef.current = m.tick; setGen(m.tick); }
+          updatePop(); dirtyRef.current = true;
         } else if (m.type === "error") {
           // Worker konnte nicht initialisieren -> ehrlicher Fallback auf Main-Thread.
           // eslint-disable-next-line no-console
@@ -1608,7 +1628,14 @@ export default function GolHex() {
   // Play/Pause-Toggle: beim Uebergang AUS->AN den Urzustand sichern (erstes Play
   // eines Laufes). Pause aendert den Urzustand NICHT.
   const togglePlay = () => {
-    setRunning((r) => { if (!r) captureOriginIfFirstPlay(); return !r; });
+    setRunning((r) => {
+      if (!r) { captureOriginIfFirstPlay(); return true; }
+      // Pause: bei aktivem Worker den evolvierten Zustand zurück an Main pullen
+      // (P1-Fix, Codex-Review) -> colorRef/age/field frisch für Edits/Save/Undo.
+      const w = workerRef.current;
+      if (w && workerActiveRef.current) w.postMessage({ type: "snapshot" });
+      return false;
+    });
   };
   const doClear = () => {
     pushUndo(); resetOrigin(); // neuer Lauf -> Urzustand-Slot zuruecksetzen
