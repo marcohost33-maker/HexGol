@@ -28,4 +28,37 @@ test.describe("GolHex v29L.2 visual baselines", () => {
     await page.waitForTimeout(600);
     await expect(page.locator("canvas").first()).toHaveScreenshot("xxl-circle-frame.png");
   });
+
+  // v33.0.2 P2-D (Codex-Review-Folgepunkt): Bisher deckte KEINE Visual-Baseline das
+  // Rahmen-Umriss-Overlay ab. Im Worker-Modus besitzt der Worker die Feld-Canvas und
+  // zeichnet den duennen Umriss NICHT — eine separate, immer-Main-Thread Overlay-Canvas
+  // (aria-hidden) traegt ihn. Diese Baseline fixiert genau das: Worker AN (4XL ueber dem
+  // Auto-Cap 90k) + Kreis-Rahmen, **leeres Feld** (kein Random/Start). Deterministisch,
+  // weil keine Zellen gerendert werden -> der Worker malt nur den dunklen Hintergrund und
+  // das Overlay den Teal-Kreis-Umriss. Schuetzt P2-B (view-sync) + die Overlay-Existenz:
+  // verschwindet das Overlay oder driftet der Umriss, schlaegt die Baseline an.
+  test("Worker-Modus: Rahmen-Umriss-Overlay (4XL Kreis, leeres Feld)", async ({ page }) => {
+    const errors: string[] = [];
+    page.on("pageerror", (e) => errors.push("pageerror: " + e.message));
+    page.on("console", (m) => { if (m.type() === "error") errors.push("console: " + m.text()); });
+
+    await page.goto("/");
+    await page.waitForTimeout(400);
+    await page.getByRole("button", { name: "Tab 3 Hex-Regeln" }).click();
+    await page.waitForTimeout(250);
+    // 4XL (160k > Auto-Worker-Cap 90k) -> Worker aktiviert sich selbst.
+    await page.locator("select").nth(1).selectOption("6");
+    await page.getByRole("button", { name: "Kreis", exact: true }).click();
+    const toggle = page.getByRole("button", { name: /Worker (AN|AUS) \(Beta\)/ });
+    await expect(toggle, "Auto-Worker bei 4XL aktiv").toHaveText(/Worker AN \(Beta\)/);
+    await page.getByRole("button", { name: "Tab 3 Hex-Regeln" }).click(); // Panel zu
+    // Overlay zeichnet erst, wenn der Worker WIRKLICH aktiv ist (workerActiveRef) —
+    // grosszuegig warten, bis transferControlToOffscreen + "ready" durch sind.
+    await page.waitForTimeout(1200);
+    // Strukturelle Zusicherung: die Overlay-Canvas (aria-hidden) ist gemountet.
+    await expect(page.locator('canvas[aria-hidden="true"]')).toHaveCount(1);
+    // Composite (Feld-Worker-Render + Overlay-Umriss) ueber den Feld-Container.
+    await expect(page.locator(".ghx-canvas")).toHaveScreenshot("worker-overlay-outline.png");
+    expect(errors, "keine Konsolen-/Page-Fehler im Overlay-Pfad").toEqual([]);
+  });
 });
