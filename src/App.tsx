@@ -937,7 +937,7 @@ export default function GolHex() {
     const dpr = window.devicePixelRatio || 1;
     const Wc = canvas.width, Hc = canvas.height;
     const { s, tx, ty } = viewRef.current;
-    const g = gridRef.current; const hr = g.hr, r0 = g.rows, c0 = g.cols;
+    const g = gridRef.current; const hr = g.hr, c0 = g.cols;
     const pxRgate = hr * s;
 
     // --- ImageData-Raster-Fast-Path (winzige Zellen / XXL, Vollredraw) ---------
@@ -1068,30 +1068,39 @@ export default function GolHex() {
 
     const col = colorRef.current, gh = ghostRef.current;
     const dmask = neighRef.current.mask;
-    // Gitterlinien nur wenn gross genug (nur In-Domaenen-Zellen)
-    if (pxR >= 4) {
-      const grid = new Path2D();
-      for (let r = 0; r < r0; r++) for (let c = 0; c < c0; c++) { const i = r * c0 + c; if (!dmask[i]) continue; addHexIdx(grid, i, hr * 0.95); }
-      ctx.lineWidth = Math.max(0.4, 1 / s); ctx.strokeStyle = "rgba(92,240,204,0.10)"; ctx.stroke(grid);
-    }
-
-    // Ghosts (analog)
+    // EIN Durchlauf statt 14 (bisher 1x Gitter + 1x Geister + 12x Farbe je ein
+    // voller Zell-Scan): Gitterlinien, Geister und je Farbe ein Path2D in DERSELBEN
+    // Schleife sammeln, danach in EXAKT der bisherigen Reihenfolge ausgeben
+    // (Gitter -> Geister -> je Farbe Glow+Fuellung in ALLCOL-Reihenfolge). Pixel-
+    // identisch (Geometrie + Zeichenreihenfolge unveraendert), aber O(N) statt
+    // O(14N) Zell-Iterationen pro Vollredraw. State-of-the-Art Canvas-Batching:
+    // gleiche fillStyle-Geometrie in EINEN Path sammeln, fill()/stroke() je Stil
+    // genau einmal (web-fundiert: AG-Grid Canvas-Best-Practices, MDN Path2D).
+    // Greift im life-Vollredraw bei pxR>=3.5 — u.a. der laufende, hineingezoomte
+    // Fall (pxR>=4 umgeht den inkrementellen Pfad -> Vollredraw pro Generation).
+    const drawGrid = pxR >= 4, drawGlow = pxR >= 5;
+    const gridP = drawGrid ? new Path2D() : null;
     const gp = new Path2D(); let anyG = false;
-    for (let i = 0; i < gh.length; i++) if (gh[i]) { addHexIdx(gp, i, hr * 0.78); anyG = true; }
-    if (anyG) { ctx.fillStyle = "rgba(140,196,187,0.20)"; ctx.fill(gp); }
-
-    // Fuellung + Glow pro Farbe
-    for (const cc of ALLCOL) {
-      const fill = new Path2D(); let any = false;
-      const glow = new Path2D();
-      for (let i = 0; i < col.length; i++) {
-        if (col[i] !== cc) continue; any = true;
-        addHexIdx(fill, i, hr * 0.92);
-        if (pxR >= 5) addHexIdx(glow, i, hr * 1.1);
+    const fillByCol = new Array(13), glowByCol = drawGlow ? new Array(13) : null;
+    for (let i = 0; i < col.length; i++) {
+      if (gridP && dmask[i]) addHexIdx(gridP, i, hr * 0.95);
+      if (gh[i]) { addHexIdx(gp, i, hr * 0.78); anyG = true; }
+      const cc = col[i];
+      if (cc) {
+        let fp = fillByCol[cc]; if (!fp) fp = fillByCol[cc] = new Path2D();
+        addHexIdx(fp, i, hr * 0.92);
+        if (glowByCol) { let gw = glowByCol[cc]; if (!gw) gw = glowByCol[cc] = new Path2D(); addHexIdx(gw, i, hr * 1.1); }
       }
-      if (!any) continue;
+    }
+    // Gitterlinien (nur In-Domaenen-Zellen, ab pxR>=4)
+    if (gridP) { ctx.lineWidth = Math.max(0.4, 1 / s); ctx.strokeStyle = "rgba(92,240,204,0.10)"; ctx.stroke(gridP); }
+    // Geister (analog, Untergrund)
+    if (anyG) { ctx.fillStyle = "rgba(140,196,187,0.20)"; ctx.fill(gp); }
+    // Fuellung + Glow pro Farbe (ALLCOL-Reihenfolge wie zuvor)
+    for (const cc of ALLCOL) {
+      const fill = fillByCol[cc]; if (!fill) continue;
       const [rr, gg, bb] = COLA[cc];
-      if (pxR >= 5) { ctx.fillStyle = `rgba(${rr},${gg},${bb},0.16)`; ctx.fill(glow); }
+      if (drawGlow) { ctx.fillStyle = `rgba(${rr},${gg},${bb},0.16)`; ctx.fill(glowByCol[cc]); }
       ctx.fillStyle = COLHEX[cc]; ctx.fill(fill);
     }
     drawFrame(ctx, s);
