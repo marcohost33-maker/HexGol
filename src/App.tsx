@@ -1412,6 +1412,13 @@ export default function GolHex() {
   // KEIN Transfer -> Main behaelt seine Arrays) ueber die schon vorhandene
   // "state"-Bruecke des Workers (render-worker.js). Im Main-Thread-Pfad
   // (Worker inaktiv) ist das ein No-Op.
+  // Pusht den Main-Thread-Zustand in den Worker (der die OffscreenCanvas BESITZT
+  // und sonst seine eigene, ggf. evolvierte Kopie behaelt — web.dev OffscreenCanvas).
+  // INVARIANTE (load-bearing, Equalita 2026-06-08): nur aus PAUSE-Zeit-Mutationen
+  // rufen (Random/Leeren/Undo/Place/Seed/Stempel/Load) ODER solange der Main-Loop
+  // bei aktivem Worker NICHT steppt (App.tsx:~1205 early-return). Ein Sync MITTEN in
+  // einer laufenden Worker-Sim wuerde dessen evolvierten Zustand mit stalem Main-
+  // Zustand ueberschreiben. Nicht aus dem Render-/Step-Loop aufrufen.
   const syncWorkerState = () => {
     const w = workerRef.current;
     if (!w || !workerActiveRef.current) return;
