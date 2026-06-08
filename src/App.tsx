@@ -1605,8 +1605,8 @@ export default function GolHex() {
   };
   const doClear = () => {
     pushUndo(); resetOrigin(); // neuer Lauf -> Urzustand-Slot zuruecksetzen
-    if (simMode === "rval") { fieldRef.current.fill(0); fieldImRef.current.fill(0); tickRef.current = 0; setGen(0); dirtyRef.current = true; return; }
-    colorRef.current.fill(0); ghostRef.current.fill(0); ageRef.current.fill(0); tickRef.current = 0; setGen(0); updatePop(); dirtyRef.current = true;
+    if (simMode === "rval") { fieldRef.current.fill(0); fieldImRef.current.fill(0); tickRef.current = 0; setGen(0); dirtyRef.current = true; syncWorkerState(); return; }
+    colorRef.current.fill(0); ghostRef.current.fill(0); ageRef.current.fill(0); tickRef.current = 0; setGen(0); updatePop(); dirtyRef.current = true; syncWorkerState();
   };
   const doRandom = () => {
     pushUndo(); resetOrigin(); // neuer Lauf -> Urzustand-Slot zuruecksetzen
@@ -1615,7 +1615,7 @@ export default function GolHex() {
     const dmask = neighRef.current.mask;
     const rand = rng((seedRef.current & 0x7fffffff) | 1);
     for (let i = 0; i < col.length; i++) { col[i] = (dmask[i] && rand() >= (1 - DENS)) ? PRIMARY[Math.floor(rand() * 3)] : 0; ageRef.current[i] = col[i] ? 1 : 0; }
-    tickRef.current = 0; setGen(0); updatePop(); dirtyRef.current = true;
+    tickRef.current = 0; setGen(0); updatePop(); dirtyRef.current = true; syncWorkerState();
   };
   // Reellwertige Anfangsbedingung je Regel (nur innerhalb der Domaene).
   const rvalSeed = () => {
@@ -1629,7 +1629,7 @@ export default function GolHex() {
     else if (rvalRule === "collatz") { const rnd = rng((seedRef.current & 0x7fffffff) | 1); for (let i = 0; i < fld.length; i++) if (dmask[i]) fld[i] = 2 + Math.floor(rnd() * 9998); }
     else if (rvalRule === "genes") { const rnd = rng((seedRef.current & 0x7fffffff) | 1); for (let i = 0; i < fld.length; i++) { if (dmask[i] && rnd() < 0.45) { const a1 = rnd() < 0.6 ? 0 : 1, a2 = rnd() < 0.6 ? 0 : 1; fld[i] = genotype(a1, a2); } } }
     else { fld[mid] = 1; }
-    tickRef.current = 0; setGen(0); dirtyRef.current = true; fitView();
+    tickRef.current = 0; setGen(0); dirtyRef.current = true; fitView(); syncWorkerState();
     solverWarnRef.current = false; setSolverWarn(false);
     solverDivergedRef.current = false; setSolverDiverged(false);
   };
@@ -1638,8 +1638,8 @@ export default function GolHex() {
   }, [simMode, rvalRule]);
   const doUndo = () => {
     const u = undoRef.current.pop(); if (!u) return;
-    if (u && u.rval) { fieldRef.current.set(u.fld); fieldImRef.current.set(u.fim); dirtyRef.current = true; return; }
-    colorRef.current.set(u); ghostRef.current.fill(0); updatePop(); dirtyRef.current = true;
+    if (u && u.rval) { fieldRef.current.set(u.fld); fieldImRef.current.set(u.fim); dirtyRef.current = true; syncWorkerState(); return; }
+    colorRef.current.set(u); ghostRef.current.fill(0); updatePop(); dirtyRef.current = true; syncWorkerState();
   };
 
   // --- v33 PR-C: "1. Figur" / Urzustand ------------------------------------
@@ -2020,7 +2020,7 @@ export default function GolHex() {
     const r0 = (R - mR) >> 1, c0 = (C - mC) >> 1;
     const dmask = neighRef.current.mask; // Audit-P1.1: nicht out-of-domain stempeln
     offs.forEach(([dr, dc]) => { const rr = r0 + dr, cc = c0 + dc; if (rr >= 0 && rr < R && cc >= 0 && cc < C) { const idx = rr * C + cc; if (!dmask[idx]) return; col[idx] = pc; ageRef.current[idx] = 1; } });
-    updatePop(); dirtyRef.current = true; fitView();
+    updatePop(); dirtyRef.current = true; fitView(); syncWorkerState();
   };
   // Farbkreis-Stempel: 12 Itten-Farben kreisfoermig in die Gittermitte.
   // mode "ring" = Farben nur auf dem Kreisrand; "disc" = gefuellte Scheibe,
@@ -2057,7 +2057,7 @@ export default function GolHex() {
         age[idx] = 1;
       }
     }
-    updatePop(); dirtyRef.current = true; fitView();
+    updatePop(); dirtyRef.current = true; fitView(); syncWorkerState();
   };
 
   // v33 PR-B: Stempel an die getippte Zelle setzen. Nutzt die kanonischen
@@ -3033,33 +3033,6 @@ export default function GolHex() {
             }} />
           </div>
         )}
-        {/* v33: Schwebende Zoom-Steuerung rechts UNTEN (44px, rgba-Panel wie Mockup). */}
-        <div style={{ position: "absolute", right: 10, bottom: 10, display: "flex", flexDirection: "column", gap: 8, pointerEvents: "none" }}>
-          {[["+", "Vergroessern", () => zoom(1.3)], ["\u2212", "Verkleinern", () => zoom(1 / 1.3)], ["Fit", "Einpassen", () => fitView()]].map(([lab, al, fn], i) => (
-            <button key={i} onClick={fn} aria-label={al} title={al} style={{
-              pointerEvents: "auto", width: 44, height: 44, borderRadius: 12, cursor: "pointer",
-              border: `1px solid ${T.border}`, background: "rgba(20,27,36,0.88)", backdropFilter: "blur(8px)",
-              color: T.accent, fontSize: lab === "Fit" ? 13 : 20, fontWeight: 700, fontFamily: MONO, lineHeight: 1, display: "flex", alignItems: "center", justifyContent: "center",
-            }}>{lab}</button>
-          ))}
-          <div style={{ pointerEvents: "none", textAlign: "center", fontSize: 9.5, color: T.sub, fontFamily: MONO, background: "rgba(20,27,36,0.88)", borderRadius: 9, padding: "2px 0", border: `1px solid ${T.border}` }}>
-            {zoomLbl >= 10 ? zoomLbl.toFixed(0) : zoomLbl.toFixed(1)}x
-          </div>
-        </div>
-
-        {/* v33 PR-B: Einwisch-GRIFF links. Sichtbare Primaer-Affordance (Recherche
-            Thema 1: Handle/Icon-Tap PRIMAER, Edge-Swipe nur Bonus). Tap oeffnet den
-            Drawer auf Tab 1 (Farben). Nicht exakt auf der Systemkante (x=0..6 frei),
-            damit die iOS-Back-Geste nicht kollidiert. */}
-        {drawer == null && (
-          <button onClick={() => setDrawer(1)} aria-label="Farben & Stempel oeffnen" title="Farben & Stempel"
-            style={{ position: "absolute", left: 0, top: "50%", transform: "translateY(-50%)", zIndex: 18,
-              width: 24, height: 92, borderRadius: "0 12px 12px 0", border: `1px solid ${T.border}`, borderLeft: "none",
-              background: "rgba(20,27,36,0.92)", backdropFilter: "blur(8px)", color: T.accent, fontSize: 14, fontWeight: 700,
-              fontFamily: MONO, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", touchAction: "none" }}>
-            &#10095;
-          </button>
-        )}
         {/* v33 PR-B: LINKS-Drawer fuer Farben (1) + Formen/Stempel (2). Ueberlagert nur
             den linken Teil; das Feld bleibt rechts sichtbar (Recherche Thema 1/3).
             Schliessen: Tap auf den Scrim rechts / Griff-zu / aktiven Tab erneut tippen. */}
@@ -3188,6 +3161,32 @@ export default function GolHex() {
             </div>
           </div>
         )}
+      </div>
+
+      {/* v33 (2026-06-08, User1): Feld-Werkzeugleiste UNTER dem Feld. Zoom (−/Fit/+)
+          und der Farben/Stempel-Griff wurden aus dem Hexfeld geholt, damit das GANZE
+          Feld/der Rahmen immer unverdeckt sichtbar ist. aria-labels unveraendert. */}
+      <div style={{ flexShrink: 0, display: "flex", alignItems: "center", gap: 8, marginTop: compact ? 5 : 8, padding: "0 2px" }}>
+        {drawer == null && (
+          <button onClick={() => setDrawer(1)} aria-label="Farben & Stempel oeffnen" title="Farben & Stempel oeffnen"
+            style={{ height: 40, padding: "0 12px", borderRadius: 10, border: `1px solid ${T.border}`,
+              background: "rgba(20,27,36,0.92)", color: T.accent, fontSize: 12, fontWeight: 700, fontFamily: MONO,
+              cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ fontSize: 13 }}>&#10095;</span> Farben &amp; Stempel
+          </button>
+        )}
+        <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{ fontSize: 10, color: T.sub, fontFamily: MONO, minWidth: 34, textAlign: "right" }}>
+            {zoomLbl >= 10 ? zoomLbl.toFixed(0) : zoomLbl.toFixed(1)}x
+          </span>
+          {[["−", "Verkleinern", () => zoom(1 / 1.3)], ["Fit", "Einpassen", () => fitView()], ["+", "Vergroessern", () => zoom(1.3)]].map(([lab, al, fn], i) => (
+            <button key={i} onClick={fn} aria-label={al} title={al} style={{
+              width: 40, height: 40, borderRadius: 10, cursor: "pointer", border: `1px solid ${T.border}`,
+              background: "rgba(20,27,36,0.92)", color: T.accent, fontSize: lab === "Fit" ? 12 : 19, fontWeight: 700,
+              fontFamily: MONO, lineHeight: 1, display: "flex", alignItems: "center", justifyContent: "center",
+            }}>{lab}</button>
+          ))}
+        </div>
       </div>
 
       {/* v33 STATISTIK-ZEILE (34px, ueber der Steuerung). Gen · Pop · ±Geburten/Tode ·

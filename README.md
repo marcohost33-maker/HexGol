@@ -191,7 +191,7 @@ re-exported through `sim-engine.js`, unit-tested (54 geom tests).
 
 ### Domain frames + topology
 
-Four frame shapes define the simulation domain (cells outside are permanent
+Six frame shapes define the simulation domain (cells outside are permanent
 walls); box/hexagon/triangle pick the largest inscribed shape that fills the hex
 field, while the circle uses an **explicit radius** (see above):
 
@@ -216,6 +216,18 @@ polygon) in `tests/unit/pr-e-ellipse-freeform.test.js`.
 (vertical), 5–500 grid steps. **Freeform controls:** **Zeichnen** toggles draw
 mode; drag a closed stroke on the canvas (released stroke closes the polygon and
 builds the mask); **Leeren** clears the drawn shape.
+
+**Worker render (≥90k cells) — single source of truth.** Above the auto-worker
+threshold the OffscreenCanvas worker owns rendering; the main thread must
+**explicitly push** state to it (`syncWorkerState`). Every pause-time edit
+(Random, Leeren, Undo, pattern/colour-wheel place, rval seed, stamp, load,
+restore) now syncs — otherwise the worker keeps its stale (empty) copy and the
+field renders blank (regression `tests/e2e/frame-render.spec.ts`, which asserts
+the mask actually reaches the screen, not just "no console errors"). Known minor
+gap: the worker does not draw the thin frame **outline** (the masked cells still
+show the shape); main-thread grids draw it. **Zoom (−/Fit/+) and the
+Farben/Stempel handle live in a bar *below* the field** so the whole hex field /
+frame is always unobstructed.
 
 ### Touch / pointer controls
 
