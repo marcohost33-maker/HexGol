@@ -13,6 +13,7 @@ import {
   idbPut, idbGet, idbList, idbDelete, idbRename,
   makeOriginSnapshot, shouldCaptureOrigin,
   SAVE_FORMAT, SAVE_FORMAT_VERSION,
+  reloadGuardDecision, MAX_RELOAD_FRAMES,
 } from "../../src/lib/savestate.js";
 
 // Deterministisches Pseudo-Gitter (Seed-stabil), Zustaende 0..12 (GolHex-Farben).
@@ -98,6 +99,37 @@ describe("Format-Validierung (Fail-Closed)", () => {
   });
   it("wirft bei fehlenden cells", () => {
     expect(() => serializeSave({ meta: {} })).toThrow(/cells/);
+  });
+});
+
+describe("Reload-Guard (A-GAP-1 / A-BUG-2: keine rAF-Endlosschleife)", () => {
+  it("schreibt sofort, wenn die Buffer-Laenge passt", () => {
+    expect(reloadGuardDecision(100, 100, 0)).toBe("write");
+  });
+  it("versucht erneut, solange die Laenge noch nicht konvergiert ist", () => {
+    expect(reloadGuardDecision(0, 100, 0)).toBe("retry");
+    expect(reloadGuardDecision(50, 100, 5)).toBe("retry");
+  });
+  it("bricht ab statt endlos zu pollen, wenn die Laenge nie konvergiert (clamped circleRadius)", () => {
+    // Szenario: geladener circleRadius wird auf MAX geklemmt -> Masken-Zellzahl
+    // weicht von der gespeicherten ab -> targetLen wird NIE erreicht.
+    expect(reloadGuardDecision(900, 1000, MAX_RELOAD_FRAMES)).toBe("abort");
+    expect(reloadGuardDecision(900, 1000, MAX_RELOAD_FRAMES + 50)).toBe("abort");
+  });
+  it("write hat Vorrang vor abort am Limit (Konvergenz im letzten Frame)", () => {
+    expect(reloadGuardDecision(1000, 1000, MAX_RELOAD_FRAMES + 99)).toBe("write");
+  });
+  it("loopt eine inkompatible Last in endlicher Zeit aus (Simulation)", () => {
+    // Vollstaendiger Trockenlauf: nie-konvergierende Laenge endet deterministisch
+    // mit "abort" nach <= MAX_RELOAD_FRAMES+1 Iterationen (kein Haengen).
+    let attempts = 0, decision = "retry", iters = 0;
+    while (decision === "retry") {
+      decision = reloadGuardDecision(10, 20, attempts); // 10 != 20, konvergiert nie
+      if (decision === "retry") attempts++;
+      if (++iters > MAX_RELOAD_FRAMES + 5) break; // Sicherheitsnetz fuer den Test selbst
+    }
+    expect(decision).toBe("abort");
+    expect(attempts).toBe(MAX_RELOAD_FRAMES);
   });
 });
 

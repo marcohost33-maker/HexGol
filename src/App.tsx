@@ -19,7 +19,7 @@ import { supportsOffscreenWorker } from "./lib/worker-support.js"; // Feature-De
 import {
   serializeSave, deserializeSave, makeOriginSnapshot, shouldCaptureOrigin,
   idbPut, idbGet, idbList, idbDelete, idbRename,
-  SAVE_FILE_EXT, AUTOSAVE_KEY,
+  SAVE_FILE_EXT, AUTOSAVE_KEY, reloadGuardDecision,
 } from "./lib/savestate.js";
 // v33 PR-D: Canvas-Snapshot teilen (Web Share L2 + Download-Fallback).
 import {
@@ -1609,9 +1609,17 @@ export default function GolHex() {
     // 2) Zellen nach dem Grid-Reset einspielen. Der Grid-Effekt setzt N/Buffer neu;
     //    wir warten zwei Frames (State-Flush + Effekt) und schreiben dann exakt.
     const targetLen = cells.length;
+    let attempts = 0;
     const writeCells = () => {
       // Buffer muss zur geladenen Laenge passen (sonst noch im Reflow) -> retry.
-      if (colorRef.current.length !== targetLen) { requestAnimationFrame(writeCells); return; }
+      // Audit A-GAP-1/A-BUG-2: Endlosschleife verhindern, falls die Ziel-Laenge
+      // nie konvergiert (z.B. geclampter circleRadius). Fail-closed nach MAX Frames.
+      const decision = reloadGuardDecision(colorRef.current.length, targetLen, attempts);
+      if (decision === "retry") { attempts++; requestAnimationFrame(writeCells); return; }
+      if (decision === "abort") {
+        setSaveMsg("Laden fehlgeschlagen: Stand ist mit der aktuellen Version nicht kompatibel (Gittergroesse weicht ab).");
+        return;
+      }
       colorRef.current.set(cells);
       ghostRef.current.fill(0);
       // Alter: lebende Zellen als "1" markieren, damit Render/Glow konsistent ist.
@@ -1926,6 +1934,7 @@ export default function GolHex() {
     const k = clamp(stampKRef.current | 0, 1, 3);
     const typ = stampTypeRef.current;
     pushUndo();
+    resetOrigin(); // Audit A-BUG-1: Stempel = "neuer Lauf" (vgl. Kommentar 1548-1549) -> Urzustand verwerfen
     const col = colorRef.current, age = ageRef.current, gh = ghostRef.current;
     const dmask = neighRef.current.mask;
     const cols = STAMP_PALETTES.pick(k, brushRef.current);

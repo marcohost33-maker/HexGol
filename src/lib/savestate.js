@@ -150,6 +150,28 @@ export function deserializeSave(obj) {
   return { cells, meta };
 }
 
+// --- Reload-Guard (Audit A-GAP-1 / A-BUG-2) ----------------------------------
+// applyLoadedState pollt per requestAnimationFrame, bis der reallokierte Zell-
+// Buffer die geladene Laenge erreicht. Wenn die Ziel-Laenge nie konvergiert
+// (z.B. circleRadius wird beim Laden auf MAX_CIRCLE_RADIUS geklemmt -> Masken-
+// Zellzahl weicht ab), lief der rAF-Loop frueher UNENDLICH ohne Abbruch.
+// Diese reine Funktion kapselt die Schleifen-Entscheidung -> unit-testbar.
+export const MAX_RELOAD_FRAMES = 180; // ~3 s @60fps, dann fail-closed statt haengen
+
+/**
+ * Entscheidet pro rAF-Tick, ob geschrieben/erneut versucht/abgebrochen wird.
+ * @param {number} currentLen aktuelle Buffer-Laenge
+ * @param {number} targetLen erwartete (geladene) Laenge
+ * @param {number} attempts bisherige Versuche (0-basiert)
+ * @param {number} [maxFrames=MAX_RELOAD_FRAMES]
+ * @returns {"write"|"retry"|"abort"}
+ */
+export function reloadGuardDecision(currentLen, targetLen, attempts, maxFrames = MAX_RELOAD_FRAMES) {
+  if (currentLen === targetLen) return "write";
+  if (attempts >= maxFrames) return "abort";
+  return "retry";
+}
+
 // --- IndexedDB-Wrapper (duenn, Promise-basiert) -------------------------------
 // Speichert pro Slot { key (Name), cells (TypedArray nativ), meta }. KEINE Lib.
 // `indexedDB`-Quelle ist injizierbar (Default: globalThis.indexedDB) — so kann
