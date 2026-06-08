@@ -103,4 +103,47 @@ test.describe("GolHex v33 Einwisch-Drawer + Stempel (PR-B)", () => {
 
     expect(errors, "keine Fehler beim Stempel-Platzieren").toEqual([]);
   });
+
+  // Audit A-BUG-1: Stempel setzen == "neuer Lauf" -> der Urzustand-Slot ("1. Figur")
+  // muss verworfen werden (analog Leeren/Random/Figur). Vor dem Fix sprang "1. Figur"
+  // nach einem Stempel zum Urzustand des ALTEN Laufes. Beobachtbarer Kontrakt:
+  // nach Play (Urzustand gesichert -> Button aktiv) deaktiviert ein Stempel ihn wieder.
+  test("Stempel verwirft den Urzustand (A-BUG-1): '1. Figur' wird nach Stempel wieder deaktiviert", async ({ page }) => {
+    const errors: string[] = [];
+    page.on("pageerror", (e) => errors.push("pageerror: " + e.message));
+    page.on("console", (m) => { if (m.type() === "error") errors.push("console: " + m.text()); });
+
+    await page.goto("/");
+    await page.waitForTimeout(400);
+
+    const firstFigure = page.getByRole("button", { name: "Zur ersten Figur" });
+
+    // Urzustand erzeugen: Random -> Play -> Pause sichert den Urzustand-Slot.
+    await page.getByRole("button", { name: "Random", exact: true }).click();
+    await page.waitForTimeout(200);
+    await expect(firstFigure, "vor erstem Play: disabled").toBeDisabled();
+    await page.getByRole("button", { name: "Start" }).click();
+    await page.waitForTimeout(500);
+    await page.getByRole("button", { name: "Pause" }).click();
+    await page.waitForTimeout(150);
+    await expect(firstFigure, "nach Play: Urzustand existiert -> enabled").toBeEnabled();
+
+    // Stempel setzen: Drawer -> Formen -> Ring -> Tap aufs Feld.
+    await page.getByRole("button", { name: "Farben & Stempel oeffnen" }).click();
+    await page.waitForTimeout(150);
+    await page.getByRole("button", { name: "Drawer Formen" }).click();
+    await page.waitForTimeout(150);
+    await page.getByRole("button", { name: "Stempel Ring" }).click();
+    await page.waitForTimeout(100);
+    const canvas = page.locator("canvas").first();
+    const box = await canvas.boundingBox();
+    expect(box, "Feld-Canvas hat ein Rechteck").not.toBeNull();
+    await page.mouse.click(box!.x + box!.width * 0.92, box!.y + box!.height * 0.5);
+    await page.waitForTimeout(250);
+
+    // Kern-Assertion: Stempel = neuer Lauf -> Urzustand verworfen -> Button disabled.
+    await expect(firstFigure, "nach Stempel: Urzustand verworfen -> wieder disabled").toBeDisabled();
+
+    expect(errors, "keine Fehler im Stempel-Origin-Ablauf").toEqual([]);
+  });
 });
