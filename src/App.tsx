@@ -556,6 +556,34 @@ export default function GolHex() {
     setStats({ pop: 0, cnt: [0,0,0,0,0,0,0,0,0,0,0,0,0], density: 0, births: 0, deaths: 0, sps: 0, hist: [] });
     setRunning(false); dirtyRef.current = true;
     fitView();
+    // v33 P2-C (Codex-Review): Laeuft schon ein AKTIVER Worker, muss seine Geometrie
+    // IN-PLACE aktualisiert werden (kein Respawn -> transferControlToOffscreen ist
+    // je Canvas-Element irreversibel; der Radius-Slider feuert zudem roh pro Drag-
+    // Step). Ohne dies bliebe der Worker auf der STALEN init-Geometrie (alte Maske/
+    // Grid/N) stehen -> bei Kreis/Ellipse sogar N-Desync. NUR wenn bereits aktiv:
+    // der erste Eintritt in bigGrid laeuft weiter ueber den canvasKey-Init-Pfad
+    // (Auto-Worker-Effekt) -> kein Doppel-Setup. Reihenfolge: fitView() OBEN hat
+    // viewRef bereits frisch gesetzt; diese frische View geht mit.
+    if (workerActiveRef.current && workerRef.current) {
+      const w = workerRef.current;
+      const dpr = window.devicePixelRatio || 1;
+      const v = viewRef.current;
+      const canvas = canvasRef.current;
+      // Canvas-Pixelmasse aus dem realen Element (vom Init/Resize gesetzt). Falls
+      // (noch) nicht gemessen, liefert applyGeometry-Fallback die alte Groesse.
+      const width = canvas ? canvas.width : undefined;
+      const height = canvas ? canvas.height : undefined;
+      w.postMessage({
+        type: "regeom",
+        R, C, hr: HR, shape: frameShape,
+        circleRadius, ellipseA, ellipseB, polygon: freeformPolygon,
+        dpr, width, height,
+        view: { s: v.s, tx: v.tx, ty: v.ty }, tick: 0,
+        // Neues Grid = Reset (Felder leer): KEINE col/fld mitsenden -> applyGeometry
+        // alloziert frische Nullarrays auf das neue N (konsistent mit Main-Rebuild).
+        CX: cellCxRef.current.slice().buffer, CY: cellCyRef.current.slice().buffer,
+      });
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sizeIdx, frameShape, circleRadius, ellipseA, ellipseB, freeformPolygon]);
 

@@ -223,6 +223,40 @@ function frameOpts(m) {
   return undefined;
 }
 
+// v33 P2-C: Geometrie-Einrichtung des Workers EINMAL faktorisiert (init UND regeom
+// teilen sie). Baut neigh aus shape+frameOpts, (re-)alloziert ALLE N-abhaengigen
+// Arrays auf das neue N (col/gh/age + Doppelpuffer + rval-Felder + hqstWork),
+// uebernimmt die vom Main gelieferten CX/CY (oder frisch), setzt die Canvas-
+// Pixelmasse (dpr) sowie die View, nullt tick und rendert. KEINE Sim-Loop laeuft
+// danach (running wird vom Aufrufer auf false gesetzt -> konsistent mit dem Main-
+// Grid-Rebuild, der setRunning(false) macht). N-Mismatch-sicher: ALLE Arrays werden
+// auf das NEUE N neu allokiert, daher kein out-of-bounds gegen alte Laengen.
+function applyGeometry(m) {
+  R = m.R; C = m.C; N = R * C; hr = m.hr; dpr = m.dpr || 1;
+  neigh = buildNeighbors(R, C, m.shape, frameOpts(m));
+  // Zustands-Arrays: vom Main per Transfer uebernehmen, sonst frisch (= Reset).
+  col = m.col ? new Uint8Array(m.col) : new Uint8Array(N);
+  gh = m.gh ? new Uint8Array(m.gh) : new Uint8Array(N);
+  age = m.age ? new Uint16Array(m.age) : new Uint16Array(N);
+  nCol = new Uint8Array(N); nGh = new Uint8Array(N); nAge = new Uint16Array(N);
+  fld = m.fld ? new Float32Array(m.fld) : new Float32Array(N);
+  fim = m.fim ? new Float32Array(m.fim) : new Float32Array(N);
+  fBuf = new Float32Array(N); fBufIm = new Float32Array(N); fRec = new Uint8Array(N);
+  hqstWork = mkHqstWork(N);
+  CX = m.CX ? new Float32Array(m.CX) : new Float32Array(N);
+  CY = m.CY ? new Float32Array(m.CY) : new Float32Array(N);
+  // Canvas-Pixelmasse: bei regeom liefert der Main width/height (Grid-Wechsel kann
+  // die fit-View und damit die noetige Aufloesung aendern). Beim init kommt die
+  // Groesse bereits vom transferierten Element -> dann nur setzen, wenn geliefert.
+  if (canvas && Number.isFinite(m.width) && Number.isFinite(m.height)) {
+    canvas.width = m.width; canvas.height = m.height;
+  }
+  // Resize eines 2D-Kontexts loescht den ImageData-Cache-Bedarf -> neu anlegen.
+  renderToCanvas._img = null;
+  view = m.view || view;
+  tick = Number.isFinite(m.tick) ? m.tick : 0;
+}
+
 // --- Nachrichten-Bruecke -----------------------------------------------------
 self.onmessage = (e) => {
   const m = e.data;
@@ -231,24 +265,22 @@ self.onmessage = (e) => {
       canvas = m.canvas;
       try { ctx = canvas.getContext("2d", { alpha: false }); }
       catch (err) { postMessage({ type: "error", message: "getContext failed: " + err.message }); return; }
-      R = m.R; C = m.C; N = R * C; hr = m.hr; dpr = m.dpr || 1;
       cfg = m.cfg; mode = m.mode; rule = m.rule; speedMs = m.speedMs ?? 16;
-      neigh = buildNeighbors(R, C, m.shape, frameOpts(m));
-      // Zustands-Arrays uebernehmen (per Transfer; sonst frisch).
-      col = m.col ? new Uint8Array(m.col) : new Uint8Array(N);
-      gh = m.gh ? new Uint8Array(m.gh) : new Uint8Array(N);
-      age = m.age ? new Uint16Array(m.age) : new Uint16Array(N);
-      nCol = new Uint8Array(N); nGh = new Uint8Array(N); nAge = new Uint16Array(N);
-      fld = m.fld ? new Float32Array(m.fld) : new Float32Array(N);
-      fim = m.fim ? new Float32Array(m.fim) : new Float32Array(N);
-      fBuf = new Float32Array(N); fBufIm = new Float32Array(N); fRec = new Uint8Array(N);
-      hqstWork = mkHqstWork(N);
-      CX = m.CX ? new Float32Array(m.CX) : new Float32Array(N);
-      CY = m.CY ? new Float32Array(m.CY) : new Float32Array(N);
-      view = m.view || view;
-      tick = m.tick || 0;
+      applyGeometry(m);
       renderToCanvas();
       postMessage({ type: "ready" });
+      break;
+    }
+    case "regeom": {
+      // v33 P2-C: In-Place-Geometrie-Update des LAUFENDEN Workers (kein Respawn -
+      // transferControlToOffscreen ist je Element irreversibel). Wird vom Main NUR
+      // bei bereits AKTIVEM Worker gesendet, nachdem dort das Grid neu gebaut +
+      // fitView gelaufen ist (frische view). Stoppt die Sim (neues Grid = Reset,
+      // konsistent mit dem Main-Grid-Rebuild, der setRunning(false) macht).
+      if (!canvas || !ctx) break;            // ohne Kontext nichts zu tun
+      running = false; stopLoop();
+      applyGeometry(m);
+      renderToCanvas();
       break;
     }
     case "view": view = m.view; if (!running) renderToCanvas(); break;
