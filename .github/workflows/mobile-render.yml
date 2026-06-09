@@ -1,0 +1,20 @@
+# Adoptiert den zentralen Reusable `mobile-render-verify` (coworkerz-ci) — EVALUATION_STRATEGY §8.1.
+# Faengt die Desktop-vs-Mobile-Klasse, die am 06-09 zwei iPhone-only-Bugs durch desktop-CI durchliess:
+# Form-/Geometrie-Assertion (mobile-hexshape) + deterministisches Perf-Budget unter CDP-Throttle (mobile-perf-budget).
+# Laeuft NUR die 2 dedizierten Render/Perf-Specs (nicht-redundant zur vollen e2e/visual-regression).
+name: mobile-render
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  mobile-render:
+    uses: marcohost33-maker/coworkerz-ci/.github/workflows/mobile-render-verify.yml@f5326cb79b87529e3734c9a7fd63db6cfb9800c2 # PR#4 head
+    with:
+      render-test-command: "npx playwright test --project=mobile tests/e2e/mobile-hexshape.spec.ts tests/e2e/mobile-perf-budget.spec.ts"
