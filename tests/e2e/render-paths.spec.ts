@@ -4,7 +4,7 @@ import { test, expect } from "@playwright/test";
 // zusammengefuehrten Render-Pfade, die statische Visual-Baselines NICHT abdecken
 // (sie starten die Sim nie). Geprueft wird, dass die Koexistenz aus
 //   - inkrementellem Neuzeichnen  (draw(true), pxR<4, life-Schritt-Updates) und
-//   - ImageData-Raster-Fast-Path  (draw(false), hr*s<3.5, Vollredraw)
+//   - ImageData-Raster-Fast-Path  (draw(false), hr*s<2.0, Vollredraw)
 // bei laufender Sim + Ansichtswechseln OHNE Konsolen-/Page-Fehler laeuft, und die
 // neuen Rahmenformen (Hexagon/Dreieck) ohne Fehler umschaltbar sind.
 test.describe("GolHex v31 render-path coexistence", () => {
@@ -29,7 +29,7 @@ test.describe("GolHex v31 render-path coexistence", () => {
 
     // --- Teil B: Vollredraw-Fast-Path (draw(false), ImageData) + neue Rahmenformen.
     // Bei PAUSIERTER Sim (kein Main-Thread-Stau) das Tab 3 oeffnen: XXL waehlen ->
-    // winzige Zellen (hr*s < 3.5) -> Raster-Fast-Path; jeder Form-Wechsel erzwingt
+    // winzige Zellen (hr*s < 2.0) -> Raster-Fast-Path; jeder Form-Wechsel erzwingt
     // einen Vollredraw (dirtyRef), unabhaengig vom Laufzustand.
     await page.getByRole("button", { name: "Tab 3 Hex-Regeln" }).click();
     await page.waitForTimeout(250);

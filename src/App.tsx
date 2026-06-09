@@ -1032,7 +1032,16 @@ export default function GolHex() {
     // Pfad: inkrementell (draw(true)) hat Vorfahrt fuer Schritt-Updates (wenige
     // geaenderte Zellen -> billiger als ein 50k-Pixel-Refill); der Fast-Path
     // beschleunigt Vollredraws (Grid-Wechsel/Zoom/rval). Disjunkte Trigger.
-    if (!incremental && pxRgate < 3.5) { drawRaster(); return; }
+    //
+    // Schwelle 2.0 (war 3.5): auf schmalen Hochkant-Viewports (iPhone ~390px CSS)
+    // faellt das Standard-M-Gitter auf hr*s ~= 2.07 px/Zelle -> mit der alten 3.5er-
+    // Schwelle rasterte M dort zu QUADRATEN statt Hexagonen (Marco-Bug 2026-06-09).
+    // 2.0 sitzt in der gemessenen Luecke zwischen M (8k Zellen, hr*s>=2.0 auf allen
+    // gaengigen iPhones, Hex-Pfad real 60 fps) und L (18k Zellen, hr*s<=1.45 hochkant;
+    // Hex-Pfad real ~3 fps = Freeze-Klasse). Tiefer senken wuerde L/XL/XXL (>=18k) in
+    // den Hex-Pfad zwingen und den iPhone-Freeze re-oeffnen -> 2.0 ist das Optimum
+    // (empirisch belegt: tests/manual/_perf.mjs, M=59.9 fps vs L=1.9 fps @iPhone).
+    if (!incremental && pxRgate < 2.0) { drawRaster(); return; }
 
     // Vollredraw startet mit vollflaechigem Loeschen; der inkrementelle Pfad
     // (unten) loescht NUR die geaenderten Zellen selektiv und darf NICHT
