@@ -1,7 +1,20 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
+// Single source of truth for the app version: package.json `version`.
+// Injected at build time as __APP_VERSION__ so the Splash/branding reads the
+// REAL version (no hard-coded string). Reading here (not in app code) keeps the
+// dependency build-time only — package.json is not bundled into the client.
+const pkg = JSON.parse(
+  readFileSync(fileURLToPath(new URL("./package.json", import.meta.url)), "utf8"),
+);
 
 export default defineConfig({
+  define: {
+    __APP_VERSION__: JSON.stringify(pkg.version),
+  },
   plugins: [react()],
   server: {
     port: 5173,
