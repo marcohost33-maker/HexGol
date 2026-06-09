@@ -40,10 +40,16 @@ test.describe("GolHex v34 Aufnahme teilen (Feature 2)", () => {
     await page.waitForTimeout(700);
     await rec.click(); // gleicher Button = Stop
 
-    // Nach dem Stop: entweder "Clip fertig" (chromium liefert Bytes) ODER eine
-    // ehrliche Fehlermeldung (leere Aufnahme) — beides ist ein DEFINIERTER,
-    // crashfreier Endzustand. Wir akzeptieren beide, fordern aber: kein Crash.
-    await expect(page.getByTestId("clip-msg")).toContainText(/Clip fertig|fehlgeschlagen|Verarbeite/, { timeout: 5000 });
+    // Befund 5 (Codex-Review): NUR auf einen TERMINALEN Endzustand warten —
+    // "Clip fertig" (chromium liefert Bytes) ODER eine ehrliche Fehlermeldung
+    // (leere Aufnahme/fehlgeschlagen). Den transienten "Verarbeite …"-Text NICHT
+    // mehr akzeptieren: der wird in stopClip SYNCHRON gesetzt, also waere der Test
+    // sonst gruen geblieben, selbst wenn das async onstop NIE feuert (stiller
+    // Hang). Mit Timeout 6s muss der Recorder die Aufnahme wirklich abgeschlossen
+    // haben, sonst rot.
+    await expect(page.getByTestId("clip-msg")).toContainText(/Clip fertig|fehlgeschlagen|leere Aufnahme/, { timeout: 6000 });
+    // Und der transiente Verarbeitungstext darf am Ende NICHT mehr stehen.
+    await expect(page.getByTestId("clip-msg")).not.toContainText("Verarbeite");
 
     expect(errors, "keine Konsolen-/Page-Fehler im Aufnahme-Zyklus").toEqual([]);
   });
