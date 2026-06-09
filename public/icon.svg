@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="GolHex">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="40%" r="75%">
+      <stop offset="0%" stop-color="#1b2230"/>
+      <stop offset="100%" stop-color="#0f1216"/>
+    </radialGradient>
+  </defs>
+  <rect width="64" height="64" rx="13" fill="url(#bg)"/>
+  <!-- Conway glider: cells (0,1)(1,2)(2,0)(2,1)(2,2) on a 3x3 raster -->
+  <g fill="#34d399">
+    <rect x="26" y="10" width="11" height="11" rx="2.5"/>
+    <rect x="40" y="24" width="11" height="11" rx="2.5"/>
+    <rect x="12" y="38" width="11" height="11" rx="2.5"/>
+    <rect x="26" y="38" width="11" height="11" rx="2.5"/>
+    <rect x="40" y="38" width="11" height="11" rx="2.5"/>
+  </g>
+</svg>

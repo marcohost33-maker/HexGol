@@ -13,6 +13,7 @@ import {
   oddRToCube, cubeToOddR, hexDist, CUBE_DIRS,
   cubeRing, cubeDisk, kColorByIndex, sectorByAngle,
 } from "./lib/sim-engine.js";
+import Splash from "./lib/Splash.jsx"; // v33 Branding: einmaliger Intro-/Splash-Screen (additiv)
 import { renderRaster } from "./lib/raster-render.js"; // geteilter Raster-Pfad (Worker + Main)
 import { supportsOffscreenWorker } from "./lib/worker-support.js"; // Feature-Detection (fail-closed)
 import { shouldStartPan, decideCloseAction } from "./lib/ui-gestures.js"; // pure UI-Entscheider (Pan-Hit-Test + Schliess-Dispatch)
@@ -45,6 +46,14 @@ import {
 // bestehenden Test-Importpfade (tests/unit/*.test.js -> "../../src/App.tsx")
 // unveraendert weiterlaufen (PR#41-Kontrakt, named exports, export-only).
 export { buildNeighbors, mkHqstWork, stepHQST };
+
+// App-Version aus der EINZIGEN Quelle (package.json "version"), zur Build-Zeit
+// via Vite `define` injiziert (__APP_VERSION__, siehe vite.config.js). Fallback
+// "dev" nur, wenn ohne Vite-Define ausgefuehrt (z.B. isoliertes Tooling) — NIE
+// eine geratene Versionsnummer. Vom Branding-Splash gelesen.
+declare const __APP_VERSION__: string;
+export const APP_VERSION: string =
+  typeof __APP_VERSION__ !== "undefined" ? __APP_VERSION__ : "dev";
 
 // --- HQST-Parameter + Divergenz-Schranke (v33 PR-E / Mathe-Audit P1.4) -------
 // Tight-Binding-Parameter der HQST-Quantenwelle (siehe stepHQST-Aufruf in step()).
@@ -346,6 +355,9 @@ function closeApp() {
 
 // =============================================================================
 export default function GolHex() {
+  // v33 Branding: einmaliger Intro-Splash. Blockiert den App-Start NICHT (App
+  // mountet/laeuft darunter); Overlay verschwindet nach ~1.5 s oder bei Tap/Esc.
+  const [showSplash, setShowSplash] = useState(true);
   const [sizeIdx, setSizeIdx] = useState(1); // M default
   const [frameShape, setFrameShape] = useState("box"); // "box" Rechteck | "circle" Scheibe | "hexagon" | "triangle" | "ellipse" (v33 PR-E) | "freeform" (v33 PR-E)
   // AP-2: EXPLIZITER Kreis-Radius (Gitterschritte, Marco: Default 250, Max 500).
@@ -3409,6 +3421,9 @@ export default function GolHex() {
         }
       : { fontFamily: DISP, background: `radial-gradient(120% 80% at 50% 0%, ${T.bg2} 0%, ${T.bg} 70%)`, minHeight: "100%", color: T.text, padding: "12px 12px 26px", boxSizing: "border-box", overscrollBehavior: "contain", touchAction: "pan-y" }
     }>
+      {showSplash && (
+        <Splash version={APP_VERSION} onDismiss={() => setShowSplash(false)} />
+      )}
       {/* Globale UI-Standards (WCAG 2.2): jeder Button mindestens 44px Touch-Target,
           sichtbarer Fokusring fuer Tastaturbedienung, leichtes Hover/Active-Feedback.
           Schieberegler beanspruchen ihre Bedienachse: touch-action verhindert, dass
