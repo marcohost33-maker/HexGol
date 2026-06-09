@@ -1054,21 +1054,32 @@ export default function GolHex() {
 
     const cosA = [], sinA = [];
     for (let k = 0; k < 6; k++) { const a = -Math.PI / 2 + k * PI3; cosA.push(Math.cos(a)); sinA.push(Math.sin(a)); }
-    const addHex = (path, x, y, rr) => {
+    // PERF (2026-06-09, Mobile-Freeze-Root-Cause): Path2D.closePath() ist auf
+    // Chromiums Skia-Path-Builder pathologisch teuer, wenn EIN Path2D tausende
+    // Subpfade sammelt (gemessen experimental/profile-closepath.mjs: M laufend
+    // @6x-CPU = 23'389 closePath/3s = 1920 ms = 64 % der Wall-Time -> 2.7 fps).
+    // Fuer GEFUELLTE Pfade ist closePath REDUNDANT: ctx.fill() schliesst jeden
+    // offenen Subpfad implizit (HTML-Canvas-Spec) -> Weglassen ist pixel-identisch
+    // (verifiziert experimental/verify-omit.mjs: diff 0). Nur GESTRICHELTE Pfade
+    // (gridP, pxR>=4) brauchen den echten closePath fuer die Eck-Verbindung der
+    // Schliesskante (verify-closepath-fix.mjs: lineTo-zurueck stroke-DIFFERS) ->
+    // `close=true` nur dort. Resultat: M laufend 2.7 -> 27.3 fps (10x), keine
+    // Verhaltens-/Pixel-Aenderung im Fuell-Pfad.
+    const addHex = (path, x, y, rr, close) => {
       path.moveTo(x + rr * cosA[0], y + rr * sinA[0]);
       for (let k = 1; k < 6; k++) path.lineTo(x + rr * cosA[k], y + rr * sinA[k]);
-      path.closePath();
+      if (close) path.closePath();
     };
     // Allokationsfreie Variante: berechnet das Zellzentrum inline aus dem Index,
     // ohne pro Zelle ein {x,y}-Objekt zu erzeugen (vermeidet GC-Druck bei XXL).
     // Spiegelt hexCenter: x = PAD + S3*hr*(col + (row&1?0.5:0)), y = PAD + 1.5*hr*row.
     const padHr = PAD(hr), wHr = S3 * hr, vHr = 1.5 * hr;
-    const addHexIdx = (path, i, rr) => {
+    const addHexIdx = (path, i, rr, close) => {
       const row = (i / c0) | 0, c = i - row * c0;
       const x = padHr + wHr * (c + ((row & 1) ? 0.5 : 0)), y = padHr + vHr * row;
       path.moveTo(x + rr * cosA[0], y + rr * sinA[0]);
       for (let k = 1; k < 6; k++) path.lineTo(x + rr * cosA[k], y + rr * sinA[k]);
-      path.closePath();
+      if (close) path.closePath();
     };
     const pxR = hr * s;
 
@@ -1175,7 +1186,7 @@ export default function GolHex() {
     const gp = new Path2D(); let anyG = false;
     const fillByCol = new Array(13), glowByCol = drawGlow ? new Array(13) : null;
     for (let i = 0; i < col.length; i++) {
-      if (gridP && dmask[i]) addHexIdx(gridP, i, hr * 0.95);
+      if (gridP && dmask[i]) addHexIdx(gridP, i, hr * 0.95, true); // stroked -> echter closePath fuer Eck-Join
       if (gh[i]) { addHexIdx(gp, i, hr * 0.78); anyG = true; }
       const cc = col[i];
       if (cc) {
