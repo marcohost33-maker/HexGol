@@ -479,6 +479,109 @@ function driftHue(selfState, sx, sy) {
 }
 
 // =============================================================================
+// BOOLESCHER LIFE-SCHRITT (pure) — extrahiert aus src/App.tsx (2026-06-08).
+// Frueher inline in step() (load-bearing, §1.4); jetzt EINE getestete Quelle wie
+// HQST/Geometrie. Logik byte-identisch zur v33-Basis (Parity-Orakel:
+// tests/unit/step-life.test.js vergleicht ueber zufaellige Regeln/Seeds/Achsen/
+// Generationen gegen eine naive Referenz). Optimierungen (verhaltens-erhaltend,
+// gemessen experimental/bench-step-life.mjs):
+//   - maxN (12er-Scan pro Zelle) nur berechnet, wenn A5 in {sym,komp} es braucht.
+//     Default a5="off" zahlte den Scan bisher pro Zelle umsonst -> ~1.2-1.3x
+//     schneller bei 3XL/5XL im Default-Pfad, kein Regress im sym/komp-Pfad.
+//   - adia/Flags/needMax einmal vor der Zellschleife gehoben (kein Re-Eval/Zelle).
+//   - cnt bleibt bewusst ein Array-Literal: ein wiederverwendetes Int32Array+fill(0)
+//     ist hier nachweislich LANGSAMER (V8 packed-SMI; Bench-belegt, nicht geraten).
+// g (Eingabe, alles vom Aufrufer bereitgestellt — kein React/DOM/Ref):
+//   col/gh/age : aktuelle Ebenen (Farbe Uint8, Geist Uint8, Alter Uint16-artig)
+//   nc/ng/na   : Ziel-Ebenen (werden geschrieben; Aufrufer tauscht die Refs)
+//   NL         : Nachbar-Lookup (torus ODER edge), dmask : Domaenenmaske
+//   meta       : {bL,sL,smin,smax,isINT?,b2?,s2?} (RMETA/INT_META/WATZ_META)
+//   colorMode  : "quad"|"drift"|... , a1/a2/a3/a4 : Axiom-Flags (booleans)
+//   a5         : "off"|"sym"|"komp" , sysT : Systemtheorie an?, spN : Sollnachbarn
+//   adia       : adiabatische (reflektierende) Wand?, tick : aktueller Tick (a1-Hash)
+// Rueckgabe: { births, deaths } (Statistik); nc/ng/na sind die Ausgabe.
+function stepLife(g) {
+  const col = g.col, gh = g.gh, age = g.age;
+  const nc = g.nc, ng = g.ng, na = g.na;
+  const NL = g.NL, dmask = g.dmask;
+  const { bL, sL, smin, smax } = g.meta;
+  const isINT = !!g.meta.isINT, b2 = g.meta.b2 || null, s2 = g.meta.s2 || null;
+  const colorMode = g.colorMode, a1 = g.a1, a2 = g.a2, a3 = g.a3, a4 = g.a4;
+  const A5 = g.a5, sysT = g.sysT, spN = g.spN, adia = g.adia, tick = g.tick;
+  const n = col.length;
+  let births = 0, deaths = 0;
+  const needMax = (A5 === "sym" || A5 === "komp"); // maxN-Scan nur dann noetig
+  for (let i = 0; i < n; i++) {
+    if (dmask[i] === 0) { nc[i] = 0; ng[i] = 0; na[i] = 0; continue; } // ausserhalb Domaene: Wand
+    const base = i * 6;
+    // cnt bewusst als kleines, packed-SMI Array-Literal (12 Farben, Index 1..12):
+    // V8 behandelt dieses Muster schneller als ein wiederverwendetes Int32Array
+    // mit fill(0) (gemessen experimental/bench-step-life.mjs). Der reine Gewinn
+    // kommt aus dem lazy maxN-Scan unten, nicht aus dem cnt-Puffer.
+    const cnt = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    let live = 0, sx = 0, sy = 0, mask = 0;
+    const self = col[i], selfAlive = self !== 0;
+    for (let k = 0; k < 6; k++) {
+      const j = NL[base + k];
+      if (j < 0) {
+        // Adiabatische (reflektierende) Wand: fehlender Nachbar = Spiegelung der
+        // Randzelle selbst (arxiv 2406.06195, 1607.02291). "null"-Standard = tote Wand.
+        if (adia) {
+          if (selfAlive) { cnt[self]++; live++; sx += COSH[self]; sy += SINH[self]; mask |= (1 << k); }
+          else if (a4 && gh[i]) live++;
+        }
+        continue;
+      }
+      const cj = col[j];
+      if (cj !== 0) { cnt[cj]++; live++; sx += COSH[cj]; sy += SINH[cj]; mask |= (1 << k); }
+      else if (a4 && gh[j]) live++;
+    }
+    const cntSelf = selfAlive ? cnt[self] : 0;
+    let maxN = 0; if (needMax) { for (let c = 1; c <= 12; c++) if (cnt[c] > maxN) maxN = cnt[c]; }
+    let eff = live;
+    if (A5 === "sym") eff = selfAlive ? cntSelf : maxN;
+    else if (A5 === "komp") eff = selfAlive ? live - cntSelf : live - maxN;
+
+    let born = false, newC = 0;
+    if (selfAlive) {
+      let surv = eff <= 6 && sL[eff] === 1;
+      // INT: bei genau 2 Nachbarn zusaetzlich Konfigurations-Constraint (Callahan)
+      if (surv && isINT && eff === 2 && s2 && !s2.includes(hexClass2(mask))) surv = false;
+      if (!surv && a3 && age[i] >= 6 && eff >= smin - 1 && eff <= smax + 1) surv = true;
+      // Systemtheorie: Unterdichte stuetzt das Ueberleben, Ueberdichte entzieht es.
+      if (sysT) { if (!surv && live > 0 && live < spN) surv = true; else if (surv && live > spN + 1) surv = false; }
+      if (surv) {
+        born = true;
+        newC = (colorMode === "drift" && live > 0) ? driftHue(self, sx, sy) : self;
+      }
+    } else if (live > 0 && eff >= 0 && eff <= 6 && bL[eff] === 1) {
+      let ok = true;
+      if (isINT && eff === 2 && b2 && !b2.includes(hexClass2(mask))) ok = false;
+      // Systemtheorie: Geburt nur unter dem Sollwert (fuellt Luecken bis Gleichgewicht).
+      if (sysT && live > spN) ok = false;
+      if (ok) {
+        born = true;
+        if (colorMode === "quad") newC = birthColorQuad(cnt, sx, sy);
+        else if (a2) newC = mMixCnt(cnt, i);
+        else newC = cMixVec(sx, sy, i);
+      }
+    }
+    if (born) { nc[i] = newC; ng[i] = 0; na[i] = selfAlive ? (age[i] < 65535 ? age[i] + 1 : 65535) : 1; if (!selfAlive) births++; }
+    else { na[i] = 0; if (selfAlive) deaths++; if (selfAlive && a4) { nc[i] = 0; ng[i] = 1; } else { nc[i] = 0; ng[i] = 0; } }
+  }
+
+  if (a1) {
+    for (let i = 0; i < n; i++) {
+      if (nc[i] !== 0 || ng[i] !== 0 || col[i] !== 0) continue;
+      const base = i * 6; let silent = true;
+      for (let k = 0; k < 6; k++) { const j = NL[base + k]; if (j < 0) continue; if (col[j] !== 0 || (a4 && gh[j])) { silent = false; break; } }
+      if (silent && hash2(i, tick) < 0.012) { nc[i] = PRIMARY[Math.floor(hash2(i + 7, tick * 3 + 1) * 3)]; na[i] = 1; }
+    }
+  }
+  return { births, deaths };
+}
+
+// =============================================================================
 // REELLWERTIGER SIMULATIONSMODUS (eigenstaendig, neben der booleschen Engine).
 // Drei Regeln, alle web-fundiert und numerisch verifiziert:
 //   - "snow": Reiter-Schneeflocken-Automat (Chaos Solitons Fractals 23:1111).
@@ -794,6 +897,7 @@ export {
   cMixVec,
   mMixCnt,
   driftHue,
+  stepLife,
   RVAL_RULES,
   stepReiter,
   stepWater,
