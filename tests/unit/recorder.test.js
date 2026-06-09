@@ -7,6 +7,7 @@
 import { describe, it, expect, vi } from "vitest";
 import {
   RECORDER_MIME_PREFERENCE,
+  RECORDER_MAX_DURATION_MS,
   REC_STATES,
   extForMime,
   pickSupportedMime,
@@ -169,7 +170,13 @@ describe("createRecorderMachine (reine Uebergaenge)", () => {
 // --- Controller: mockbarer MediaRecorder-Lebenszyklus -----------------------
 // Minimaler MediaRecorder-Mock: speichert die Handler, die start()/stop()
 // setzen, damit der Test dataavailable/stop/error manuell ausloesen kann.
-function makeMockEnv({ chunkBytes = 8, supported = true, captureStreamThrows = false } = {}) {
+function makeMockEnv({
+  chunkBytes = 8, supported = true, captureStreamThrows = false,
+  // manualStop=true: stop() feuert onstop NICHT selbst -> Test steuert die
+  // (real asynchrone) Reihenfolge dataavailable/stop von Hand. Damit lassen sich
+  // Doppel-Stop und verspaetete Events nach Error gezielt reproduzieren.
+  manualStop = false,
+} = {}) {
   const tracks = [{ stop: vi.fn() }];
   const stream = { getTracks: () => tracks };
   const canvas = {
@@ -184,15 +191,24 @@ function makeMockEnv({ chunkBytes = 8, supported = true, captureStreamThrows = f
     constructor(s, opts) {
       this.stream = s; this.mimeType = opts.mimeType;
       this.ondataavailable = null; this.onstop = null; this.onerror = null;
+      this.stopCalls = 0; this.stopped = false;
       inst = this;
     }
     start() { this.started = true; }
-    stop() {
-      // Realistisch: erst dataavailable, dann onstop.
-      if (this.ondataavailable && chunkBytes > 0) {
-        this.ondataavailable({ data: new Blob([new Uint8Array(chunkBytes)], { type: this.mimeType }) });
+    emitData(bytes = chunkBytes) {
+      if (this.ondataavailable && bytes > 0) {
+        this.ondataavailable({ data: new Blob([new Uint8Array(bytes)], { type: this.mimeType }) });
       }
-      if (this.onstop) this.onstop();
+    }
+    emitStop() { if (this.onstop) this.onstop(); }
+    stop() {
+      this.stopCalls += 1;
+      // Realer MediaRecorder wirft, wenn stop() auf inaktivem Recorder laeuft.
+      if (this.stopped) { throw new Error("InvalidStateError: recorder inactive"); }
+      this.stopped = true;
+      if (manualStop) return; // Test steuert dataavailable/stop selbst
+      this.emitData();
+      this.emitStop();
     }
   }
   return { canvas, stream, tracks, getInst: () => inst, MockMR };
@@ -295,5 +311,102 @@ describe("createRecorderController (mockbarer Lebenszyklus)", () => {
     env.getInst().onerror({ error: { message: "Disk voll" } });
     expect(ctrl.state()).toBe(REC_STATES.ERROR);
     expect(err).toBe("Disk voll");
+  });
+
+  // --- Befund 1: Doppel-Stop ist idempotent (kein InvalidStateError) ----------
+  it("Befund 1: zweiter stop() VOR async onstop ruft recorder.stop() nicht erneut", () => {
+    const env = makeMockEnv({ manualStop: true, chunkBytes: 16 });
+    let result = null, err = null;
+    const ctrl = createRecorderController({
+      canvas: env.canvas, MediaRecorderCtor: env.MockMR, now: () => 0,
+      onResult: (blob) => { result = blob; },
+      onError: (r) => { err = r; },
+    });
+    ctrl.start();
+    const mr = env.getInst();
+    expect(ctrl.stop()).toBe(true);     // erster Stop
+    expect(ctrl.isActive()).toBe(false); // sofort nicht mehr aktiv (stopping)
+    expect(ctrl.stop()).toBe(false);    // zweiter Tap -> abgewiesen, KEIN crash
+    expect(mr.stopCalls).toBe(1);       // recorder.stop() genau EINMAL
+    // jetzt feuern die echten Browser-Events
+    mr.emitData(16); mr.emitStop();
+    expect(err).toBeNull();             // kein InvalidStateError-Failure
+    expect(result).not.toBeNull();
+    expect(result.size).toBe(16);
+    expect(ctrl.state()).toBe(REC_STATES.IDLE);
+  });
+
+  // --- Befund 2: kein onResult nach vorherigem Error --------------------------
+  it("Befund 2: verspaetetes dataavailable+onstop NACH onerror publiziert keinen Clip", () => {
+    const env = makeMockEnv({ manualStop: true, chunkBytes: 16 });
+    let result = null; const errors = [];
+    const ctrl = createRecorderController({
+      canvas: env.canvas, MediaRecorderCtor: env.MockMR, now: () => 0,
+      onResult: () => { result = "should-not-happen"; },
+      onError: (r) => { errors.push(r); },
+    });
+    ctrl.start();
+    const mr = env.getInst();
+    // Error zuerst -> Controller settled in error.
+    mr.onerror({ error: { message: "Track verloren" } });
+    expect(ctrl.state()).toBe(REC_STATES.ERROR);
+    // Browser sendet TROTZDEM noch Daten + stop (WebKit-Race).
+    mr.emitData(16); mr.emitStop();
+    expect(result).toBeNull();          // KEIN onResult nach Error
+    expect(errors).toEqual(["Track verloren"]); // genau ein onError, nicht doppelt
+    expect(ctrl.state()).toBe(REC_STATES.ERROR); // bleibt error, kein Sprung nach idle
+  });
+
+  it("Befund 2: Handler werden nach onstop detacht (kein doppeltes Publizieren)", () => {
+    const env = makeMockEnv({ manualStop: true, chunkBytes: 16 });
+    let resultCount = 0;
+    const ctrl = createRecorderController({
+      canvas: env.canvas, MediaRecorderCtor: env.MockMR, now: () => 0,
+      onResult: () => { resultCount += 1; },
+    });
+    ctrl.start();
+    const mr = env.getInst();
+    ctrl.stop();
+    mr.emitData(16); mr.emitStop();     // normaler Abschluss
+    expect(resultCount).toBe(1);
+    expect(mr.onstop).toBeNull();       // Handler gekappt
+    expect(mr.ondataavailable).toBeNull();
+  });
+
+  // --- Befund 6: Max-Dauer-Auto-Stop ------------------------------------------
+  it("Befund 6: erreicht maxDurationMs -> Auto-Stop publiziert den Clip", () => {
+    const env = makeMockEnv({ chunkBytes: 24 });
+    let result = null; let timerCb = null; let timerMs = null;
+    const ctrl = createRecorderController({
+      canvas: env.canvas, MediaRecorderCtor: env.MockMR, now: () => 0,
+      maxDurationMs: 5000,
+      setTimer: (cb, ms) => { timerCb = cb; timerMs = ms; return 42; },
+      clearTimer: () => {},
+      onResult: (blob) => { result = blob; },
+    });
+    ctrl.start();
+    expect(timerMs).toBe(5000);         // Auto-Stop-Timer mit Limit gesetzt
+    expect(result).toBeNull();          // noch laeuft
+    timerCb();                          // Limit erreicht -> Auto-Stop feuert
+    expect(result).not.toBeNull();
+    expect(result.size).toBe(24);
+    expect(ctrl.state()).toBe(REC_STATES.IDLE);
+  });
+
+  it("Befund 6: manueller Stop loescht den Auto-Stop-Timer (kein Doppel-Stop)", () => {
+    const env = makeMockEnv({ chunkBytes: 8 });
+    const cleared = [];
+    const ctrl = createRecorderController({
+      canvas: env.canvas, MediaRecorderCtor: env.MockMR, now: () => 0,
+      setTimer: () => 7, clearTimer: (id) => cleared.push(id),
+    });
+    ctrl.start();
+    ctrl.stop();
+    expect(cleared).toContain(7);       // Auto-Stop-Timer wurde gecleart
+  });
+
+  it("Default-Max-Dauer ist exportiert + positiv (bounded Speicher)", () => {
+    expect(RECORDER_MAX_DURATION_MS).toBeGreaterThan(0);
+    expect(Number.isFinite(RECORDER_MAX_DURATION_MS)).toBe(true);
   });
 });

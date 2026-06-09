@@ -30,6 +30,16 @@
  * Chrome/Firefox/Android (dort meist hoehere Qualitaet/Effizienz).
  * @type {string[]}
  */
+/**
+ * Maximale Clip-Dauer in Millisekunden. Ohne Limit fuellt eine lange Aufnahme
+ * EINEN In-Memory-Blob unbegrenzt (kein timeslice) -> Speicher-Leck bei langen
+ * Sessions (Codex-Review Befund 6). Bei Erreichen stoppt der Controller die
+ * Aufnahme automatisch sauber (wie ein manueller Stop) und publiziert den Clip.
+ * 2 Minuten ist fuer einen teilbaren Evolutions-Clip grosszuegig.
+ * @type {number}
+ */
+export const RECORDER_MAX_DURATION_MS = 120_000;
+
 export const RECORDER_MIME_PREFERENCE = [
   "video/mp4;codecs=h264",
   "video/mp4",
@@ -198,6 +208,9 @@ export function createRecorderMachine(onChange) {
  * @param {(reason:string)=>void} [cfg.onError]
  * @param {(state:string)=>void} [cfg.onState]
  * @param {()=>number} [cfg.now=()=>Date.now()] Zeitquelle (Tests: deterministisch)
+ * @param {number} [cfg.maxDurationMs=RECORDER_MAX_DURATION_MS] Auto-Stop-Limit (Befund 6)
+ * @param {(cb:()=>void, ms:number)=>any} [cfg.setTimer=setTimeout] injizierbar (Tests)
+ * @param {(id:any)=>void} [cfg.clearTimer=clearTimeout] injizierbar (Tests)
  * @param {typeof MediaRecorder} [cfg.MediaRecorderCtor] Tests: Mock-Ctor
  * @returns {{
  *   start:()=>boolean,
@@ -214,6 +227,14 @@ export function createRecorderController(cfg) {
   const onError = (cfg && cfg.onError) || (() => {});
   const onState = cfg && cfg.onState;
   const now = (cfg && cfg.now) || (() => Date.now());
+  const maxDurationMs =
+    Number.isFinite(cfg && cfg.maxDurationMs) && cfg.maxDurationMs > 0
+      ? cfg.maxDurationMs
+      : RECORDER_MAX_DURATION_MS;
+  const setTimer = (cfg && cfg.setTimer) ||
+    (typeof setTimeout !== "undefined" ? setTimeout : null);
+  const clearTimer = (cfg && cfg.clearTimer) ||
+    (typeof clearTimeout !== "undefined" ? clearTimeout : null);
   const MR =
     cfg && cfg.MediaRecorderCtor !== undefined
       ? cfg.MediaRecorderCtor
@@ -227,6 +248,32 @@ export function createRecorderController(cfg) {
   let chunks = [];
   let mime = null;
   let t0 = 0;
+  // Lebenszyklus-Guards (Codex-Review Befunde 1 + 2):
+  //  - settled: nach onstop/fail() ist dieser Controller endgueltig erledigt;
+  //    spaetere Browser-Events (verzoegertes dataavailable/stop NACH error)
+  //    duerfen NICHT erneut publizieren (kein onResult nach Error, Befund 2).
+  //  - stopping: zwischen stop() und onstop ist die Aufnahme bereits beendet;
+  //    ein zweiter Stop-Tap darf recorder.stop() NICHT erneut aufrufen
+  //    (sonst InvalidStateError auf inaktivem Recorder, Befund 1).
+  let settled = false;
+  let stopping = false;
+  let autoStopTimer = null;
+
+  function clearAutoStop() {
+    if (autoStopTimer !== null && clearTimer) {
+      try { clearTimer(autoStopTimer); } catch { /* ignore */ }
+    }
+    autoStopTimer = null;
+  }
+
+  function detachRecorder() {
+    // Handler kappen, damit verspaetete Events nach fail()/onstop nichts mehr
+    // ausloesen (Befund 2: Error -> spaeter onstop -> korrupter onResult).
+    if (recorder) {
+      try { recorder.ondataavailable = null; recorder.onstop = null; recorder.onerror = null; }
+      catch { /* ignore */ }
+    }
+  }
 
   function cleanupStream() {
     if (stream && typeof stream.getTracks === "function") {
@@ -236,6 +283,10 @@ export function createRecorderController(cfg) {
   }
 
   function fail(reason) {
+    if (settled) return;          // schon erledigt -> kein doppeltes onError
+    settled = true;
+    clearAutoStop();
+    detachRecorder();
     cleanupStream();
     recorder = null;
     chunks = [];
@@ -243,10 +294,49 @@ export function createRecorderController(cfg) {
     onError(reason);
   }
 
+  function publishOnStop() {
+    if (settled) return;          // Befund 2: kein onResult nach vorherigem Error
+    settled = true;
+    clearAutoStop();
+    const durationMs = Math.max(0, now() - t0);
+    const blob = new Blob(chunks, { type: mime });
+    detachRecorder();
+    cleanupStream();
+    recorder = null;
+    chunks = [];
+    // recording -> encoding -> idle
+    machine.to(REC_STATES.ENCODING);
+    if (!blob || blob.size === 0) {
+      // Silent-Failure-Gate: leeres Ergebnis ehrlich als Fehler melden,
+      // nicht als "fertig" mit 0-Byte-Datei (iOS-captureStream-Risiko).
+      machine.to(REC_STATES.ERROR);
+      onError("leere Aufnahme (0 Bytes) — Format evtl. nicht unterstuetzt");
+      return;
+    }
+    machine.to(REC_STATES.IDLE);
+    onResult(blob, mime, durationMs);
+  }
+
+  function doStop() {
+    // Idempotenter Stop (Befund 1): nur EIN recorder.stop(), danach gesperrt.
+    if (stopping || settled || machine.state() !== REC_STATES.RECORDING || !recorder) {
+      return false;
+    }
+    stopping = true;
+    clearAutoStop();
+    try {
+      recorder.stop();
+    } catch (e) {
+      fail("recorder.stop warf: " + (e && e.message ? e.message : e));
+      return false;
+    }
+    return true;
+  }
+
   return {
     state: () => machine.state(),
     mime: () => mime,
-    isActive: () => machine.state() === REC_STATES.RECORDING,
+    isActive: () => machine.state() === REC_STATES.RECORDING && !stopping,
 
     start() {
       if (machine.state() !== REC_STATES.IDLE) return false;
@@ -274,24 +364,7 @@ export function createRecorderController(cfg) {
         const r = ev && ev.error && ev.error.message ? ev.error.message : "Recorder-Fehler";
         fail(r);
       };
-      recorder.onstop = () => {
-        const durationMs = Math.max(0, now() - t0);
-        const blob = new Blob(chunks, { type: mime });
-        cleanupStream();
-        recorder = null;
-        chunks = [];
-        // recording -> encoding -> idle
-        machine.to(REC_STATES.ENCODING);
-        if (!blob || blob.size === 0) {
-          // Silent-Failure-Gate: leeres Ergebnis ehrlich als Fehler melden,
-          // nicht als "fertig" mit 0-Byte-Datei (iOS-captureStream-Risiko).
-          machine.to(REC_STATES.ERROR);
-          onError("leere Aufnahme (0 Bytes) — Format evtl. nicht unterstuetzt");
-          return;
-        }
-        machine.to(REC_STATES.IDLE);
-        onResult(blob, mime, durationMs);
-      };
+      recorder.onstop = () => { publishOnStop(); };
       try {
         t0 = now();
         recorder.start();
@@ -300,18 +373,13 @@ export function createRecorderController(cfg) {
         return false;
       }
       machine.to(REC_STATES.RECORDING);
-      return true;
-    },
-
-    stop() {
-      if (machine.state() !== REC_STATES.RECORDING || !recorder) return false;
-      try {
-        recorder.stop();
-      } catch (e) {
-        fail("recorder.stop warf: " + (e && e.message ? e.message : e));
-        return false;
+      // Befund 6: Auto-Stop nach Max-Dauer -> bounded Speicher, sauberer Clip.
+      if (setTimer) {
+        autoStopTimer = setTimer(() => { autoStopTimer = null; doStop(); }, maxDurationMs);
       }
       return true;
     },
+
+    stop() { return doStop(); },
   };
 }
