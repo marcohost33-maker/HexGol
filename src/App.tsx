@@ -15,6 +15,7 @@ import {
 } from "./lib/sim-engine.js";
 import { renderRaster } from "./lib/raster-render.js"; // geteilter Raster-Pfad (Worker + Main)
 import { supportsOffscreenWorker } from "./lib/worker-support.js"; // Feature-Detection (fail-closed)
+import { shouldStartPan, decideCloseAction } from "./lib/ui-gestures.js"; // pure UI-Entscheider (Pan-Hit-Test + Schliess-Dispatch)
 // v33 PR-C: Spielstand-Speichern (IndexedDB + Datei-Export/Import + Urzustand).
 import {
   serializeSave, deserializeSave, makeOriginSnapshot, shouldCaptureOrigin,
@@ -296,21 +297,51 @@ function runCloseCleanups() {
   }
 }
 
+// Plattform-Erkennung: installiert/standalone (PWA / iOS-Home-Screen / Electron)
+// vs. normaler Browser-Tab. window.close() schliesst NUR ein Fenster, das das
+// Skript selbst geoeffnet hat ODER eine installierte Standalone-App — in einem
+// normalen Tab verweigert die Spec den Aufruf (dann ehrlicher Hinweis statt Hang).
+function detectCloseEnv() {
+  let standalone = false;
+  try {
+    standalone =
+      (typeof window !== "undefined" && typeof window.matchMedia === "function" &&
+        window.matchMedia("(display-mode: standalone)").matches) ||
+      (typeof navigator !== "undefined" && navigator.standalone === true); // iOS Safari
+  } catch { /* matchMedia/navigator nicht verfuegbar */ }
+  const historyLength =
+    typeof window !== "undefined" && window.history ? window.history.length : 0;
+  return { standalone, historyLength };
+}
+
+function showCloseFallback() {
+  if (typeof document === "undefined" || document.hidden) return;
+  try {
+    document.documentElement.innerHTML =
+      '<body style="margin:0;height:100vh;display:flex;align-items:center;justify-content:center;' +
+      'background:#0a0a0a;color:#8a94a6;font-family:system-ui,sans-serif;text-align:center;padding:24px">' +
+      '<div><div style="font-size:18px;color:#5CF0CC;font-weight:700;margin-bottom:8px">GolHex beendet</div>' +
+      '<div>Du kannst diesen Tab / dieses Fenster jetzt schliessen.</div></div></body>';
+  } catch { /* ignore */ }
+}
+
 function closeApp() {
   runCloseCleanups(); // aktive Aufnahme/Stream zuerst stoppen (Befund 7)
-  if (typeof window !== "undefined" && window.history && window.history.length > 1) { window.history.back(); return; }
+  // Marco-Befund 2026-06-09: "X" zeigte nur ein Bild, statt zu schliessen.
+  // Fix: ZUERST plattform-ehrlich entscheiden (pure decideCloseAction):
+  //   back     -> aus einem Launcher in-app geoeffnet -> zurueck zur Zentrale.
+  //   close    -> installiert/standalone -> window.close() schliesst WIRKLICH;
+  //               das Fallback-Bild NUR zeigen, falls der Tab danach noch offen ist.
+  //   fallback -> normaler Browser-Tab (Spec verbietet close()) -> ehrlicher Hinweis.
+  const action = decideCloseAction(detectCloseEnv());
+  if (action === "back") {
+    try { window.history.back(); return; } catch { /* falle auf close durch */ }
+  }
   try { window.close(); } catch { /* ignore */ }
-  setTimeout(() => {
-    if (typeof document !== "undefined" && !document.hidden) {
-      try {
-        document.documentElement.innerHTML =
-          '<body style="margin:0;height:100vh;display:flex;align-items:center;justify-content:center;' +
-          'background:#0a0a0a;color:#8a94a6;font-family:system-ui,sans-serif;text-align:center;padding:24px">' +
-          '<div><div style="font-size:18px;color:#5CF0CC;font-weight:700;margin-bottom:8px">GolHex beendet</div>' +
-          '<div>Du kannst diesen Tab / dieses Fenster jetzt schliessen.</div></div></body>';
-      } catch { /* ignore */ }
-    }
-  }, 250);
+  // Fallback-Bild nur, wenn der Tab nach close() noch sichtbar ist. In standalone
+  // schliesst window.close() das Fenster -> der setTimeout-Callback laeuft nicht
+  // mehr (oder document.hidden) und es erscheint KEIN Bild.
+  setTimeout(showCloseFallback, 250);
 }
 
 // =============================================================================
@@ -1596,6 +1627,15 @@ export default function GolHex() {
     }
     if (ptrs.current.size === 1) {
       ges.current.moved = 0; ges.current.down = { x: e.clientX, y: e.clientY }; ges.current.lastCell = -1;
+      // Marco-Befund 2026-06-09: Touch im SCHWARZEN Rand um das umrahmte Feld
+      // durfte den Rahmen verschieben (Pan startete ueberall auf dem Canvas).
+      // Fix: Hit-Test beim Down — Pan nur erlauben, wenn der Druckpunkt IM Feld
+      // (Domaenen-Maske) liegt. shouldStartPan() ist pure + unit-getestet.
+      {
+        const { wx, wy } = toWorld(e.clientX, e.clientY);
+        const downIdx = pixelToOddR(wx, wy, HR, R, C);
+        ges.current.panOk = shouldStartPan(downIdx, neighRef.current && neighRef.current.mask);
+      }
       // AP-3: Long-Press-Timer fuer JEDEN Single-Pointer-Down starten (Maus + Touch,
       // einheitlich ueber Pointer Events, B5). Bewegung/zweiter Finger/frueher Up
       // bricht ihn ab; feuert er, oeffnet sich das Farbrad und das Painting wird
@@ -1696,7 +1736,10 @@ export default function GolHex() {
         const { wx, wy } = toWorld(e.clientX, e.clientY); const idx = pixelToOddR(wx, wy, HR, R, C);
         if (idx >= 0 && idx !== ges.current.lastCell) { paintCell(idx, false); ges.current.lastCell = idx; }
       } else {
-        if (ges.current.moved > 6) ges.current.mode = "pan";
+        // Pan NUR starten, wenn der Druckpunkt im Feld lag (ges.panOk). Ein Zug,
+        // der im schwarzen Rand begann, bewegt den Rahmen NICHT mehr (Marco-Fix
+        // 2026-06-09). Was fix sein soll, bleibt fix.
+        if (ges.current.moved > 6 && ges.current.panOk) ges.current.mode = "pan";
         if (ges.current.mode === "pan") { viewRef.current.tx += e.clientX - prev.x; viewRef.current.ty += e.clientY - prev.y; dirtyRef.current = true; syncWorkerView(); }
       }
     }
