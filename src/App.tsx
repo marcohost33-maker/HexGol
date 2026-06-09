@@ -25,6 +25,12 @@ import {
 import {
   buildSnapshotFilename, buildWatermarkLabel, canvasToBlob, shareOrDownloadBlob,
 } from "./lib/snapshot.js";
+// v34 Feature 2: Feld-Evolution als Video aufnehmen + teilen (dep-frei,
+// captureStream + MediaRecorder; ehrliche iOS-Caveat im UI/README).
+import {
+  detectRecordingSupport, formatDuration, buildClipFilename, extForMime,
+  createRecorderController,
+} from "./lib/recorder.js";
 // Feature 1 (2026-06-09): Live-Populations-Graph — PURE Ring-Buffer + Pfad-Skalierung.
 import {
   POPGRAPH_CAP, createBuffer, pushSample, resetBuffer, buildPaths,
@@ -273,7 +279,25 @@ function frameOptsFor(shape, { circleRadius, ellipseA, ellipseB, polygon }) {
 // Coworkerz-Standard: plattform-ehrliches Schliessen (X -> Zentrale / Fenster).
 // Aus einem Launcher (Zentrale) im selben Tab geoeffnet -> Verlauf zurueck; sonst
 // window.close() (Electron/PWA) mit ehrlichem Browser-Tab-Fallback. Kein hardcodierter Pfad.
+// Befund 7 (Codex-Review): closeApp() darf laufende Ressourcen nicht weiterlaufen
+// lassen. Bei "X" im Browser-Tab ohne History wird window.close() verweigert und
+// closeApp() ersetzt nur das HTML — ein aktiver Recorder + captureStream-Stream
+// liefen sonst UNSICHTBAR weiter (Kamera-/Speicher-/Akku-Last). Die Komponente
+// registriert hier einen Abbruch-Callback (stoppt den aktiven Controller); closeApp
+// ruft ihn vor jedem Schliess-/Fallback-Pfad.
+const closeAppCleanups = new Set();
+export function registerCloseCleanup(fn) {
+  closeAppCleanups.add(fn);
+  return () => closeAppCleanups.delete(fn);
+}
+function runCloseCleanups() {
+  for (const fn of Array.from(closeAppCleanups)) {
+    try { fn(); } catch { /* ignore */ }
+  }
+}
+
 function closeApp() {
+  runCloseCleanups(); // aktive Aufnahme/Stream zuerst stoppen (Befund 7)
   if (typeof window !== "undefined" && window.history && window.history.length > 1) { window.history.back(); return; }
   try { window.close(); } catch { /* ignore */ }
   setTimeout(() => {
@@ -365,6 +389,17 @@ export default function GolHex() {
   const [snapWatermark, setSnapWatermark] = useState(true);
   const snapBusyRef = useRef(false); // Doppelklick-Schutz waehrend toBlob/share
   const fileInputRef = useRef(null); // versteckter <input type=file> fuer Import
+  // v34 Feature 2: Video-Aufnahme der Feld-Evolution (captureStream+MediaRecorder).
+  // EIGENE Namen — NICHT mit dem LiouScope-Zeitreihen-Recorder (recording/recMsg)
+  // kollidieren. clipState: "idle"|"recording"|"encoding"|"error" (s. recorder.js).
+  const [clipState, setClipState] = useState("idle");
+  const [clipMsg, setClipMsg] = useState("");
+  const [clipElapsed, setClipElapsed] = useState(0); // ms, fuer Live-Timer
+  const clipCtrlRef = useRef(null);   // aktiver RecorderController
+  const clipBlobRef = useRef(null);   // letztes Ergebnis-Blob (zum Teilen)
+  const clipBusyRef = useRef(false);  // Doppelklick-Schutz
+  const clipStoppingRef = useRef(false); // Befund 1: sperrt Doppel-Stop synchron (vor async onstop)
+  const clipT0Ref = useRef(0);        // Start-Zeitpunkt fuer den Live-Timer
   // Solver-Konvergenzwarnung (CN-Fixpunkt nicht konvergiert -> Parameter zu gross)
   const [solverWarn, setSolverWarn] = useState(false);
   // Divergenzwarnung: explizites Verfahren (Euler) ist fuer die Schroedinger-
@@ -2303,6 +2338,148 @@ export default function GolHex() {
       snapBusyRef.current = false;
     }
   };
+
+  // v34 Feature 2: Aufnahme der Feld-Evolution als teilbares Video.
+  // EHRLICHKEIT (Reality-Anchor): canvas.captureStream()+MediaRecorder ist auf
+  // iOS-Safari historisch unzuverlaessig (WebKit Bug 181663: Freeze bei stop();
+  // captureStream-Track teils ohne Daten -> 0-Byte-Clip). Wir detektieren
+  // fail-closed, melden ehrlich + bieten Download-Fallback statt Ueberversprechen.
+  // canvasRef.current ist beim ersten Render noch null -> wir zeigen den Button,
+  // wenn die MediaRecorder-API ueberhaupt existiert; der echte Support-Check
+  // (inkl. captureStream + Format) passiert HART beim Start (fail-closed).
+  const recSupported = typeof MediaRecorder !== "undefined";
+
+  // Live-Timer waehrend der Aufnahme (mm:ss). Reiner Anzeige-Tick.
+  useEffect(() => {
+    if (clipState !== "recording") return;
+    const id = setInterval(() => setClipElapsed(Date.now() - clipT0Ref.current), 250);
+    return () => clearInterval(id);
+  }, [clipState]);
+
+  // Befund 4 (Codex-Review): Canvas-Wechsel WAEHREND der Aufnahme. Worker-Toggle
+  // bzw. Auto-Worker erhoehen canvasKey und ersetzen das <canvas>-Element
+  // (transferControlToOffscreen ist je Element irreversibel). Der laufende
+  // Recorder haengt aber am ALTEN, nun toten Element -> er nimmt ein eingefrorenes/
+  // abgeschnittenes Bild auf, OHNE Fehler. Deshalb: bei jedem canvasKey-Wechsel
+  // eine aktive Aufnahme sofort sauber stoppen (publiziert das bisher Aufgenommene)
+  // statt still Garbage weiterzuschreiben. Der initiale Mount (key 0) ist no-op,
+  // weil dann nie aufgenommen wird.
+  // Befund 7: aktiven Recorder beim App-Schliessen abbrechen (closeApp-Fallback
+  // ersetzt nur das HTML -> sonst laufen Recorder+Stream unsichtbar weiter).
+  useEffect(() => {
+    return registerCloseCleanup(() => {
+      const ctrl = clipCtrlRef.current;
+      if (ctrl && ctrl.isActive()) { try { ctrl.stop(); } catch { /* ignore */ } }
+    });
+  }, []);
+
+  const clipCanvasKeyRef = useRef(canvasKey);
+  useEffect(() => {
+    if (clipCanvasKeyRef.current !== canvasKey) {
+      clipCanvasKeyRef.current = canvasKey;
+      const ctrl = clipCtrlRef.current;
+      if (ctrl && ctrl.isActive() && !clipStoppingRef.current) {
+        clipStoppingRef.current = true;
+        setClipState("encoding");
+        setClipMsg("Aufnahme beendet (Ansicht gewechselt) — verarbeite …");
+        ctrl.stop();
+      }
+    }
+  }, [canvasKey]);
+
+  // Aufnahme starten: captureStream vom AKTIVEN Canvas (Main- oder Worker-Pfad —
+  // der Worker rendert ins SELBE Canvas-Element, captureStream funktioniert auf
+  // beiden). Wir starten die Sim automatisch nicht; der Nutzer steuert Play.
+  const startClip = () => {
+    if (clipBusyRef.current || clipState === "recording") return;
+    const canvas = canvasRef.current;
+    if (!canvas) { setClipMsg("Aufnahme: keine Leinwand gefunden."); return; }
+    const sup = detectRecordingSupport(canvas);
+    if (!sup.ok) {
+      setClipState("error");
+      setClipMsg(`Aufnahme nicht moeglich (${sup.reason}). Auf iPhone evtl. erst ab neuerem iOS.`);
+      return;
+    }
+    clipBusyRef.current = true;
+    // Befund 3 (Codex-Review): den letzten ERFOLGREICHEN Clip NICHT vorzeitig
+    // verwerfen. Erst wenn onResult einen validen Ersatz liefert, wird er
+    // ueberschrieben — bei Fehl-Start/0-Byte-Retry bleibt der teilbare Clip da.
+    const ctrl = createRecorderController({
+      canvas,
+      fps: 30,
+      onState: (s) => setClipState(s),
+      onResult: (blob, mime, durationMs) => {
+        clipBlobRef.current = { blob, mime };
+        clipBusyRef.current = false;
+        clipStoppingRef.current = false;
+        setClipElapsed(durationMs);
+        const ext = extForMime(mime);
+        const kb = Math.round(blob.size / 1024);
+        setClipMsg(`Clip fertig: ${formatDuration(durationMs)}, ${kb} KB (${ext.toUpperCase()}). „Teilen" zum Senden/Speichern.`);
+      },
+      onError: (reason) => {
+        clipBusyRef.current = false;
+        clipStoppingRef.current = false;
+        // Befund 3: clipBlobRef bleibt unangetastet -> letzter guter Clip teilbar.
+        setClipMsg(`Aufnahme fehlgeschlagen: ${reason}`);
+      },
+    });
+    clipCtrlRef.current = ctrl;
+    clipStoppingRef.current = false;
+    clipT0Ref.current = Date.now();
+    setClipElapsed(0);
+    if (!ctrl.start()) {
+      clipBusyRef.current = false;
+      // onError hat clipMsg bereits gesetzt.
+      return;
+    }
+    setClipMsg("Aufnahme laeuft … (Feld-Evolution wird aufgezeichnet)");
+  };
+
+  const stopClip = () => {
+    const ctrl = clipCtrlRef.current;
+    // Befund 1 (Codex-Review): Doppel-Stop. clipState ist React-State und hinkt
+    // dem echten Recorder hinterher; ein zweiter Stop-Tap VOR dem async onstop
+    // wuerde sonst ctrl.stop() erneut -> MediaRecorder.stop() auf inaktivem
+    // Recorder -> InvalidStateError -> Chunks verworfen. clipStoppingRef sperrt
+    // synchron ab dem ersten Tap (der Controller ist zusaetzlich intern idempotent).
+    if (!ctrl || clipStoppingRef.current || !ctrl.isActive()) return;
+    clipStoppingRef.current = true;
+    setClipState("encoding"); // sofort aus "recording" -> Button wird Stop-fest
+    setClipMsg("Verarbeite Aufnahme …");
+    ctrl.stop(); // onResult/onError + Zustandswechsel folgen asynchron
+  };
+
+  const toggleClip = () =>
+    (clipState === "recording" && !clipStoppingRef.current ? stopClip() : startClip());
+
+  // Fertigen Clip teilen (Web Share L2, Dateien) oder herunterladen (Fallback).
+  // Nutzt denselben dep-freien Dispatcher wie der Snapshot (shareOrDownloadBlob).
+  const shareClip = async () => {
+    const res = clipBlobRef.current;
+    if (!res || !res.blob || res.blob.size === 0) {
+      setClipMsg("Kein Clip vorhanden. Erst aufnehmen.");
+      return;
+    }
+    if (clipBusyRef.current) return;
+    clipBusyRef.current = true;
+    try {
+      const ext = extForMime(res.mime);
+      const filename = buildClipFilename(new Date(), ext);
+      const out = await shareOrDownloadBlob(res.blob, filename, {
+        title: "GolHex",
+        text: buildWatermarkLabel(tickRef.current, currentRuleLabel()),
+      });
+      if (out.method === "share" && out.shared) setClipMsg("Geteilt.");
+      else if (out.method === "share" && out.cancelled) setClipMsg("Teilen abgebrochen.");
+      else setClipMsg(`Heruntergeladen: ${filename}`);
+    } catch (e) {
+      setClipMsg(`Teilen fehlgeschlagen: ${e && e.message ? e.message : e}`);
+    } finally {
+      clipBusyRef.current = false;
+    }
+  };
+
   const doPlace = () => {
     pushUndo(); resetOrigin(); const offs = PATS[pattern], col = colorRef.current;
     const pc = (typeof brush === "number" && brush >= 1 && brush <= 12) ? brush : CB;
@@ -3229,6 +3406,26 @@ export default function GolHex() {
             title="Snapshot teilen (Bild des Feldes — Teilen oder Download)"
             data-testid="snapshot-btn"
             style={{ width: 42, border: "none", borderLeft: `1px solid ${T.border}`, background: "transparent", color: T.text, fontSize: 16, cursor: "pointer" }}>📷</button>
+          {/* v34 Feature 2: Aufnahme der Feld-Evolution als Video (REC -> Stop). */}
+          {recSupported && (
+            <button onClick={toggleClip}
+              aria-label={clipState === "recording" ? "Video-Aufnahme beenden" : "Video aufnehmen"}
+              aria-pressed={clipState === "recording"}
+              title="Feld-Evolution aufnehmen (Video — danach teilen/herunterladen)"
+              data-testid="record-btn"
+              style={{ width: 42, border: "none", borderLeft: `1px solid ${T.border}`,
+                background: clipState === "recording" ? "rgba(224,90,90,0.18)" : "transparent",
+                color: clipState === "recording" ? "#ff8a8a" : T.text, fontSize: 14, fontWeight: 700,
+                cursor: "pointer", fontFamily: MONO }}>
+              {clipState === "recording" ? "⏹" : "⏺"}</button>
+          )}
+          {/* Fertigen Clip teilen — erscheint erst, wenn ein Clip vorliegt. */}
+          {recSupported && clipBlobRef.current && clipState !== "recording" && (
+            <button onClick={shareClip} aria-label="Aufnahme teilen"
+              title="Aufgenommenes Video teilen oder herunterladen"
+              data-testid="share-clip-btn"
+              style={{ width: 42, border: "none", borderLeft: `1px solid ${T.border}`, background: "transparent", color: T.accent, fontSize: 16, cursor: "pointer" }}>📤</button>
+          )}
           {/* v33 PR-C: Spielstand speichern (IndexedDB + Datei-Export/Import). */}
           <button onClick={toggleSavePanel} aria-label="Spielstand speichern" aria-pressed={saveOpen}
             title="Speichern (Spielstand: Feld + Regel + Rahmen)"
@@ -3537,6 +3734,23 @@ export default function GolHex() {
               aria-label="Wasserzeichen im Snapshot" style={{ cursor: "pointer" }} />
             Wasserzeichen
           </label>
+        </div>
+      )}
+
+      {/* v34 Feature 2: Aufnahme-Status + Live-Timer + EHRLICHE iOS-Caveat.
+          Zeigt nur, wenn gerade aufgenommen wird ODER eine Meldung vorliegt. */}
+      {recSupported && (clipState === "recording" || clipMsg) && (
+        <div data-testid="clip-msg" role="status" style={{ flexShrink: 0, display: "flex", alignItems: "center", gap: 10, padding: "2px 8px", fontFamily: MONO, fontSize: 11, color: T.sub, background: T.bg2, borderTop: `1px solid ${T.border}` }}>
+          {clipState === "recording" && (
+            <span style={{ color: "#ff8a8a", fontWeight: 700, whiteSpace: "nowrap" }} data-testid="clip-timer">
+              ⏺ REC {formatDuration(clipElapsed)}
+            </span>
+          )}
+          <span>{clipMsg}</span>
+          <span style={{ marginLeft: "auto", opacity: 0.6, whiteSpace: "nowrap" }}
+            title="Video-Aufnahme ist auf iOS-Safari erst auf neueren Versionen zuverlaessig; sonst Download-Fallback.">
+            Video evtl. nur Desktop/neueres iOS
+          </span>
         </div>
       )}
 

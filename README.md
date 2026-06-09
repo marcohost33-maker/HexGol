@@ -155,6 +155,47 @@ unaffected.
   (verified only on a real device per `EVALUATION_STRATEGY §8`). The download
   fallback guarantees the feature works even where share is unavailable.
 
+### v34 (Feature 2): record the field evolution → shareable video
+
+- **⏺ REC** (next to 📷) records the **animated evolution** of the field as a
+  video clip. Tap to start (a live `mm:ss` timer appears), tap **⏹** to stop. When
+  the clip is ready a **📤** button shares it through the same Web-Share-Level-2 /
+  download dispatcher as the snapshot. Filename `golhex_<YYYY-MM-DD>_clip.<ext>`.
+- **Dependency-free, no GIF library.** Encoding uses the native
+  `canvas.captureStream(30)` → `MediaRecorder` path — **zero added runtime deps**
+  (a GIF encoder such as `gif.js` would be a tracked-bundle heavy dep, AGENTS.md §3).
+  Bundle stays at ~102 KB gzip; `src/lib/recorder.js` is plain JS.
+- **Container/codec is negotiated** via `MediaRecorder.isTypeSupported()` in
+  preference order **`video/mp4;codecs=h264` → `video/mp4` → `video/webm;codecs=vp9`
+  → vp8 → webm**. mp4/h264 is first because it is the *only* container iOS Safari
+  supports and is the most broadly re-shareable on Apple devices; Chrome/Firefox/
+  Android fall through to WebM.
+- **Honest browser / iOS support matrix** (researched 2026-06-09 — verify on a real
+  device per `EVALUATION_STRATEGY §8` before claiming "works on iPhone"):
+
+  | Browser / platform | `MediaRecorder` | `canvas.captureStream` | Result |
+  |---|---|---|---|
+  | Chrome / Edge (desktop, Android) | ✅ | ✅ | WebM clip, shares/downloads (verified headless chromium) |
+  | Firefox (desktop) | ✅ | ✅ | WebM clip |
+  | **iOS / iPadOS Safari** | ✅ (14.5+) | ⚠️ **historically broken** | **MP4 clip on newer iOS; may produce an empty clip or freeze on older versions** |
+
+  iOS caveat detail: `canvas.captureStream()` + `MediaRecorder` has long-standing
+  WebKit issues — the captured video track sometimes carried no valid data and
+  `MediaRecorder.stop()` could freeze the page ([WebKit Bug 181663][wk181663]).
+  2026 WebKit fixes improve this, but it is **not promised** here without a real
+  iPhone test. The UI shows a permanent *"Video evtl. nur Desktop/neueres iOS"*
+  hint, detects support **fail-closed** (no `MediaRecorder`/`captureStream` → the
+  REC button is hidden, app stays usable), and treats a **0-byte clip as an honest
+  error** rather than offering an empty file.
+- **Robustness:** pure state machine `idle → recording → encoding → idle` (illegal
+  transitions rejected, `error` state on missing API / recorder error / empty clip),
+  `mm:ss` duration formatter, codec negotiation and the mockable controller are all
+  unit-tested (`src/lib/recorder.js`, `tests/unit/recorder.test.js`); e2e drives the
+  real REC button through a start/stop cycle asserting **zero console errors** plus a
+  graceful-disabled path (no `MediaRecorder` → button absent, no crash).
+
+[wk181663]: https://bugs.webkit.org/show_bug.cgi?id=181663
+
 > Live physics (`rval`) save is intentionally out of scope here — those fields are
 > `Float32`, which needs its own format; the save/load/export path covers the
 > boolean **Lebenswelt** mode and reports an honest message in physics mode.
@@ -382,6 +423,8 @@ src/
   lib/hex-geom.js  - pure hex cube-coord geometry (oddRToCube/cubeToOddR/hexDist/CUBE_DIRS); unit-tested
   lib/popgraph.js  - pure population-sparkline ring buffer + path scaling (push/reset/buildPaths); unit-tested
   lib/presets.js   - pure pattern-gallery: built-in seeds (verified alive), serialize/validate (fail-closed), localStorage persistence, thumbnail sampling; unit-tested
+  lib/snapshot.js  - pure share/download dispatcher + filename/watermark builders (Web Share L2 + <a download>); unit-tested
+  lib/recorder.js  - pure recorder state machine + codec negotiation + mockable captureStream/MediaRecorder controller (Feature 2 video); unit-tested
 tests/
   unit/            - Vitest: sim-core.test.js (CN norm conservation + convergence flag),
                      hex-geom.test.js (hexagon frame == mask, centered-hex number)
