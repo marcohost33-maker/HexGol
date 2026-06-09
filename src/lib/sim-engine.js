@@ -597,18 +597,22 @@ const RVAL_RULES = [
   { id: "genes", l: "Dominante Gene (Mendel)" },
 ];
 
-// Reiter-Schritt: rezeptiv = Eis (>=1) oder Nachbar von Eis. Rezeptive speichern
-// Wert + gamma; nichtrezeptive diffundieren (Laplace, rezeptive Nachbarn = 0,
-// Rand = Selbstwert mit korrektem Divisor). Vorab-Pass fuer Rezeptivitaet, damit
-// die Diffusionsnachbarn konsistent klassifiziert sind (Paritaet mit Referenz).
-// BEKANNTE ABWEICHUNG vom kanonischen Reiter (Chaos Solitons Fractals 23): dort
-// faengt eine rezeptive Zelle den EINSTROEMENDEN Diffusionsanteil ihrer nicht-
-// rezeptiven Nachbarn mit auf (s' = s + gamma + diffundiert-ein), womit das Modell
-// bis auf den gamma-Term massenerhaltend ist. Hier ist ns = s + gamma OHNE den
-// Einstrom -> die Gesamtmasse ist NICHT erhalten (sie sinkt am Eisrand). Das
-// monotone Eiswachstum bleibt korrekt (Invariante in tests/unit/rval-physics).
-// Bewusst belassen (Aesthetik der bisherigen "Schnee"-Optik); ein Umstieg auf die
-// massenerhaltende Variante waere eine sichtbare Verhaltensaenderung -> eigener PR.
+// Reiter-Schritt (kanonisch, MASSENERHALTEND bis auf den gamma-Quellterm) — Cliff
+// Reiter, "A local cellular model for snow crystal growth", Chaos Solitons
+// Fractals 23 (2005). rezeptiv = Eis (>=1) ODER Nachbar von Eis. Feldsplit:
+//   u(z) = rezeptiv ? 0 : s(z)   (diffundierender Dampf)
+//   v(z) = rezeptiv ? s(z) : 0   (quasi-gefroren)
+// Diffusion (diskreter Hex-Laplace, Grad 6) wird auf ALLE Zellen angewandt:
+//   u'(z) = u(z) + (alpha/2) * ( mean_{NN} u - u(z) )
+// Das ist ALGEBRAISCH IDENTISCH zu Reiters Originalgleichung (primaerquellen-
+// validiert) u(t+1,P) = u(t,P) + (alpha/12)*( -6 u(t,P) + sum_{N} u(t,N) ), da
+// mean_{NN} = (1/6) sum_{N}  ->  (alpha/2)((1/6)sum - u) = (alpha/12)(sum - 6u).
+// Rezeptive Zellen (u=0) FANGEN damit den Einstrom ihrer nicht-rezeptiven Nachbarn
+// AUF (genau das fehlte der frueheren "lecken" Variante -> Masse versickerte am
+// Eisrand). Update:  s'(z) = u'(z) + v(z) + gamma*[rezeptiv].
+// Rand: fehlender Nachbar zaehlt als u(self) -> Null-Fluss (reflektierend), global
+// massenerhaltend. Es gilt exakt  sum(s') - sum(s) = gamma * #rezeptiv  (Invariante
+// in tests/unit/reiter-mass.test.js). Vorab-Pass fuer konsistente Rezeptivitaet.
 function stepReiter(s, NL, alpha, gamma, buf, recBuf) {
   const n = s.length, ns = buf, rec = recBuf;
   for (let i = 0; i < n; i++) {
@@ -617,15 +621,17 @@ function stepReiter(s, NL, alpha, gamma, buf, recBuf) {
     rec[i] = r ? 1 : 0;
   }
   for (let i = 0; i < n; i++) {
-    if (rec[i]) { ns[i] = s[i] + gamma; continue; }
-    const b = i * 6; let sum = 0, cnt = 0;
+    const recep = rec[i] === 1;
+    const ui = recep ? 0 : s[i];               // u(self): rezeptiv -> 0
+    const b = i * 6; let sum = 0;
     for (let k = 0; k < 6; k++) {
       const j = NL[b + k];
-      if (j < 0) { sum += s[i]; cnt++; continue; }
-      sum += rec[j] ? 0 : s[j]; cnt++;
+      if (j < 0) { sum += ui; continue; }      // Null-Fluss-Rand: fehlender Nachbar = self
+      sum += rec[j] ? 0 : s[j];                // u(Nachbar): rezeptiv -> 0
     }
-    const lap = sum / cnt - s[i];
-    ns[i] = s[i] + (alpha / 2) * lap;
+    const uPrime = ui + (alpha / 2) * (sum / 6 - ui); // Divisor 6 (Grad) -> erhaltend
+    // s' = u' + v + gamma*[rezeptiv]; rezeptive fangen den Diffusions-Einstrom (u') auf.
+    ns[i] = recep ? (s[i] + gamma + uPrime) : uPrime;
   }
   return ns;
 }
