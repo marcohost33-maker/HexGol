@@ -29,6 +29,11 @@ import {
 import {
   POPGRAPH_CAP, createBuffer, pushSample, resetBuffer, buildPaths,
 } from "./lib/popgraph.js";
+// Feature 3 (2026-06-09): Muster-Galerie & Presets — PURE Serialize/Validate/Sampling.
+import {
+  builtinDefs, buildBuiltin, serializePreset, deserializePreset,
+  loadUserPresets, saveUserPreset, deleteUserPreset, sampleThumbnail,
+} from "./lib/presets.js";
 // Re-Export der von den Unit-Tests importierten Engine-Funktionen, damit die
 // bestehenden Test-Importpfade (tests/unit/*.test.js -> "../../src/App.tsx")
 // unveraendert weiterlaufen (PR#41-Kontrakt, named exports, export-only).
@@ -348,6 +353,13 @@ export default function GolHex() {
   const [saveName, setSaveName] = useState("");
   const [saveSlots, setSaveSlots] = useState([]); // [{key, meta}]
   const [saveMsg, setSaveMsg] = useState("");
+  // Feature 3 (2026-06-09): Muster-Galerie & Presets. Eigene Presets in
+  // localStorage (kleine zentrale Seeds, synchron+einfach); Built-ins kommen
+  // aus presets.js (verifiziert lebendig). galleryOpen = Galerie-Sheet in Tab 3.
+  const [galleryOpen, setGalleryOpen] = useState(false);
+  const [userPresets, setUserPresets] = useState([]); // [{cells,meta}-Huellen]
+  const [presetMsg, setPresetMsg] = useState("");
+  const builtinPresetsRef = useRef(builtinDefs()); // stabil (reine Defs)
   // v33 PR-D: Snapshot-Status + dezentes Wasserzeichen-Label (abschaltbar).
   const [snapMsg, setSnapMsg] = useState("");
   const [snapWatermark, setSnapWatermark] = useState(true);
@@ -2083,6 +2095,146 @@ export default function GolHex() {
     reader.readAsText(file); ev.target.value = "";
   };
 
+  // --- Feature 3: Muster-Galerie & Presets ----------------------------------
+  // Baut auf dem BESTEHENDEN Speicher-Mechanismus auf: ein Preset ist eine
+  // savestate-Huelle (presets.js) und wird ueber applyLoadedState() rehydriert —
+  // exakt der Pfad, den Datei-/IDB-Laden nutzt. KEINE neue Lade-Logik.
+  const refreshUserPresets = () => {
+    try { setUserPresets(loadUserPresets()); }
+    catch (e) { setPresetMsg(`Presets nicht verfuegbar: ${e && e.message}`); }
+  };
+  // Galerie oeffnen/schliessen (Sheet in Tab 3). Beim Oeffnen eigene Presets laden.
+  const toggleGallery = () => {
+    setGalleryOpen((o) => {
+      const next = !o;
+      if (next) { refreshUserPresets(); setPresetMsg(""); }
+      return next;
+    });
+  };
+  // Built-in laden: konkreten Feld-Zustand fuer die AKTUELLE Gittergroesse bauen
+  // und ueber den Standard-Ladepfad einspielen. Im rval-Modus wechselt
+  // applyLoadedState ehrlich in den Lebenswelt-Modus (Presets sind Lebenswelt).
+  const loadBuiltinPreset = (id) => {
+    try {
+      const def = builtinPresetsRef.current.find((d) => d.id === id);
+      const { cells, meta } = buildBuiltin(id, { rows: R, cols: C, sizeIdx });
+      applyLoadedState(cells, meta);
+      setPresetMsg(`Geladen: "${def ? def.name : id}" (${meta.ruleIdx != null ? "Regel gesetzt" : ""}).`);
+      setGalleryOpen(false);
+    } catch (e) { setPresetMsg(`Laden fehlgeschlagen: ${e && e.message}`); }
+  };
+  // Eigenes Preset laden (savestate-Huelle -> deserializePreset -> Standard-Ladepfad).
+  const loadUserPreset = (name) => {
+    try {
+      const obj = userPresets.find((p) => p.meta && p.meta.name === name);
+      if (!obj) { setPresetMsg(`Preset "${name}" nicht gefunden.`); return; }
+      const { cells, meta } = deserializePreset(obj);
+      applyLoadedState(cells, meta);
+      setPresetMsg(`Geladen: "${name}".`);
+      setGalleryOpen(false);
+    } catch (e) { setPresetMsg(`Laden fehlgeschlagen: ${e && e.message}`); }
+  };
+  // Aktuellen Zustand als eigenes Preset speichern (localStorage). Nur Lebenswelt
+  // (rval-Save ist auch beim Spielstand bewusst gesperrt — gleiche Ehrlichkeit).
+  const saveCurrentAsPreset = () => {
+    if (simMode === "rval") { setPresetMsg("Preset speichern nur im Lebenswelt-Modus."); return; }
+    const name = (typeof window !== "undefined" && window.prompt)
+      ? window.prompt("Name fuer dein Preset:", `Preset ${new Date().toLocaleDateString("de-CH")}`)
+      : `Preset ${Date.now()}`;
+    if (!name || !name.trim()) return;
+    try {
+      const obj = serializePreset({ name: name.trim(), cells: colorRef.current, meta: currentSaveMeta(name.trim()) });
+      const list = saveUserPreset(obj);
+      setUserPresets(list);
+      setPresetMsg(`Preset gespeichert: "${name.trim()}".`);
+    } catch (e) {
+      setPresetMsg(e && (e.code === "LIMIT" || e.code === "QUOTA") ? e.message : `Speichern fehlgeschlagen: ${e && e.message}`);
+    }
+  };
+  const deletePreset = (name) => {
+    try { setUserPresets(deleteUserPreset(name)); setPresetMsg(`Preset geloescht: "${name}".`); }
+    catch (e) { setPresetMsg(`Loeschen fehlgeschlagen: ${e && e.message}`); }
+  };
+  // Mini-Render eines Preset-Zustands als SVG-Punkte (Galerie-Kachel, Mockup
+  // Panel 3). Reines Sampling aus presets.js; out = normierte Punkte -> <circle>.
+  const presetThumb = (state, key) => {
+    const pts = state ? sampleThumbnail(state) : [];
+    return (
+      <svg key={key} viewBox="0 0 100 100" preserveAspectRatio="xMidYMid meet"
+        aria-hidden="true" style={{ width: "100%", height: 56, display: "block" }}>
+        {pts.map((p, i) => (
+          <circle key={i} cx={(p.x * 92 + 4).toFixed(1)} cy={(p.y * 48 + 4).toFixed(1)}
+            r="3.2" fill={T.accent} />
+        ))}
+      </svg>
+    );
+  };
+  // Feature 3: Galerie-Sheet (in Tab 3 — setzt Regel + Groesse, daher dort am
+  // sinnvollsten). Built-in-Kacheln (verifiziert lebendig) + eigene Presets
+  // (localStorage) + "+ Eigener". Baut auf applyLoadedState (Speicher-Ladepfad).
+  // FUNKTION (nicht eager const): wird erst im Render von tab3Content aufgerufen,
+  // sodass R/C/sizeIdx garantiert initialisiert sind (kein TDZ-Crash).
+  const renderPresetGallery = () => (
+    <div style={{ marginBottom: 14 }}>
+      <button onClick={toggleGallery} data-testid="gallery-toggle"
+        aria-expanded={galleryOpen} aria-label="Muster-Galerie oeffnen"
+        style={{ width: "100%", textAlign: "left", padding: "9px 10px", borderRadius: 9, border: `1px solid ${galleryOpen ? T.accent : T.border}`, background: galleryOpen ? "rgba(92,240,204,0.10)" : T.bg2, color: galleryOpen ? T.accent : T.text, fontFamily: MONO, fontSize: 11.5, fontWeight: 700, cursor: "pointer", marginBottom: galleryOpen ? 8 : 0 }}>
+        {galleryOpen ? "v" : ">"} &#9638; Muster-Galerie &amp; Presets (1-Tap laden)
+      </button>
+      {galleryOpen && (
+        <div data-testid="preset-gallery" role="group" aria-label="Muster-Galerie">
+          <div style={{ fontSize: 10, color: T.sub, opacity: 0.78, fontFamily: MONO, lineHeight: 1.45, marginBottom: 8 }}>
+            Kuratierte Start-Seeds in 1 Tap (Regel + Groesse werden mitgesetzt). Ehrlich:
+            klassische Quadratgitter-Objekte (Glider/Blinker) existieren auf dem 6-Nachbar-Hexgitter
+            nicht — dies sind reproduzierbare Anfangszustaende, kein behaupteter Endzustand.
+          </div>
+          {/* Built-in-Kacheln (3-Spalten-Grid, wie Mockup Panel 3) */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 10 }}>
+            {builtinPresetsRef.current.map((d) => {
+              const state = (() => { try { return buildBuiltin(d.id, { rows: R, cols: C, sizeIdx }); } catch { return null; } })();
+              return (
+                <button key={d.id} onClick={() => loadBuiltinPreset(d.id)}
+                  data-testid={`preset-builtin-${d.id}`} title={d.origin} aria-label={`Preset ${d.name} laden`}
+                  style={{ display: "flex", flexDirection: "column", gap: 2, padding: 6, borderRadius: 10, border: `1px solid ${T.border}`, background: T.bg2, cursor: "pointer", fontFamily: MONO }}>
+                  {presetThumb(state, d.id)}
+                  <span style={{ fontSize: 10, fontWeight: 700, color: T.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{d.name}</span>
+                </button>
+              );
+            })}
+          </div>
+          {/* Eigene Presets (localStorage) + "+ Eigener" (aktuellen Zustand speichern) */}
+          <div style={{ fontSize: 10.5, color: T.sub, fontFamily: MONO, marginBottom: 6 }}>EIGENE PRESETS ({userPresets.length})</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 6 }}>
+            {userPresets.map((p) => {
+              const state = (() => { try { return deserializePreset(p); } catch { return null; } })();
+              const nm = (p.meta && p.meta.name) || "?";
+              return (
+                <div key={nm} style={{ display: "flex", flexDirection: "column", gap: 2, padding: 6, borderRadius: 10, border: `1px solid ${T.border}`, background: T.bg2, fontFamily: MONO }}>
+                  <button onClick={() => loadUserPreset(nm)} data-testid="preset-user" title={`"${nm}" laden`} aria-label={`Eigenes Preset ${nm} laden`}
+                    style={{ all: "unset", cursor: "pointer", display: "block" }}>
+                    {presetThumb(state, nm)}
+                    <span style={{ fontSize: 10, fontWeight: 700, color: T.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", display: "block" }}>{nm}</span>
+                  </button>
+                  <button onClick={() => deletePreset(nm)} aria-label={`Preset ${nm} loeschen`} title="Loeschen"
+                    style={{ fontSize: 9, padding: "2px 0", borderRadius: 6, border: `1px solid ${T.border}`, background: "transparent", color: T.sub, cursor: "pointer", fontFamily: MONO, minHeight: "auto" }}>Loeschen</button>
+                </div>
+              );
+            })}
+            {/* "+ Eigener"-Kachel (Mockup) */}
+            <button onClick={saveCurrentAsPreset} data-testid="preset-save-current" aria-label="Aktuellen Zustand als Preset speichern"
+              style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 4, minHeight: 78, padding: 6, borderRadius: 10, border: `1px dashed ${T.accent}`, background: "rgba(92,240,204,0.06)", color: T.accent, cursor: "pointer", fontFamily: MONO, fontSize: 11, fontWeight: 700 }}>
+              <span style={{ fontSize: 20, lineHeight: 1 }}>+</span>
+              <span>Eigener</span>
+            </button>
+          </div>
+          <div style={{ fontSize: 10, color: T.sub, opacity: 0.78, fontFamily: MONO, lineHeight: 1.4 }}>
+            {presetMsg || "1 Tap auf eine Kachel laedt den Seed. „+ Eigener“ speichert den aktuellen Feld-Zustand (Lebenswelt) als Preset (im Browser, localStorage)."}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+
   // v33 PR-D: aktuelle Regel als Kurzlabel (B/S oder rval-Name) — identische
   // Logik wie der Statistik-Regel-Chip, hier auch vor dem Render abrufbar.
   const currentRuleLabel = () => {
@@ -2578,6 +2730,11 @@ export default function GolHex() {
             : <select value={sizeIdx} onChange={(e) => setSizeIdx(Number(e.target.value))} style={sel}>{GRID_SIZES.map((g, i) => <option key={i} value={i}>{g.l} ({g.rows}x{g.cols} = {(g.rows * g.cols).toLocaleString("de-CH")} Zellen)</option>)}</select>}
         </label>
       </div>
+
+      {/* Feature 3 (2026-06-09): Muster-Galerie & Presets (1-Tap laden). Hier in
+          Tab 3, weil ein Preset Regel + Groesse mitsetzt. Baut auf dem bestehenden
+          Speicher-/Ladepfad (savestate-Huelle -> applyLoadedState) auf. */}
+      {renderPresetGallery()}
 
       <div style={{ marginBottom: 10 }}>
         <div style={{ fontSize: 11, color: T.sub, fontFamily: MONO, marginBottom: 4 }}>TOPOLOGIE &amp; RAHMEN</div>

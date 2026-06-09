@@ -159,9 +159,48 @@ unaffected.
 > `Float32`, which needs its own format; the save/load/export path covers the
 > boolean **Lebenswelt** mode and reports an honest message in physics mode.
 
+### Pattern gallery + presets (1-tap load)
+
+A **Muster-Galerie** in **Tab 3 (Hex-Regeln)** loads curated start-seeds in **one
+tap** — a built-in tile sets the field **and** its matching rule + grid size at once,
+then re-hydrates through the **existing save-state load path** (`applyLoadedState`); no
+new loading logic. Each tile shows a **mini-render** of the seed (sampled dots, like the
+mockup). It builds directly on top of the save/snapshot mechanism above.
+
+**Honesty (no fake "famous" objects).** The classic square-grid Game-of-Life objects
+(Conway glider, blinker) **do not exist** on the 6-neighbour hex topology — they are not
+periodic oscillators/spaceships there. The gallery therefore claims **no famous named
+patterns**. Every built-in is an **honestly named, reproducible start-seed** (concrete
+cell positions + a chosen hex rule); the gallery loads exactly that initial state, and
+what evolves is the dynamics of the chosen rule — not a pre-claimed outcome. All six
+built-ins are **verified alive** (they do not die out within 20 generations of their
+rule, across every grid size) by a unit-test oracle, not by eyeballing:
+
+| Tile | Rule | Honest origin |
+|------|------|---------------|
+| **Zentral-Cluster** | H:B2/S34 | central 6-cell seed under canonical hex Life — small stable oscillator. |
+| **Gleit-Keim** | H:B2/S34 | diagonal start chain — honest seed, **not** a glider (none exist on hex). |
+| **Schnee-Start** | H:B2/S35 (Carter-Bays) | hexagonal ring seed → crystalline fixed state. |
+| **Dicht-Cluster** | H:B12/S34 | dense 4×4 block — long-lived growing cluster. |
+| **Wellen-Start** | H:B23/S34 | offset double-row → growing wave fronts. |
+| **Faecher-Start** | H:B2/S23 | V-shaped double line → symmetric growing fan. |
+
+**Own presets** are saved with **"+ Eigener"** (saves the current Lebenswelt field as a
+preset, name prompt) and persist in **`localStorage`** (these seeds are small — a central
+patch, not the full huge grid — so a synchronous store is the right fit, vs. the IndexedDB
+used for full save-states). Own tiles load on tap and carry a **Loeschen** action.
+Pure logic — serialise/deserialise/validate (**fail-closed** on corrupt/foreign/future
+objects) + thumbnail sampling — lives in the unit-tested module `src/lib/presets.js`; the
+preset format **is** the existing `golhex.savestate` envelope, so presets round-trip and
+validate through the same code as save-states. Live physics (`rval`) preset-save is out of
+scope (same honest reason as save-states). e2e drives it via real DOM controls (open the
+gallery, tap a built-in, assert the field changes via the visible `Pop` counter) — no
+`window` hook, and no visual baseline is touched.
+
 Where the old controls moved: brush/colours + colour mode → **Tab 1**; pattern
 stamp + ring/disc colour-wheel stamp → **Tab 2**; rule source/INT, rule + **size
-(S–5XL)** select, topology/frame + circle radius, worker toggle + big-grid notices,
+(S–5XL)** select, **pattern gallery + presets**, topology/frame + circle radius,
+worker toggle + big-grid notices,
 Watzlawick axioms, systems-theory, legend → **Tab 3**; sim mode (life/physics),
 real-valued rules (snow/water/HQST/Collatz/genes) + solver + seed, LiouScope
 recorder, Globalarchiv snapshot, stats detail → **Tab 4**. **No function is removed
@@ -342,6 +381,7 @@ src/
   lib/sim-core.js  - pure HQST core (applyH, solveCN — Crank-Nicolson); unit-tested
   lib/hex-geom.js  - pure hex cube-coord geometry (oddRToCube/cubeToOddR/hexDist/CUBE_DIRS); unit-tested
   lib/popgraph.js  - pure population-sparkline ring buffer + path scaling (push/reset/buildPaths); unit-tested
+  lib/presets.js   - pure pattern-gallery: built-in seeds (verified alive), serialize/validate (fail-closed), localStorage persistence, thumbnail sampling; unit-tested
 tests/
   unit/            - Vitest: sim-core.test.js (CN norm conservation + convergence flag),
                      hex-geom.test.js (hexagon frame == mask, centered-hex number)
