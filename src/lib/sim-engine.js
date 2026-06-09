@@ -635,25 +635,51 @@ function stepReiter(s, NL, alpha, gamma, buf, recBuf) {
   }
   return ns;
 }
-// Wasser: Gravitation (untere Nachbarn k=4,5) + seitlicher Druckausgleich (k=2,3).
-// Massenerhaltend. Grundregel dessen, was sich auf Wasser verhaelt: Auftrieb.
+// Wasser: Gravitation (untere Nachbarn k=4,5) + seitlicher Druckausgleich.
+// Massenerhaltend. Standard-Spiel-CA-Fluid (w-shadow "Simple Fluid Simulation"):
+// nach unten fuellen bis MaxMass=1, dann horizontal ausgleichen.
+// SEITLICHER AUSGLEICH ORDNUNGSUNABHAENGIG (2026-06-08): frueher ein In-Place-
+// Sweep links->rechts (diff>0), der eine RICHTUNGS-DRIFT erzeugte (Wasser wanderte
+// ueber viele Schritte nach +x). Jetzt: jede horizontale Kante GENAU EINMAL ueber
+// den Rechtsnachbarn (k=3), Fluesse aus einem SCHNAPPSCHUSS des Nach-Gravitations-
+// Zustands (w wird recycelt) -> additiv in nw. Ergebnis = symmetrische Diffusion
+//   nw[i] = 0.5*w[i] + 0.25*w[links] + 0.25*w[rechts]   (Konvexkombination)
+// invariant gegen Iterationsrichtung (Links-Rechts-Spiegelsymmetrie, Test
+// tests/unit/water-order-independence.test.js), massenerhaltend (paarig -/+) und
+// wertbeschraenkt auf [0,1].
+// GRAVITATION OHNE LINKS-/RECHTS-VORZUG (2026-06-08): frueher wurden die beiden
+// unteren Nachbarn k=4,5 SEQUENZIELL gefuellt (k=4 zuerst, *0.5) -> die erste
+// Richtung bekam mehr -> horizontaler Drift beim Fallen. Jetzt wird der Abfluss
+// PROPORTIONAL zum freien Platz (room) auf beide unteren Nachbarn verteilt
+// (reihenfolge-/richtungsunabhaengig): gleicher Platz -> gleiche Haelfte.
+// Massenerhaltend (Abfluss == Summe Zufluss) und wertbeschraenkt (Anteil <= room).
 function stepWater(w, NL, C, buf) {
   const n = w.length, nw = buf;
   for (let i = 0; i < n; i++) nw[i] = w[i];
   for (let i = n - 1; i >= 0; i--) {
-    let amt = nw[i]; if (amt <= 1e-6) continue;
+    const amt = nw[i]; if (amt <= 1e-6) continue;
     const r = (i / C) | 0, b = i * 6;
-    for (const k of [4, 5]) {
-      const j = NL[b + k]; if (j < 0) continue;
-      if (((j / C) | 0) <= r) continue;
-      const room = 1 - nw[j]; if (room <= 0) continue;
-      const move = Math.min(amt, room) * 0.5; nw[j] += move; nw[i] -= move; amt -= move;
-      if (amt <= 1e-6) break;
-    }
+    const j4 = NL[b + 4], j5 = NL[b + 5];
+    const d4 = (j4 >= 0 && ((j4 / C) | 0) > r) ? j4 : -1;
+    const d5 = (j5 >= 0 && ((j5 / C) | 0) > r) ? j5 : -1;
+    const r4 = d4 >= 0 ? Math.max(0, 1 - nw[d4]) : 0;
+    const r5 = d5 >= 0 ? Math.max(0, 1 - nw[d5]) : 0;
+    const totalRoom = r4 + r5; if (totalRoom <= 0) continue;
+    const flow = Math.min(amt, totalRoom) * 0.5; if (flow <= 0) continue;
+    if (r4 > 0) nw[d4] += flow * (r4 / totalRoom); // Anteil <= r4 -> bleibt <= 1
+    if (r5 > 0) nw[d5] += flow * (r5 / totalRoom);
+    nw[i] -= flow;
   }
+  // Schnappschuss des Nach-Gravitations-Zustands: w wird dafuer UEBERSCHRIEBEN
+  // (allokationsfrei, Hot-Path bis 250k Zellen). Im App-Doppelpuffer unkritisch —
+  // w (= altes Feld) wird nach dem Swap ohnehin zum naechsten Scratch-Puffer.
+  for (let i = 0; i < n; i++) w[i] = nw[i];
+  // Jede horizontale Kante einmal: Rechtsnachbar (k=3). Signierter Fluss -> fliesst
+  // immer vom hoeheren zum niedrigeren Pegel, unabhaengig von der Reihenfolge.
   for (let i = 0; i < n; i++) {
-    const b = i * 6;
-    for (const k of [2, 3]) { const j = NL[b + k]; if (j < 0) continue; const diff = (nw[i] - nw[j]) * 0.25; if (diff > 0) { nw[i] -= diff; nw[j] += diff; } }
+    const j = NL[i * 6 + 3]; if (j < 0) continue;
+    const diff = (w[i] - w[j]) * 0.25;
+    nw[i] -= diff; nw[j] += diff;
   }
   return nw;
 }
