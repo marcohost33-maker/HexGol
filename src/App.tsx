@@ -3345,7 +3345,7 @@ export default function GolHex() {
           {/* v34 Feature 2: Aufnahme der Feld-Evolution als Video (REC -> Stop). */}
           {recSupported && (
             <button onClick={toggleClip}
-              aria-label={clipState === "recording" ? "Aufnahme stoppen" : "Aufnahme starten"}
+              aria-label={clipState === "recording" ? "Video-Aufnahme beenden" : "Video aufnehmen"}
               aria-pressed={clipState === "recording"}
               title="Feld-Evolution aufnehmen (Video — danach teilen/herunterladen)"
               data-testid="record-btn"
