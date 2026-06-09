@@ -60,6 +60,9 @@ src/
   │   ├── sim-core.js     # HQST tight-binding applyH + Crank-Nicolson solveCN
   │   ├── hex-geom.js     # hex cube-coordinate geometry (Red Blob Games)
   │   ├── raster-render.js# shared ImageData raster path (main + worker, no copy-drift)
+  │   ├── snapshot.js     # pure share/download dispatcher + filename/watermark (Web Share L2)
+  │   ├── recorder.js     # pure recorder state machine + codec negotiation + mockable
+  │   │                   #   captureStream/MediaRecorder controller (Feature 2 video)
   │   └── worker-support.js# OffscreenCanvas feature-detection (fail-closed)
   └── worker/
       └── render-worker.js# AP-1: opt-in off-main-thread sim+render (Stufe 1)
