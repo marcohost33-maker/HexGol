@@ -501,6 +501,9 @@ const RVAL_RULES = [
 //   v(z) = rezeptiv ? s(z) : 0   (quasi-gefroren)
 // Diffusion (diskreter Hex-Laplace, Grad 6) wird auf ALLE Zellen angewandt:
 //   u'(z) = u(z) + (alpha/2) * ( mean_{NN} u - u(z) )
+// Das ist ALGEBRAISCH IDENTISCH zu Reiters Originalgleichung (primaerquellen-
+// validiert) u(t+1,P) = u(t,P) + (alpha/12)*( -6 u(t,P) + sum_{N} u(t,N) ), da
+// mean_{NN} = (1/6) sum_{N}  ->  (alpha/2)((1/6)sum - u) = (alpha/12)(sum - 6u).
 // Rezeptive Zellen (u=0) FANGEN damit den Einstrom ihrer nicht-rezeptiven Nachbarn
 // AUF (genau das fehlte der frueheren "lecken" Variante -> Masse versickerte am
 // Eisrand). Update:  s'(z) = u'(z) + v(z) + gamma*[rezeptiv].
