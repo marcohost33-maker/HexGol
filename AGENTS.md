@@ -55,7 +55,8 @@ src/
   ├── main.jsx            # React entry
   ├── lib/
   │   ├── sim-engine.js   # SINGLE-SOURCE engine: rules, GRID_SIZES, buildNeighbors,
-  │   │                   #   all rval steps (snow/water/HQST/collatz/genes), colours
+  │   │                   #   boolean stepLife (unit-tested parity), all rval steps
+  │   │                   #   (snow/water/HQST/collatz/genes), colours
   │   ├── sim-core.js     # HQST tight-binding applyH + Crank-Nicolson solveCN
   │   ├── hex-geom.js     # hex cube-coordinate geometry (Red Blob Games)
   │   ├── raster-render.js# shared ImageData raster path (main + worker, no copy-drift)
@@ -108,7 +109,9 @@ npm run test:e2e:update   # refresh Playwright snapshots (use deliberately)
 4. **The rule entry is load-bearing.** `step()` in `src/App.tsx` honours the
    active birth/survival rule (B/S thresholds + INT configuration constraints);
    changing one half without the other corrupts the automaton. Add/adjust unit
-   tests together. The HQST solver core lives in `src/lib/sim-core.js`.
+   tests together. The boolean transition core now lives in `src/lib/sim-engine.js`
+   `stepLife` (pure, guarded by the parity oracle `tests/unit/step-life.test.js`);
+   the HQST solver core lives in `src/lib/sim-core.js`.
 5. **Reality-Anchor.** Prefer "unit + e2e green (verified <date>)" over
    "should work". No claims without test-belege.
 6. **Plain paths in code-blocks** for file references (clickable in CLI).
