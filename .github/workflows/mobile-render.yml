@@ -15,6 +15,6 @@ permissions:
 
 jobs:
   mobile-render:
-    uses: marcohost33-maker/coworkerz-ci/.github/workflows/mobile-render-verify.yml@f5326cb79b87529e3734c9a7fd63db6cfb9800c2 # PR#4 head
+    uses: marcohost33-maker/coworkerz-ci/.github/workflows/mobile-render-verify.yml@40104a8cc2772b8563107c510660c51e12e2d367 # coworkerz-ci main (mobile-render-verify reusable)
     with:
       render-test-command: "npx playwright test --project=mobile tests/e2e/mobile-hexshape.spec.ts tests/e2e/mobile-perf-budget.spec.ts"
