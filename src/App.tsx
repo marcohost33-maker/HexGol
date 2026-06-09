@@ -25,6 +25,10 @@ import {
 import {
   buildSnapshotFilename, buildWatermarkLabel, canvasToBlob, shareOrDownloadBlob,
 } from "./lib/snapshot.js";
+// Feature 1 (2026-06-09): Live-Populations-Graph — PURE Ring-Buffer + Pfad-Skalierung.
+import {
+  POPGRAPH_CAP, createBuffer, pushSample, resetBuffer, buildPaths,
+} from "./lib/popgraph.js";
 // Re-Export der von den Unit-Tests importierten Engine-Funktionen, damit die
 // bestehenden Test-Importpfade (tests/unit/*.test.js -> "../../src/App.tsx")
 // unveraendert weiterlaufen (PR#41-Kontrakt, named exports, export-only).
@@ -496,6 +500,13 @@ export default function GolHex() {
   const prevGhostRef = useRef(new Uint8Array(N)); // Gedaechtnis der Geister-Ebene
   const statsRef = useRef({ births: 0, deaths: 0 });
   const histRef = useRef([]);
+  // Feature 1: Ring-Buffer (Pop + Aktiv) der letzten ~200 Generationen fuer die
+  // Live-Sparkline. Pop/Aktiv werden in pushStats BEREITS getrackt — hier nur
+  // gepuffert (createBuffer/pushSample/resetBuffer aus src/lib/popgraph.js, pur+getestet).
+  const popGraphRef = useRef(createBuffer(POPGRAPH_CAP));
+  const popSparkRef = useRef(null);   // <canvas> der Sparkline
+  const popDrawTsRef = useRef(0);      // Drossel: letzter Redraw-Zeitstempel (~6 Hz)
+  const [popGraphTick, setPopGraphTick] = useState(0); // triggert gedrosselten Redraw
   // LiouScope-Recorder: vollstaendige Zeitreihe der Observablen (nicht nur das
   // 120-Punkt-Anzeigefenster). Jede Zeile = ein Schritt; Spalten regelabhaengig.
   const recRef = useRef({ on: false, rows: [], cols: [] });
@@ -553,6 +564,7 @@ export default function GolHex() {
     undoRef.current = []; originRef.current = null; setHasOrigin(false); // Gitter neu -> Urzustand verwerfen
     tickRef.current = 0; setGen(0);
     histRef.current = []; statsRef.current = { births: 0, deaths: 0 };
+    resetBuffer(popGraphRef.current); popDrawTsRef.current = 0; setPopGraphTick((t) => (t + 1) & 0x7fffffff);
     setStats({ pop: 0, cnt: [0,0,0,0,0,0,0,0,0,0,0,0,0], density: 0, births: 0, deaths: 0, sps: 0, hist: [] });
     setRunning(false); dirtyRef.current = true;
     fitView();
@@ -771,15 +783,39 @@ export default function GolHex() {
     if (simRef.current === "rval") {
       const r = countRval();
       const h = histRef.current; h.push(r.active); if (h.length > 120) h.shift();
+      // Sparkline: im rval-Modus gibt es keinen separaten Geburten/Tode-Diff -> Aktiv = Pop.
+      pushSample(popGraphRef.current, r.active, r.active);
+      bumpPopGraph();
       recordStep(["gen", "active", "sum"], [tickRef.current, r.active, r.sum]);
       setStats({ pop: r.active, cnt: [0,0,0,0,0,0,0,0,0,0,0,0,0], density: N2 ? r.active / N2 : 0, births: 0, deaths: 0, sps: spsRef.current, hist: h.slice(), rval: true, rvalSum: r.sum });
       return;
     }
     const c = countColor();
     const h = histRef.current; h.push(c.pop); if (h.length > 120) h.shift();
+    // Sparkline: Pop = lebende Zellen, Aktiv = pro-Schritt geaenderte Zellen (births+deaths).
+    pushSample(popGraphRef.current, c.pop, births + deaths);
+    bumpPopGraph();
     recordStep(["gen", "pop", "density", "births", "deaths"], [tickRef.current, c.pop, N2 ? c.pop / N2 : 0, births, deaths]);
     setStats({ pop: c.pop, cnt: c.cnt, density: N2 ? c.pop / N2 : 0, births, deaths, sps: spsRef.current, hist: h.slice() });
   }, [countColor, countRval]);
+
+  // Sparkline-Redraw drosseln (~6 Hz, ENTKOPPELT vom rAF-/Step-Takt): bei hohem
+  // Tempo wuerde ein Redraw je Schritt sonst die Hauptschleife belasten. Wir bumpen
+  // einen Tick-State nur alle ~166 ms; ein useEffect zeichnet darauf das <canvas>.
+  const bumpPopGraph = useCallback(() => {
+    const now = (typeof performance !== "undefined" ? performance.now() : Date.now());
+    if (now - popDrawTsRef.current < 166) return;
+    popDrawTsRef.current = now;
+    setPopGraphTick((t) => (t + 1) & 0x7fffffff);
+  }, []);
+
+  // Buffer leeren = neuer Lauf (Leeren/Random/Regel-/Feld-Wechsel). Sofort neu zeichnen,
+  // damit die Kurve nicht den Vorlauf zeigt.
+  const resetPopGraph = useCallback(() => {
+    resetBuffer(popGraphRef.current);
+    popDrawTsRef.current = 0;
+    setPopGraphTick((t) => (t + 1) & 0x7fffffff);
+  }, []);
 
   // Einen Datensatz in den Recorder schreiben (nur wenn aktiv).
   const recordStep = (cols, vals) => {
@@ -1662,11 +1698,13 @@ export default function GolHex() {
   };
   const doClear = () => {
     pushUndo(); resetOrigin(); // neuer Lauf -> Urzustand-Slot zuruecksetzen
+    resetPopGraph(); // neuer Lauf -> Sparkline-Buffer leeren (Kurve passt zum Lauf)
     if (simMode === "rval") { fieldRef.current.fill(0); fieldImRef.current.fill(0); tickRef.current = 0; setGen(0); dirtyRef.current = true; syncWorkerState(); return; }
     colorRef.current.fill(0); ghostRef.current.fill(0); ageRef.current.fill(0); tickRef.current = 0; setGen(0); updatePop(); dirtyRef.current = true; syncWorkerState();
   };
   const doRandom = () => {
     pushUndo(); resetOrigin(); // neuer Lauf -> Urzustand-Slot zuruecksetzen
+    resetPopGraph(); // neuer Lauf -> Sparkline-Buffer leeren
     if (simMode === "rval") { rvalSeed(); return; }
     const col = colorRef.current; ghostRef.current.fill(0); ageRef.current.fill(0);
     const dmask = neighRef.current.mask;
@@ -1693,6 +1731,49 @@ export default function GolHex() {
   // Beim Wechsel in den rval-Modus / der Regel automatisch sinnvoll seeden.
   useEffect(() => { if (simMode === "rval") { rvalSeed(); setRunning(false); } else { dirtyRef.current = true; } // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [simMode, rvalRule]);
+  // Feature 1: Wechsel der aktiven Regel (B/S, INT, Watzlawick) oder des Modus ->
+  // Sparkline-Buffer leeren, damit die Kurve zur aktuellen Dynamik passt.
+  // (Feld-/Groessen-Wechsel wird bereits im Grid-Rebuild-Effekt geleert.)
+  useEffect(() => { resetPopGraph(); // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ruleIdx, ruleSrc, watzOnly, simMode, rvalRule]);
+
+  // Feature 1: Sparkline zeichnen. Laeuft NUR auf popGraphTick (gedrosselt ~6 Hz in
+  // bumpPopGraph) bzw. nach Reset — NICHT je rAF-Frame. Pop = kraeftige Teal-Linie
+  // (T.accent), Aktiv = duennere, blassere Linie (T.sub). Pfade kommen aus der
+  // PUREN, getesteten buildPaths(); hier nur Canvas-Zeichnung (HiDPI-skaliert).
+  useEffect(() => {
+    const cv = popSparkRef.current; if (!cv) return;
+    const parent = cv.parentElement;
+    const cssW = (parent ? parent.clientWidth : cv.clientWidth) || 0;
+    const cssH = cv.clientHeight || 0;
+    if (cssW <= 0 || cssH <= 0) return;
+    const dpr = (typeof window !== "undefined" && window.devicePixelRatio) || 1;
+    const pxW = Math.round(cssW * dpr), pxH = Math.round(cssH * dpr);
+    if (cv.width !== pxW) cv.width = pxW;
+    if (cv.height !== pxH) cv.height = pxH;
+    const ctx = cv.getContext("2d"); if (!ctx) return;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, cssW, cssH);
+    const padY = 3; // kleiner Rand oben/unten, damit Spitzen nicht abschneiden
+    const innerH = Math.max(1, cssH - padY * 2);
+    const { pop, active, n } = buildPaths(popGraphRef.current, cssW, innerH);
+    if (n < 2) return; // leerer/zu kurzer Buffer -> nichts zeichnen
+    const drawPath = (d, color, width, alpha) => {
+      if (!d) return;
+      ctx.save();
+      ctx.translate(0, padY);
+      ctx.globalAlpha = alpha;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = width;
+      ctx.lineJoin = "round"; ctx.lineCap = "round";
+      const p = new Path2D(d);
+      ctx.stroke(p);
+      ctx.restore();
+    };
+    // Aktiv zuerst (liegt visuell hinter Pop), dann die kraeftige Pop-Linie.
+    drawPath(active, T.sub, 1, 0.55);
+    drawPath(pop, T.accent, 1.8, 1);
+  }, [popGraphTick]);
   const doUndo = () => {
     const u = undoRef.current.pop(); if (!u) return;
     if (u && u.rval) { fieldRef.current.set(u.fld); fieldImRef.current.set(u.fim); dirtyRef.current = true; syncWorkerState(); return; }
@@ -3254,6 +3335,24 @@ export default function GolHex() {
           ))}
         </div>
       </div>
+
+      {/* Feature 1 (2026-06-09): LIVE-POPULATIONS-GRAPH (Sparkline) — schlanke Mini-Kurve
+          UEBER den Steuerungen. Pop (lebende/aktive Zellen, kraeftige Teal-Linie) + Aktiv
+          (pro-Schritt geaenderte Zellen, blasse duenne Linie) der letzten ~200 Generationen.
+          Ring-Buffer + Pfad-Skalierung sind PUR in src/lib/popgraph.js (getestet); das
+          <canvas> wird gedrosselt (~6 Hz) in einem eigenen Effekt gezeichnet, NICHT je
+          rAF-Frame. Buffer leert bei Leeren/Random/Regel-/Feld-Wechsel. Eigenes <canvas>
+          (NICHT .ghx-canvas, NICHT canvas.first()) -> Visual-Baseline der Sim-Leinwand
+          unberuehrt. Erscheint erst, sobald >=2 Generationen gepuffert sind. */}
+      {popGraphRef.current.pop.length >= 2 && (
+        <div data-testid="popgraph" style={{ flexShrink: 0, position: "relative", width: "100%",
+          height: compact ? 42 : 52, marginTop: compact ? 4 : 8, borderRadius: 9,
+          border: `1px solid ${T.border}`, background: T.bg2, overflow: "hidden" }}>
+          <canvas ref={popSparkRef} aria-hidden="true" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", display: "block" }} />
+          <span style={{ position: "absolute", top: 3, left: 6, fontFamily: MONO, fontSize: 9, fontWeight: 700, letterSpacing: "0.04em", color: T.accent, pointerEvents: "none" }}>POP</span>
+          <span style={{ position: "absolute", bottom: 3, left: 6, fontFamily: MONO, fontSize: 9, fontWeight: 600, letterSpacing: "0.04em", color: T.sub, opacity: 0.7, pointerEvents: "none" }}>AKTIV</span>
+        </div>
+      )}
 
       {/* v33 STATISTIK-ZEILE (34px, ueber der Steuerung). Gen · Pop · ±Geburten/Tode ·
           Gen/s · Regel-Chip (B/S, aktiv) · Rahmen+Groesse-Chip. Werte aus bestehendem

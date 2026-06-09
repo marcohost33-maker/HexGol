@@ -91,6 +91,28 @@ The UI is a **single screen with no scrolling** on phone and desktop alike:
    plus a Tempo slider (TURBO step preserved). Touch targets ≥48px,
    `padding-bottom: env(safe-area-inset-bottom)`.
 
+### Live population graph (sparkline)
+
+A slim, full-width **live sparkline** sits directly **above the controls** (between
+the field and the stats line) and makes the run's dynamics — boom/collapse,
+oscillation, stability — readable at a glance. It plots the **last ~200 generations**
+of two series:
+
+- **POP** (label top-left) — living cells (in physics mode: active cells) — the
+  strong teal line (theme accent `#5CF0CC`).
+- **AKTIV** (label bottom-left) — cells **changed this step** (life: births + deaths;
+  physics mode: equals POP, no separate diff) — a thinner, paler line.
+
+Both lines share one vertical scale, so POP sits above AKTIV when its value is larger.
+The graph **only appears once ≥2 generations are buffered** and the **buffer resets**
+on **Leeren / Random / rule change / mode change / field-size change**, so the curve
+always matches the current run. Implementation: the ring buffer and path scaling are a
+**pure, unit-tested module** (`src/lib/popgraph.js`); POP/AKTIV are reused from the
+stats line, not recomputed. The `<canvas>` redraw is **throttled to ~6 Hz and decoupled
+from the rAF draw loop** (it never redraws per animation frame). It is a separate
+`<canvas>` (not the simulation canvas), so the visual-regression baselines are
+unaffected.
+
 ### v33 (PR-C): save states (IndexedDB) + file export + "1. Figur" restore
 
 - **💾 Speichern (save-state panel).** Named slots stored in **IndexedDB** (not
@@ -319,6 +341,7 @@ src/
   main.jsx         - React root mount
   lib/sim-core.js  - pure HQST core (applyH, solveCN — Crank-Nicolson); unit-tested
   lib/hex-geom.js  - pure hex cube-coord geometry (oddRToCube/cubeToOddR/hexDist/CUBE_DIRS); unit-tested
+  lib/popgraph.js  - pure population-sparkline ring buffer + path scaling (push/reset/buildPaths); unit-tested
 tests/
   unit/            - Vitest: sim-core.test.js (CN norm conservation + convergence flag),
                      hex-geom.test.js (hexagon frame == mask, centered-hex number)
