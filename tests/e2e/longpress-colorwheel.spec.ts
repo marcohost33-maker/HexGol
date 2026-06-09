@@ -287,8 +287,15 @@ test.describe("GolHex AP-3 Long-Press-Farbrad", () => {
     await page.waitForTimeout(250); // einen rAF-Render abwarten
 
     // Nachzustand: die getroffene Zelle rendert real ROT -> rote Pixel sind da.
+    // Schranke 15 (war 20): die Default-M-Ansicht zeichnet die Zelle jetzt als
+    // HEXAGON statt als Quadrat-Raster (Schwelle 3.5->2.0, Hexagon-Render-Fix
+    // 2026-06-09). Die Hex-Fuellung (hr*0.92-Polygon) deckt eine geringfuegig
+    // kleinere Flaeche als der bisherige Quadrat-Block (hr*s*0.72-Rechteck) -> der
+    // Pixel-Readback derselben EINEN Zelle ergibt 20 statt >20. Die Zusicherung
+    // bleibt inhaltlich identisch (Zelle ist eindeutig rot gerendert; leer = 0,
+    // oben verifiziert); nur an die korrekte Hex-Geometrie angepasst.
     const after = await countColorNear(page, DX, DY, RED);
-    expect(after, "Nachzustand: getroffene Zelle ist real rot gerendert (Pixel-Readback)").toBeGreaterThan(20);
+    expect(after, "Nachzustand: getroffene Zelle ist real rot gerendert (Pixel-Readback)").toBeGreaterThan(15);
     expect(errors).toEqual([]);
   });
 
