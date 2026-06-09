@@ -48,6 +48,26 @@ describe("stepWater — seitlicher Ausgleich ist ordnungsunabhaengig (kein Sweep
     expect(Math.abs(out[2] - expectMid)).toBeLessThan(1e-6);
   });
 
+  it("Gravitation ohne Links/Rechts-Vorzug: beide unteren Nachbarn bekommen gleich viel", () => {
+    // Wasser in einer Zelle ueber zwei gleich freien unteren Nachbarn muss sich
+    // SYMMETRISCH aufteilen. Der alte sequentielle Pass (k=4 zuerst, *0.5) gab dem
+    // ersten Nachbarn mehr -> dieser Test schlug damit fehl, mit dem Fix gilt er.
+    // Aufbau R=3,C=2 mit Quelle in einer UNGERADEN Reihe: deren zwei untere Nachbarn
+    // (k=4,5) spannen die VOLLE Breite (Spalten 0 und 1) -> kein seitliches Auslaufen
+    // in eine dritte Spalte, das die Symmetrie sonst (durch die hex-Geometrie) brechen
+    // wuerde. Beide unteren Zellen liegen am Rand -> der laterale Pass ist hier ein No-op.
+    const R = 3, C = 2;
+    const { edge } = buildNeighbors(R, C, "box");
+    const N = R * C, w = new Float32Array(N);
+    const top = 1 * C + 0;           // Reihe 1 (ungerade), Spalte 0
+    w[top] = 1;
+    const j4 = edge[top * 6 + 4], j5 = edge[top * 6 + 5];
+    expect(j4).toBeGreaterThanOrEqual(0); expect(j5).toBeGreaterThanOrEqual(0); // beide unten existieren
+    const out = stepWater(w, edge, C, new Float32Array(N));
+    expect(Math.abs(out[j4] - out[j5])).toBeLessThan(1e-6); // gleiche Aufteilung
+    expect(out[j4]).toBeGreaterThan(0);                      // es ist tatsaechlich geflossen
+  });
+
   it("Masse erhalten + Werte in [0,1] ueber 100 Schritte (2D, berandet)", () => {
     const R = 10, C = 8;
     const { edge } = buildNeighbors(R, C, "box");
