@@ -61,4 +61,34 @@ test.describe("GolHex v29L.2 visual baselines", () => {
     await expect(page.locator(".ghx-canvas")).toHaveScreenshot("worker-overlay-outline.png");
     expect(errors, "keine Konsolen-/Page-Fehler im Overlay-Pfad").toEqual([]);
   });
+
+  // Snow (kanonischer Reiter, PR #63): deterministische Baseline fuer die NEUE,
+  // massenerhaltende Schnee-Optik. DETERMINISTISCH ohne Timing-Flackern, weil NICHT
+  // die rAF-Schleife laeuft (kein Start), sondern eine feste Zahl EINZELSCHRITTE ueber
+  // den "Schritt"-Knopf (doStep) ausgeloest wird. Der Schnee-Seed ist RNG-frei
+  // (Hintergrund-Dampf 0.4 + ein Eiskeim), also voll reproduzierbar; nach N Schritten
+  // ist das Feld eindeutig bestimmt. Diese Baseline schlaegt an, wenn die Reiter-Optik
+  // (oder der rval-Renderpfad) unbeabsichtigt driftet. Canvas-AA via config toleriert.
+  test("snow: kanonischer Reiter, deterministisch gesteppt (statisch)", async ({ page }) => {
+    const errors: string[] = [];
+    page.on("pageerror", (e) => errors.push("pageerror: " + e.message));
+    page.on("console", (m) => { if (m.type() === "error") errors.push("console: " + m.text()); });
+
+    await page.goto("/");
+    await page.waitForTimeout(500);
+    // Tab 4 (Physik) -> reellwertiger Modus -> Schnee -> Seed.
+    await page.getByRole("button", { name: "Tab 4 Physik" }).click();
+    await page.waitForTimeout(200);
+    await page.getByRole("button", { name: "Physik (reellwertig)", exact: true }).click();
+    await page.getByRole("button", { name: "Schnee", exact: true }).click();
+    await page.getByRole("button", { name: "Neu initialisieren (Seed)" }).click();
+    await page.getByRole("button", { name: "Tab 4 Physik" }).click(); // Panel zu
+    await page.waitForTimeout(300);
+    // Feste Zahl deterministischer Einzelschritte (kein Start/rAF) -> reproduzierbar.
+    const stepBtn = page.getByRole("button", { name: "Schritt" });
+    for (let i = 0; i < 30; i++) await stepBtn.click();
+    await page.waitForTimeout(300);
+    await expect(page.locator("canvas").first()).toHaveScreenshot("snow-reiter-stepped.png");
+    expect(errors, "keine Konsolen-/Page-Fehler im Schnee-Pfad").toEqual([]);
+  });
 });
