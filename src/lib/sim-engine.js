@@ -518,8 +518,18 @@ function stepReiter(s, NL, alpha, gamma, buf, recBuf) {
   }
   return ns;
 }
-// Wasser: Gravitation (untere Nachbarn k=4,5) + seitlicher Druckausgleich (k=2,3).
-// Massenerhaltend. Grundregel dessen, was sich auf Wasser verhaelt: Auftrieb.
+// Wasser: Gravitation (untere Nachbarn k=4,5) + seitlicher Druckausgleich.
+// Massenerhaltend. Standard-Spiel-CA-Fluid (w-shadow "Simple Fluid Simulation"):
+// nach unten fuellen bis MaxMass=1, dann horizontal ausgleichen.
+// SEITLICHER AUSGLEICH ORDNUNGSUNABHAENGIG (2026-06-08): frueher ein In-Place-
+// Sweep links->rechts (diff>0), der eine RICHTUNGS-DRIFT erzeugte (Wasser wanderte
+// ueber viele Schritte nach +x). Jetzt: jede horizontale Kante GENAU EINMAL ueber
+// den Rechtsnachbarn (k=3), Fluesse aus einem SCHNAPPSCHUSS des Nach-Gravitations-
+// Zustands (w wird recycelt) -> additiv in nw. Ergebnis = symmetrische Diffusion
+//   nw[i] = 0.5*w[i] + 0.25*w[links] + 0.25*w[rechts]   (Konvexkombination)
+// invariant gegen Iterationsrichtung (Links-Rechts-Spiegelsymmetrie, Test
+// tests/unit/water-order-independence.test.js), massenerhaltend (paarig -/+) und
+// wertbeschraenkt auf [0,1]. Gravitation unveraendert (vertikaler Kaskaden-Sweep).
 function stepWater(w, NL, C, buf) {
   const n = w.length, nw = buf;
   for (let i = 0; i < n; i++) nw[i] = w[i];
@@ -534,9 +544,16 @@ function stepWater(w, NL, C, buf) {
       if (amt <= 1e-6) break;
     }
   }
+  // Schnappschuss des Nach-Gravitations-Zustands: w wird dafuer UEBERSCHRIEBEN
+  // (allokationsfrei, Hot-Path bis 250k Zellen). Im App-Doppelpuffer unkritisch —
+  // w (= altes Feld) wird nach dem Swap ohnehin zum naechsten Scratch-Puffer.
+  for (let i = 0; i < n; i++) w[i] = nw[i];
+  // Jede horizontale Kante einmal: Rechtsnachbar (k=3). Signierter Fluss -> fliesst
+  // immer vom hoeheren zum niedrigeren Pegel, unabhaengig von der Reihenfolge.
   for (let i = 0; i < n; i++) {
-    const b = i * 6;
-    for (const k of [2, 3]) { const j = NL[b + k]; if (j < 0) continue; const diff = (nw[i] - nw[j]) * 0.25; if (diff > 0) { nw[i] -= diff; nw[j] += diff; } }
+    const j = NL[i * 6 + 3]; if (j < 0) continue;
+    const diff = (w[i] - w[j]) * 0.25;
+    nw[i] -= diff; nw[j] += diff;
   }
   return nw;
 }
