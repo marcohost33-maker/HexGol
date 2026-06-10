@@ -18,6 +18,24 @@ import { defineConfig, devices } from "@playwright/test";
 // macOS dev run. The visual-regression workflow runs inside the official
 // Microsoft Playwright Docker image so baselines are always generated and
 // asserted in identical environments (playwright.dev/docs/docker).
+// The first-open education intro (ConwayIntro) is a fixed full-screen overlay
+// that intercepts pointer events until dismissed. Every existing functional spec
+// drives the app directly and is unaware of it, so we pre-seed the "seen" flag in
+// localStorage for the whole suite via a storageState whose origin matches the
+// preview server. The intro's OWN spec (conway-intro.spec.ts) clears the flag for
+// its first-open cases (test.use storageState + addInitScript). Keep this origin
+// in sync with `use.baseURL` / the webServer port below.
+const INTRO_ORIGIN = process.env.PLAYWRIGHT_BASE_URL || "http://127.0.0.1:4173";
+const INTRO_SEEN_STORAGE = {
+  cookies: [],
+  origins: [
+    {
+      origin: INTRO_ORIGIN,
+      localStorage: [{ name: "golhex_intro_seen_v1", value: "1" }],
+    },
+  ],
+};
+
 export default defineConfig({
   testDir: "./tests/e2e",
   fullyParallel: true,
@@ -29,6 +47,7 @@ export default defineConfig({
     : [["list"], ["html", { open: "never" }]],
   use: {
     baseURL: process.env.PLAYWRIGHT_BASE_URL || "http://127.0.0.1:4173",
+    storageState: INTRO_SEEN_STORAGE,
     trace: "on-first-retry",
     screenshot: "only-on-failure",
     video: "retain-on-failure",
