@@ -2335,8 +2335,9 @@ export default function GolHex() {
             klassische Quadratgitter-Objekte (Glider/Blinker) existieren auf dem 6-Nachbar-Hexgitter
             nicht — dies sind reproduzierbare Anfangszustaende, kein behaupteter Endzustand.
           </div>
-          {/* Built-in-Kacheln (3-Spalten-Grid, wie Mockup Panel 3) */}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 10 }}>
+          {/* Built-in-Kacheln (3-Spalten-Grid, wie Mockup Panel 3). v33.2 BUG-B:
+              minmax(0,1fr) -> Spalten schrumpfen auf 390px, kein H-Overflow. */}
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1fr) minmax(0,1fr)", gap: 8, marginBottom: 10 }}>
             {builtinPresetsRef.current.map((d) => {
               const state = (() => { try { return buildBuiltin(d.id, { rows: R, cols: C, sizeIdx }); } catch { return null; } })();
               return (
@@ -2351,12 +2352,13 @@ export default function GolHex() {
           </div>
           {/* Eigene Presets (localStorage) + "+ Eigener" (aktuellen Zustand speichern) */}
           <div style={{ fontSize: 10.5, color: T.sub, fontFamily: MONO, marginBottom: 6 }}>EIGENE PRESETS ({userPresets.length})</div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 6 }}>
+          {/* v33.2 BUG-B: minmax(0,1fr) -> kein H-Overflow auf 390px. */}
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1fr) minmax(0,1fr)", gap: 8, marginBottom: 6 }}>
             {userPresets.map((p) => {
               const state = (() => { try { return deserializePreset(p); } catch { return null; } })();
               const nm = (p.meta && p.meta.name) || "?";
               return (
-                <div key={nm} style={{ display: "flex", flexDirection: "column", gap: 2, padding: 6, borderRadius: 10, border: `1px solid ${T.border}`, background: T.bg2, fontFamily: MONO }}>
+                <div key={nm} style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0, padding: 6, borderRadius: 10, border: `1px solid ${T.border}`, background: T.bg2, fontFamily: MONO }}>
                   <button onClick={() => loadUserPreset(nm)} data-testid="preset-user" title={`"${nm}" laden`} aria-label={`Eigenes Preset ${nm} laden`}
                     style={{ all: "unset", cursor: "pointer", display: "block" }}>
                     {presetThumb(state, nm)}
@@ -2946,10 +2948,13 @@ export default function GolHex() {
   // v33: Tab-Meta (Reihenfolge + Icon + Kurzname). 4 inhaltliche Tabs (Recherche
   // Thema 3: Aktionen sind keine Tabs -> rechts als Icon-Buttons abgesetzt).
   const TABS = [
-    { id: 1, icon: "🎨", label: "Farben" },
-    { id: 2, icon: "⬢", label: "Formen" },
-    { id: 3, icon: "⚙", label: "Hex-Regeln" },
-    { id: 4, icon: "🌊", label: "Physik" },
+    { id: 1, icon: "🎨", label: "Farben", short: "Farben" },
+    { id: 2, icon: "⬢", label: "Formen", short: "Formen" },
+    // v33.2 BUG-A-Fix: Kurz-Label fuer die Tab-Leiste (390px). "Hex-Regeln" ist
+    // auf ~44px Tab-Breite zu lang und ueberlief in den Nachbar-Tab; der lange
+    // Name bleibt fuer aria-label/Panel-Titel als `label` erhalten.
+    { id: 3, icon: "⚙", label: "Hex-Regeln", short: "Regeln" },
+    { id: 4, icon: "🌊", label: "Physik", short: "Physik" },
   ];
 
   // v33 Tab 3 (Hex-Regeln): Regelquelle/INT + Regel- & GROESSE-Auswahl (S-5XL bleibt
@@ -3424,11 +3429,16 @@ export default function GolHex() {
           <div style={{ display: "flex", height: 8, borderRadius: 4, overflow: "hidden", background: "rgba(140,196,187,0.12)", marginBottom: 8 }}>
             {ALLCOL.map((c) => <div key={c} style={{ width: `${pct(stats.cnt[c])}%`, background: COLHEX[c] }} />)}
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "4px 8px", fontSize: 10.5, marginBottom: 8 }}>
+          {/* v33.2 BUG-B-Fix: minmax(0,1fr)-Spalten erlauben das Schrumpfen unter
+              die nowrap-Textbreite (das `auto`-Minimum von "1fr" zwang die Farb-
+              namen auf voller Breite -> Grid lief auf 390px ~12px ueber -> Panel
+              liess sich seitwaerts wischen). Der Farbname klippt jetzt per
+              ellipsis statt zu ueberlaufen; minWidth:0 an Zelle + Textspan. */}
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1fr) minmax(0,1fr)", gap: "4px 8px", fontSize: 10.5, marginBottom: 8 }}>
             {ALLCOL.map((c) => (
-              <span key={c} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+              <span key={c} style={{ display: "inline-flex", alignItems: "center", gap: 5, minWidth: 0 }}>
                 <span style={{ width: 9, height: 9, borderRadius: "50%", background: COLHEX[c], display: "inline-block", flexShrink: 0 }} />
-                <span style={{ color: T.sub, whiteSpace: "nowrap" }}>{NAME[c]} <b style={{ color: T.text }}>{stats.cnt[c]}</b> <span style={{ opacity: 0.55 }}>{pct(stats.cnt[c])}%</span></span>
+                <span style={{ color: T.sub, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{NAME[c]} <b style={{ color: T.text }}>{stats.cnt[c]}</b> <span style={{ opacity: 0.55 }}>{pct(stats.cnt[c])}%</span></span>
               </span>
             ))}
           </div>
@@ -3533,12 +3543,16 @@ export default function GolHex() {
             return (
               <button key={t.id} onClick={() => toggleTab(t.id)} aria-pressed={on}
                 aria-label={`Tab ${t.id} ${t.label}`} title={t.label}
-                style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 1,
+                style={{ flex: 1, minWidth: 0, overflow: "hidden", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 1,
                   cursor: "pointer", border: "none", borderRight: `1px solid ${T.border}`,
                   background: on ? T.bg2 : "transparent", color: on ? T.accent : T.sub,
-                  boxShadow: on ? `inset 0 -3px 0 ${T.accent}` : "none", fontFamily: MONO, padding: 0 }}>
+                  boxShadow: on ? `inset 0 -3px 0 ${T.accent}` : "none", fontFamily: MONO, padding: "0 2px" }}>
                 <span style={{ fontSize: 15, lineHeight: 1 }}>{t.icon}</span>
-                <span style={{ fontSize: 9, opacity: 0.85, whiteSpace: "nowrap" }}>{t.id} {t.label}</span>
+                {/* v33.2 BUG-A-Fix: Kurz-Label + Clipping (ellipsis). Die Tab-Nummer
+                    war im sichtbaren Text und frass Breite -> entfernt (bleibt im
+                    aria-label). maxWidth:100% + ellipsis verhindern jedes Bleeding
+                    in den Nachbar-Tab auf 390px. */}
+                <span style={{ fontSize: 9.5, opacity: 0.85, maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", letterSpacing: "-0.01em" }}>{t.short}</span>
               </button>
             );
           })}
@@ -3743,7 +3757,13 @@ export default function GolHex() {
         {activeTab != null && (
           <div role="dialog" aria-label={`Panel ${TABS.find((t) => t.id === activeTab)?.label}`}
             style={{ position: "absolute", inset: 0, zIndex: 20, display: "flex", flexDirection: "column",
-              background: T.bg }}>
+              background: T.bg,
+              /* v33.2 BUG-B-Fix: Panel horizontal FIXIEREN. overflowX:hidden klippt
+                 jeden Rest-Ueberlauf; touchAction:pan-y laesst NUR vertikales
+                 Scrollen zu -> ein Seitwaerts-Wisch verschiebt den Inhalt nicht
+                 mehr (Foto IMG_0433->0434). Vertikal-Scroll uebernimmt der
+                 Inhaltscontainer unten. */
+              overflowX: "hidden", touchAction: "pan-y" }}>
             <div style={{ flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 12px 8px" }}>
               <div style={{ fontSize: 13, fontWeight: 700, fontFamily: MONO, color: T.accent, letterSpacing: "0.04em" }}>
                 {TABS.find((t) => t.id === activeTab)?.icon} {activeTab} {TABS.find((t) => t.id === activeTab)?.label}
@@ -3751,7 +3771,7 @@ export default function GolHex() {
               <button onClick={() => setActiveTab(null)} aria-label="Panel schliessen" title="Schliessen"
                 style={{ width: 44, height: 36, borderRadius: 8, cursor: "pointer", fontFamily: MONO, fontWeight: 700, border: `1px solid ${T.border}`, background: T.panel, color: T.text }}>v</button>
             </div>
-            <div style={{ flex: "1 1 0", minHeight: 0, overflowY: "auto", padding: "0 12px 14px", overscrollBehavior: "contain" }}>
+            <div style={{ flex: "1 1 0", minWidth: 0, minHeight: 0, overflowY: "auto", overflowX: "hidden", padding: "0 12px 14px", overscrollBehavior: "contain", touchAction: "pan-y" }}>
 
               {/* ===================== TAB 1 — FARBEN ===================== */}
               {activeTab === 1 && (
