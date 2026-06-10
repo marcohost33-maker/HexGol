@@ -331,7 +331,7 @@ function showCloseFallback() {
       'background:#0a0a0a;color:#8a94a6;font-family:system-ui,sans-serif;text-align:center;padding:24px">' +
       '<div style="max-width:360px"><div style="font-size:18px;color:#5CF0CC;font-weight:700;margin-bottom:8px">GolHex beendet</div>' +
       '<div style="line-height:1.5">Du kannst diesen Tab / dieses Fenster jetzt schliessen.' +
-      '<div style="font-size:13px;opacity:.7;margin-top:10px">Ein Browser-Tab darf sich aus Sicherheitsgruenden nicht selbst schliessen &ndash; das ist normal, kein Fehler. Tipp: GolHex ueber &bdquo;Zum Home-Bildschirm&ldquo; hinzufuegen, dann schliesst das &#10005; die App direkt.</div></div></div></body>';
+      '<div style="font-size:13px;color:#aab4c2;margin-top:10px">Ein Browser-Tab oder eine Web-App darf sich aus Sicherheitsgruenden nicht immer selbst schliessen &ndash; das ist normal, kein Fehler. Schliesse das Fenster bei Bedarf manuell.</div></div></div></body>';
   } catch { /* ignore */ }
 }
 
