@@ -76,7 +76,8 @@ new colour. Cancel by tapping outside the ring (or releasing without a pick).
 The UI is a **single screen with no scrolling** on phone and desktop alike:
 
 1. **Top bar (52px):** four content tabs — *1 Farben · 2 Formen · 3 Hex-Regeln ·
-   4 Physik* — plus right-aligned action icons *📷 Snapshot* (**functional, PR-D**
+   4 Physik* — plus right-aligned action icons *ⓘ Einführung* (re-opens the
+   education intro, see below), *📷 Snapshot* (**functional, PR-D**
    — share or download an image of the field) and *💾 Speichern*
    (**functional, PR-C** — opens the save-state panel) and *✕ App schliessen*.
    Tabs **3/4** open as an **overlay over the field**; tabs **1/2** open the
@@ -90,6 +91,20 @@ The UI is a **single screen with no scrolling** on phone and desktop alike:
    PR-C) · **▶ Play** (60px, centre) · Schritt · Random · Leeren (red, set apart)*,
    plus a Tempo slider (TURBO step preserved). Touch targets ≥48px,
    `padding-bottom: env(safe-area-inset-bottom)`.
+
+### First-open education intro (Conway / Game of Life / GolHex)
+
+On the **first visit** — right after the branding splash — a small, dismissable
+overlay introduces the project: who **John Horton Conway** was (British
+mathematician, 1937–2020, inventor of *Game of Life* in 1970), what **Game of
+Life** is (a cellular automaton whose simple birth/survival rules produce
+emergent gliders and oscillators), and what **GolHex** adds (a hexagonal
+Carter-Bays topology, real-valued physics modes incl. the HQST quantum wave, and
+16 rule sets). *„Los geht's"* closes it and stores a `localStorage` flag
+(`golhex_intro_seen_v1`), so it never auto-appears again. You can re-open it any
+time via the dezent **ⓘ** button in the top bar. Implemented in
+`src/lib/ConwayIntro.jsx`; the branding splash (`src/lib/Splash.jsx`) is separate
+and unchanged.
 
 ### Live population graph (sparkline)
 
