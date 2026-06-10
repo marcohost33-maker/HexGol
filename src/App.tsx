@@ -17,7 +17,7 @@ import Splash from "./lib/Splash.jsx"; // v33 Branding: einmaliger Intro-/Splash
 import ConwayIntro, { introSeen } from "./lib/ConwayIntro.jsx"; // Bildungs-Intro (einmalig, nach Splash; ⓘ re-open)
 import { renderRaster } from "./lib/raster-render.js"; // geteilter Raster-Pfad (Worker + Main)
 import { supportsOffscreenWorker } from "./lib/worker-support.js"; // Feature-Detection (fail-closed)
-import { shouldStartPan, decideCloseAction } from "./lib/ui-gestures.js"; // pure UI-Entscheider (Pan-Hit-Test + Schliess-Dispatch)
+import { shouldStartPan, decideCloseAction, usesRasterPath } from "./lib/ui-gestures.js"; // pure UI-Entscheider (Pan-Hit-Test + Schliess-Dispatch + HEX-Render-Gate)
 // v33 PR-C: Spielstand-Speichern (IndexedDB + Datei-Export/Import + Urzustand).
 import {
   serializeSave, deserializeSave, makeOriginSnapshot, shouldCaptureOrigin,
@@ -1059,6 +1059,10 @@ export default function GolHex() {
     // gezeichneten Zustand kennen, sonst difft der naechste Teilredraw (draw(true),
     // pxR<4) gegen einen veralteten Snapshot -> Bildfehler.
     if (simRef.current === "life") { prevColorRef.current.set(colorRef.current); prevGhostRef.current.set(ghostRef.current); }
+    // Observable Render-Marker (e2e-Beleg, KEIN window-Hook -> AGENTS.md §2): der
+    // letzte Vollredraw lief ueber den Raster-(Quadrat-)Pfad. Hex-Gate-Test prueft,
+    // dass das Default-Gitter NIE auf "raster" steht.
+    try { canvas.dataset.renderMode = "raster"; } catch { /* ignore */ }
     dirtyRef.current = false; stepDirtyRef.current = false;
   }, []);
 
@@ -1084,15 +1088,20 @@ export default function GolHex() {
     // geaenderte Zellen -> billiger als ein 50k-Pixel-Refill); der Fast-Path
     // beschleunigt Vollredraws (Grid-Wechsel/Zoom/rval). Disjunkte Trigger.
     //
-    // Schwelle 2.0 (war 3.5): auf schmalen Hochkant-Viewports (iPhone ~390px CSS)
-    // faellt das Standard-M-Gitter auf hr*s ~= 2.07 px/Zelle -> mit der alten 3.5er-
-    // Schwelle rasterte M dort zu QUADRATEN statt Hexagonen (Marco-Bug 2026-06-09).
-    // 2.0 sitzt in der gemessenen Luecke zwischen M (8k Zellen, hr*s>=2.0 auf allen
-    // gaengigen iPhones, Hex-Pfad real 60 fps) und L (18k Zellen, hr*s<=1.45 hochkant;
-    // Hex-Pfad real ~3 fps = Freeze-Klasse). Tiefer senken wuerde L/XL/XXL (>=18k) in
-    // den Hex-Pfad zwingen und den iPhone-Freeze re-oeffnen -> 2.0 ist das Optimum
-    // (empirisch belegt: tests/manual/_perf.mjs, M=59.9 fps vs L=1.9 fps @iPhone).
-    if (!incremental && pxRgate < 2.0) { drawRaster(); return; }
+    // ⚠️ HEX-CELLS-LOAD-BEARING (Marco-Bug, 3. Wiederholung 2026-06-10): GolHex
+    // ist HEXAGONAL — das Standard-/Normal-Gitter MUSS immer als Hexagone rendern.
+    // Die Pfad-Wahl liegt jetzt in der REINEN, unit-getesteten Funktion
+    // usesRasterPath(pxR, hr) (src/lib/ui-gestures.js). KERN: nicht nur pxR, sondern
+    // ZUSAETZLICH hr (Zell-Identitaet) gated -> M (hr=6) + S (hr=12) rastern NIE,
+    // auf KEINER Viewport-Breite und KEINER Zoomstufe. Eine reine pxR-Schwelle war
+    // strukturell unsicher: auf 360-375px-iPhones fiel M auf pxR<2.0 und wurde zu
+    // QUADRATEN (s. Herleitungstabelle + REQUIRED-Test tests/unit/raster-gate.test.js).
+    // Der Raster-Pfad greift NUR noch bei genuin grossen Gittern (L+, hr<=5) mit
+    // sub-aufloesenden Zellen (pxR<2.0) -> Freeze-Schutz bleibt, Hex-Garantie haelt.
+    if (!incremental && usesRasterPath(pxRgate, hr)) { drawRaster(); return; }
+    // Observable Render-Marker: ab hier laeuft der echte Path2D-Hexagon-Pfad
+    // (inkrementell ODER Vollredraw). e2e-Hex-Gate prueft data-render-mode="hex".
+    try { canvas.dataset.renderMode = "hex"; } catch { /* ignore */ }
 
     // Vollredraw startet mit vollflaechigem Loeschen; der inkrementelle Pfad
     // (unten) loescht NUR die geaenderten Zellen selektiv und darf NICHT
@@ -1654,7 +1663,11 @@ export default function GolHex() {
       {
         const { wx, wy } = toWorld(e.clientX, e.clientY);
         const downIdx = pixelToOddR(wx, wy, HR, R, C);
-        ges.current.panOk = shouldStartPan(downIdx, neighRef.current && neighRef.current.mask);
+        // gridLen = aktuelles R*C: aktiviert das Stale-Mask-Gate (iOS-Haertung
+        // 2026-06-10). Eilt die DOM-Render einem Frame-/Groessen-Wechsel der
+        // neighRef-Maske voraus, faellt der Hit-Test fail-closed (kein Pan) statt
+        // gegen eine veraltete Maske zu testen -> Rahmen bleibt fix.
+        ges.current.panOk = shouldStartPan(downIdx, neighRef.current && neighRef.current.mask, N);
       }
       // AP-3: Long-Press-Timer fuer JEDEN Single-Pointer-Down starten (Maus + Touch,
       // einheitlich ueber Pointer Events, B5). Bewegung/zweiter Finger/frueher Up

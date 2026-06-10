@@ -376,10 +376,16 @@ unitary). A **TURBO** speed tier computes many generations per frame.
 
 ### Rendering
 
-Hybrid Canvas2D renderer: large cells use batched (chunked) hex `Path2D` fills;
-when cells get tiny (XXL / zoomed out, `hr·s < 3.5px`) it switches to a direct
-**ImageData raster** (per-cell pixel blocks) so even a fully-populated 200×250
-field stays at ~60fps.
+Hybrid Canvas2D renderer: cells render as real **hexagons** (`Path2D`) whenever
+the grid is normal-sized; only genuinely large grids (L and bigger, `hr ≤ 5`)
+with sub-resolution cells (`hr·s < 2px`) switch to a direct **ImageData raster**
+(per-cell pixel blocks) so even a fully-populated 200×250 field stays at ~60fps.
+The render-path choice is the pure, REQUIRED-tested `usesRasterPath(pxR, hr)`
+(`src/lib/ui-gestures.js`): it gates on **cell-size identity (`hr`)** as well as
+`pxR`, so the default grid is **always hexagonal on every viewport width** — a
+bare `pxR` threshold let narrow phones (≤375px) raster the default grid into
+*squares* (hex-cells-load-bearing; guarded by `tests/unit/raster-gate.test.js` +
+`tests/e2e/mobile-hexshape.spec.ts`).
 
 **OffscreenCanvas worker (Stufe 1, opt-in).** A *Worker (Beta)* toggle (visible
 only when the browser supports `OffscreenCanvas` + `transferControlToOffscreen` +

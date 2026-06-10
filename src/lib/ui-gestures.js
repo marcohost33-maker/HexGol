@@ -2,11 +2,15 @@
 // Extracted so the load-bearing logic is unit-testable (Coworkerz GolHex style:
 // pure cores in src/lib/, see recorder.js / worker-support.js precedent).
 //
-// Two decisions live here:
+// Decisions that live here:
 //   1. shouldStartPan(idx, mask) — frame-pan hit-test (Marco bug 2026-06-09:
 //      touching the BLACK margin around the framed field must NOT move the frame).
 //   2. decideCloseAction(env)   — platform-honest "close the whole app" dispatch
 //      (Marco bug 2026-06-09: closing only showed an image instead of closing).
+//   3. usesRasterPath(pxR, hr)  — HEX-CELLS-LOAD-BEARING render-path gate
+//      (Marco bug, 3rd recurrence 2026-06-10: cells rendered as SQUARE pixel
+//      blocks instead of hexagons). See the dedicated section below — this
+//      function is REQUIRED-tested and must NEVER let the default grid rasterize.
 
 // -----------------------------------------------------------------------------
 // 1) Frame-pan hit-test
@@ -24,16 +28,23 @@
 //
 // Returns true ONLY when the touch is on the actual field; false for the black
 // margin, invalid indices, or NaN.
-export function isInsideDomain(idx, mask) {
+export function isInsideDomain(idx, mask, gridLen) {
   if (!Number.isInteger(idx) || idx < 0) return false; // black margin / off-grid / NaN
+  // STALE-MASK-GATE (iOS-Haertung 2026-06-10): waehrend eines Frame-/Groessen-
+  // Wechsels kann die DOM-Render (R*C neu) der neighRef-Maske (alt) einen Tick
+  // vorauseilen. Stimmt die Maskenlaenge nicht mit dem AKTUELLEN Gitter (gridLen)
+  // ueberein, ist die Maske stale -> fail closed (KEIN Pan), statt gegen eine
+  // veraltete Maske zu testen und den Rahmen faelschlich zu verschieben.
+  if (Number.isInteger(gridLen) && gridLen > 0 && mask != null && mask.length !== gridLen) return false;
   if (mask == null) return true; // unknown mask → in-grid counts as inside (box)
   if (idx >= mask.length) return false; // defensive: stale mask vs. new grid
   return mask[idx] === 1;
 }
 
 // Convenience alias with intent-revealing name at the call site.
-export function shouldStartPan(idx, mask) {
-  return isInsideDomain(idx, mask);
+// gridLen (= aktuelles R*C) optional, aber empfohlen: aktiviert das Stale-Mask-Gate.
+export function shouldStartPan(idx, mask, gridLen) {
+  return isInsideDomain(idx, mask, gridLen);
 }
 
 // -----------------------------------------------------------------------------
@@ -64,4 +75,62 @@ export function decideCloseAction(env) {
   // Plain top-level browser tab with no app history: window.close() is refused by
   // the spec → caller still attempts it, but the honest outcome is the fallback.
   return "fallback";
+}
+
+// -----------------------------------------------------------------------------
+// 3) HEX-CELLS-LOAD-BEARING render-path gate  ⚠️ DO NOT WEAKEN ⚠️
+// -----------------------------------------------------------------------------
+// GolHex is a HEXAGONAL Game of Life — cells MUST render as hexagons whenever
+// they are large enough to perceive a shape at all. The ImageData raster
+// fast-path (src/lib/raster-render.js) draws SQUARE pixel blocks; it exists only
+// to keep genuinely huge grids (L/XL/XXL/…, ≥18k cells) from freezing, where a
+// single cell is sub-pixel and its shape is not resolvable anyway.
+//
+// REGRESSION HISTORY (this has now bitten Marco THREE times — must be the last):
+//   A pure `pxR < threshold` gate is STRUCTURALLY UNSAFE. On a narrow portrait
+//   phone the default M grid (hr=6, world width 1060) fits at a tiny scale, so
+//   its on-screen cell radius pxR = hr*s lands right on top of where the raster
+//   threshold has to sit to catch L's freeze:
+//       device   cw    M pxR     L pxR
+//       390px   372   2.063     1.385
+//       375px   357   1.980 ⚠️  1.330   ← M dips UNDER a 2.0 threshold → SQUARES
+//       360px   342   1.897 ⚠️  1.273   ← iPhone mini / small Android
+//   There is NO single pxR threshold that keeps M hexagonal on a 360–375px phone
+//   AND still rasterizes L. So pxR alone can never be correct.
+//
+// THE FIX — gate on CELL-SIZE IDENTITY (`hr`) as well, not on pxR alone:
+//   The freeze is a function of CELL COUNT, which correlates with small hr
+//   (L=hr4, XL=hr3, … ; M=hr6, S=hr12 are the small/normal grids). So:
+//     • hr > RASTER_MAX_HR  → ALWAYS hexagons (raster=false). This unconditionally
+//       protects S (hr=12) and the DEFAULT M (hr=6) on EVERY viewport width and
+//       zoom — they can never rasterize, full stop.
+//     • hr ≤ RASTER_MAX_HR (the genuinely large grids) → raster only once cells
+//       are sub-resolution (pxR < RASTER_PX_THRESHOLD).
+//   RASTER_MAX_HR = 5 sits in the gap between M (hr=6) and L (hr=4): structural,
+//   not tuned to a pixel count, so a future canvas/layout change cannot reopen the
+//   bug for M. RASTER_PX_THRESHOLD = 2.0 still catches L (pxR ≤ 1.39) and below.
+//
+// ⚠️ Editing these constants is hex-cells-load-bearing. Lowering RASTER_MAX_HR to
+// ≥6, or removing the hr gate, re-enables square cells on the default grid and
+// WILL be caught by the REQUIRED unit test (tests/unit/raster-gate.test.js) and
+// the e2e hex-shape guards (tests/e2e/mobile-hexshape*.spec.ts). Do not bypass.
+export const RASTER_MAX_HR = 5;      // grids with hr > 5 (S, M) never rasterize
+export const RASTER_PX_THRESHOLD = 2.0; // raster only when a large-grid cell < 2px
+
+/**
+ * Decide whether a FULL redraw uses the ImageData raster (square) fast-path
+ * instead of the Path2D hexagon path. Pure + side-effect-free so it is unit-
+ * testable and identical on the main thread and (conceptually) the worker.
+ *
+ * @param {number} pxR  on-screen cell radius in CSS px = hr * view.scale
+ * @param {number} hr   the grid stage's hex radius in world units (GRID_SIZES.hr)
+ * @returns {boolean}   true → raster (squares, huge grids only); false → hexagons
+ */
+export function usesRasterPath(pxR, hr) {
+  // Guard against NaN/garbage: when in doubt, draw hexagons (the correct shape).
+  if (!Number.isFinite(pxR) || !Number.isFinite(hr)) return false;
+  // Normal/default grids (S hr=12, M hr=6) are ALWAYS hexagons — width-independent.
+  if (hr > RASTER_MAX_HR) return false;
+  // Large grids: raster only once a cell is too small to resolve a hexagon.
+  return pxR < RASTER_PX_THRESHOLD;
 }

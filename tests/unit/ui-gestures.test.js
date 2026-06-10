@@ -31,6 +31,27 @@ describe("shouldStartPan / isInsideDomain — frame hit-test", () => {
     expect(shouldStartPan(7, undefined)).toBe(true);
   });
 
+  // --- STALE-MASK-GATE (iOS-Haertung 2026-06-10, Bug 2): eine Maske, deren Laenge
+  // nicht zum aktuellen Gitter (gridLen=R*C) passt, ist stale -> fail closed.
+  it("Maske mit falscher Laenge (stale, Frame-/Groessen-Wechsel) pant NICHT", () => {
+    const staleMask = new Uint8Array(4).fill(1); // alte 2x2-Box-Maske, alle in-domain
+    // Neues Gitter hat 9 Zellen (3x3) -> Laenge passt nicht -> kein Pan, obwohl
+    // mask[idx]===1 (sonst wuerde der Rahmen faelschlich verschoben).
+    expect(shouldStartPan(0, staleMask, 9)).toBe(false);
+    expect(shouldStartPan(3, staleMask, 9)).toBe(false);
+  });
+
+  it("Maske mit passender Laenge (gridLen) pant normal", () => {
+    const boxMask9 = new Uint8Array(9).fill(1);
+    expect(shouldStartPan(0, boxMask9, 9)).toBe(true);
+    expect(shouldStartPan(8, boxMask9, 9)).toBe(true);
+  });
+
+  it("null-Maske + gridLen pant normal (Box-Default, keine Maske noetig)", () => {
+    expect(shouldStartPan(5, null, 9)).toBe(true); // box: keine Maske -> in-grid = inside
+    expect(shouldStartPan(-1, null, 9)).toBe(false); // off-grid bleibt blockiert
+  });
+
   // --- Silent-Failure-Gate: invalid / edge inputs must fail closed (no pan) ---
   it("NaN / non-integer / out-of-range indices fail closed", () => {
     expect(isInsideDomain(NaN, boxMask)).toBe(false);
