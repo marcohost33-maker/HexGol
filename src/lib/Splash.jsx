@@ -147,8 +147,22 @@ export default function Splash({ version, holdMs = 1500, onDismiss }) {
         })}
       </div>
 
-      {/* Wordmark */}
+      {/* Wordmark — JC (John Conway) over GOL over HEX, tight stack */}
       <div style={{ textAlign: "center", lineHeight: 1.05 }}>
+        <div
+          aria-label="John Conway"
+          title="John Horton Conway — Erfinder von Game of Life"
+          style={{
+            fontSize: "clamp(14px, 3.6vw, 20px)",
+            fontWeight: 700,
+            letterSpacing: "0.42em",
+            paddingLeft: "0.42em",
+            color: "#cbd5e1",
+            marginBottom: "8px",
+          }}
+        >
+          · J C ·
+        </div>
         <div
           style={{
             fontSize: "clamp(44px, 12vw, 84px)",
@@ -171,22 +185,6 @@ export default function Splash({ version, holdMs = 1500, onDismiss }) {
         >
           HEX
         </div>
-      </div>
-
-      {/* John Conway homage — initials under the wordmark */}
-      <div
-        aria-label="John Conway"
-        title="John Horton Conway — Erfinder von Game of Life"
-        style={{
-          fontSize: "clamp(13px, 3.4vw, 18px)",
-          fontWeight: 700,
-          letterSpacing: "0.5em",
-          paddingLeft: "0.5em",
-          color: "#cbd5e1",
-          marginTop: "-4px",
-        }}
-      >
-        · J C ·
       </div>
 
       {/* Tagline + real version */}
