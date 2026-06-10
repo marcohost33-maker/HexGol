@@ -11,7 +11,7 @@ import {
   SOLVERS, mkHqstWork, stepHQST, rvalColor, stepCollatz,
   collatzColor, G_AA, G_Aa, G_aa, genotype, stepGenes, geneColor,
   oddRToCube, cubeToOddR, hexDist, CUBE_DIRS,
-  cubeRing, cubeDisk, kColorByIndex, sectorByAngle,
+  cubeRing, cubeDisk, kColorByIndex, balancedAngularSectors,
 } from "./lib/sim-engine.js";
 import Splash from "./lib/Splash.jsx"; // v33 Branding: einmaliger Intro-/Splash-Screen (additiv)
 import { renderRaster } from "./lib/raster-render.js"; // geteilter Raster-Pfad (Worker + Main)
@@ -1821,8 +1821,37 @@ export default function GolHex() {
   const doClear = () => {
     pushUndo(); resetOrigin(); // neuer Lauf -> Urzustand-Slot zuruecksetzen
     resetPopGraph(); // neuer Lauf -> Sparkline-Buffer leeren (Kurve passt zum Lauf)
+    // Bug #1 (echtes iPhone: "Leeren greift nach selbst gezeichnetem Freiform-
+    // Rahmen nicht immer"). Root-Cause: doClear stoppte den Lauf NICHT. Lief die
+    // Sim noch (Main-Loop ODER OffscreenCanvas-Worker), evolvierte sie sofort
+    // weiter: der laufende WORKER-Loop (render-worker.js frame->doStep) swappt
+    // col=nCol JEDEN Tick und ueberschreibt den per `state` gesendeten Null-Zustand
+    // mit der weiter-evolvierten Vor-Leeren-Population (der state-Handler rendert
+    // bei running zudem NICHT neu). Resultat: das Feld erschien nicht-geleert. Fix:
+    // "Leeren" == neuer Lauf -> Lauf zuerst SYNCHRON stoppen (runRef sofort, damit
+    // der Main-Loop diesen Frame nicht mehr steppt) UND den Worker-Loop via
+    // run:false anhalten, BEVOR die Null-Arrays gesendet werden. So kann kein Tick
+    // den Clear ueberschreiben. (Konsistent mit restoreOrigin/Grid-Rebuild, die
+    // ebenfalls den Lauf stoppen.)
+    setRunning(false); runRef.current = false;
+    { const w = workerRef.current; if (w && workerActiveRef.current) w.postMessage({ type: "run", running: false }); }
     if (simMode === "rval") { fieldRef.current.fill(0); fieldImRef.current.fill(0); tickRef.current = 0; setGen(0); dirtyRef.current = true; syncWorkerState(); return; }
     colorRef.current.fill(0); ghostRef.current.fill(0); ageRef.current.fill(0); tickRef.current = 0; setGen(0); updatePop(); dirtyRef.current = true; syncWorkerState();
+  };
+  // Bug #1 (iPhone): einen selbst gezeichneten Freiform-Rahmen wieder entfernen,
+  // OHNE App-Neustart. Nur das Polygon zu leeren reichte NICHT: frameShape blieb
+  // "freeform", frameOptsFor -> undefined, buildNeighbors/inDomain -> `return false`
+  // fuer ALLE Zellen => leere Domaene (inCount 0, Feld "eingefroren", Umriss bleibt).
+  // Sauberer "kein Rahmen"-Zustand = box (volles Gitter). setFrameShape("box")
+  // triggert den Grid-Effekt (App.tsx:636-690): buildNeighbors box -> volle Maske,
+  // Worker-regeom (shape:box), fitView, setRunning(false), redraw -> Umriss weg.
+  const clearFreeformFrame = () => {
+    freeformDraftRef.current = null;       // abgebrochenen Live-Zug verwerfen
+    overlaySigRef.current = "";            // Overlay-Umriss-Cache invalidieren
+    setFreeformDrawing(false);
+    setFreeformPolygon([]);
+    setFrameShape("box");                  // volles, unbeschraenktes Gitter
+    dirtyRef.current = true;
   };
   const doRandom = () => {
     pushUndo(); resetOrigin(); // neuer Lauf -> Urzustand-Slot zuruecksetzen
@@ -2648,13 +2677,15 @@ export default function GolHex() {
       const ring = cubeRing(center, n);            // genau 6n Zellen, geordnet
       const sectorOf = kColorByIndex(ring.length, k);
       ring.forEach((cube, i) => setCell(cube, cols[sectorOf(i)]));
-    } else if (typ === "disc") {
+    } else if (typ === "disc" || typ === "hex") {
+      // Bug #5: Scheibe/Hexagon == gefuellte Scheibe in Hex-Distanz-Metrik (cubeDisk,
+      // regelm. Sechseck). Statt per-Zelle-Winkelschnitt (sectorByAngle -> ungleiche
+      // Zellzahlen pro Farbe) die AUSBALANCIERTEN Winkel-Sektoren: gleich grosse,
+      // zusammenhaengende Tortenstuecke (|max-min| <= 1 Zelle). Vorschau nutzt
+      // dieselbe Funktion auf derselben Disk -> Vorschau == Resultat.
       const disk = cubeDisk(center, n);            // 1+3n(n+1) Zellen
-      disk.forEach((cube) => setCell(cube, cols[sectorByAngle(cube, center, k, wxF, wyF)]));
-    } else if (typ === "hex") {
-      // Hexagon = gefuellte Scheibe in Hex-Distanz-Metrik == cubeDisk (regelm. Sechseck).
-      const disk = cubeDisk(center, n);
-      disk.forEach((cube) => setCell(cube, cols[sectorByAngle(cube, center, k, wxF, wyF)]));
+      const sectorMap = balancedAngularSectors(disk, center, k, wxF, wyF);
+      disk.forEach((cube) => setCell(cube, cols[sectorMap.get(`${cube.x},${cube.y},${cube.z}`) || 0]));
     } else { // brush (Freiform) — UI-Stub: setzt nur die Zentrumszelle (Geometrie PR-E)
       setCell(center, cols[0]);
     }
@@ -2684,6 +2715,12 @@ export default function GolHex() {
     const S3w = S3;
     const wxF = (r, c) => (c + ((r & 1) ? 0.5 : 0)) * S3w;
     const wyF = (r) => r * 1.5;
+    // Bug #5: Vorschau fuer Scheibe/Hexagon nutzt EXAKT dieselbe ausbalancierte
+    // Sektor-Zuordnung wie placeStamp -> Vorschau == Resultat (gleich viele Zellen
+    // pro Farbe, |max-min| <= 1). Ring bleibt am exakten kColorByIndex-Pfad.
+    const previewSectorMap = (stampType === "disc" || stampType === "hex")
+      ? balancedAngularSectors(cubeDisk(center, n), center, k, wxF, wyF)
+      : null;
     // Welt-Bbox bestimmen, damit der Stempel die Vorschau ausfuellt.
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
     for (const [cube] of cells) {
@@ -2701,7 +2738,7 @@ export default function GolHex() {
       let colorState;
       if (stampType === "ring") colorState = cols[sectorRing(i)];
       else if (stampType === "brush") colorState = cols[0];
-      else colorState = cols[sectorByAngle(cube, center, k, wxF, wyF)];
+      else colorState = cols[(previewSectorMap && previewSectorMap.get(`${cube.x},${cube.y},${cube.z}`)) || 0];
       ctx.beginPath();
       for (let s = 0; s < 6; s++) {
         const a = Math.PI / 180 * (60 * s - 30);
@@ -3084,10 +3121,10 @@ export default function GolHex() {
                 border: freeformDrawing ? `1px solid ${T.accent}` : "1px solid rgba(92,240,204,0.14)",
                 background: freeformDrawing ? "rgba(92,240,204,0.12)" : T.bg, color: freeformDrawing ? T.accent : T.sub,
               }}>{freeformDrawing ? "Zeichnen aktiv…" : "✎ Zeichnen"}</button>
-              <button aria-label="Freiform loeschen" onClick={() => { setFreeformPolygon([]); setFreeformDrawing(false); }} style={{
+              <button aria-label="Rahmen entfernen" title="Selbst gezeichneten Rahmen entfernen, zurueck zum vollen Feld" onClick={clearFreeformFrame} style={{
                 flex: 1, padding: "8px 6px", borderRadius: 9, fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: MONO,
                 border: "1px solid rgba(92,240,204,0.14)", background: T.bg, color: T.sub,
-              }}>Leeren</button>
+              }}>Rahmen entfernen</button>
             </div>
             <div style={{ fontSize: 10, color: T.sub, opacity: 0.85, fontFamily: MONO, lineHeight: 1.4 }}>
               {freeformDrawing

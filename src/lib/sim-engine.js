@@ -6,9 +6,9 @@
 // Logik byte-identisch zur v31-Basis (reiner Move, keine Verhaltensaenderung).
 // =============================================================================
 import { applyH, solveCN } from "./sim-core.js"; // HQST-Kern (unit-getestet)
-import { oddRToCube, cubeToOddR, hexDist, CUBE_DIRS, cubeRing, cubeDisk, kColorByIndex, sectorByAngle, pointInPolygonWN, windingNumber } from "./hex-geom.js"; // Hex-Wuerfelgeometrie (unit-getestet)
+import { oddRToCube, cubeToOddR, hexDist, CUBE_DIRS, cubeRing, cubeDisk, kColorByIndex, sectorByAngle, balancedAngularSectors, pointInPolygonWN, windingNumber } from "./hex-geom.js"; // Hex-Wuerfelgeometrie (unit-getestet)
 // Geometrie aus hex-geom wird hier re-exportiert, damit App.tsx einen Import hat.
-export { oddRToCube, cubeToOddR, hexDist, CUBE_DIRS, cubeRing, cubeDisk, kColorByIndex, sectorByAngle, pointInPolygonWN, windingNumber };
+export { oddRToCube, cubeToOddR, hexDist, CUBE_DIRS, cubeRing, cubeDisk, kColorByIndex, sectorByAngle, balancedAngularSectors, pointInPolygonWN, windingNumber };
 
 const S3 = Math.sqrt(3);
 const PI2 = Math.PI * 2, PI3 = Math.PI / 3, PI6 = Math.PI / 6;
