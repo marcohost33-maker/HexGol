@@ -264,11 +264,18 @@ free-form brush is a UI stub; its mask geometry arrives in PR-E). Two stepper ro
   `min(R,C)·0.42` heuristic (math audit **P1.2**). A ring of distance `n` has exactly
   **6n** cells; a disk has **1 + 3n(n+1)** (Red Blob Games; unit-tested in
   `tests/unit/hex-geom.test.js`).
-- **Farbanzahl 1–3** = `k` colours distributed **symmetrically**. Because `6n` is
-  divisible by 1/2/3 for every `n`, a ring splits into `k` remainder-free
-  contiguous sectors of `6n/k` cells; disk/hex sectors are angle-based around the
-  centre (Itten order, red at top, clockwise). A **live mini-preview** renders the
-  exact cells that will be placed.
+- **Farbanzahl 1–3** = `k` colours distributed **symmetrically**, with **as
+  equal a cell count per colour as possible**. Because `6n` is divisible by 1/2/3
+  for every `n`, a ring splits into `k` remainder-free contiguous sectors of
+  `6n/k` cells. Disk/hex stamps form **balanced angular sectors**
+  (`balancedAngularSectors`, `src/lib/hex-geom.js`): the disk cells are ordered by
+  angle (Itten order, red at top, clockwise; centre cell first → colour 0) and cut
+  into `k` equal contiguous index-blocks, so each colour is a connected wedge and
+  the per-colour counts differ by **at most one** (`|max − min| ≤ 1`, exactly equal
+  only when `cellCount % k == 0`). This fixes the earlier per-cell angle split,
+  which gave uneven sector sizes (e.g. disk `n=2`, `k=3`: `8/5/6` → now `7/6/6`).
+  A **live mini-preview** renders the exact cells that will be placed (preview ==
+  result). Unit-tested in `tests/unit/hex-geom.test.js`.
 - **Placing:** pick type/size/colours in the drawer, then **tap the field** — the
   stamp is placed at the tap (no confirm button); the last stamp is remembered.
   Stamps **respect the domain mask** (audit **P1.1**): out-of-domain cells are

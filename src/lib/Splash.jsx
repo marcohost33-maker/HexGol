@@ -10,10 +10,19 @@
 
 import { useEffect, useRef, useState } from "react";
 
-const GREEN = "#34d399"; // glider + HEX wordmark + tagline accent (mockup spec)
+const GREEN = "#34d399"; // HEX wordmark accent (brand)
+
+// v33 branding revision (Marco, 2026-06-10, iPhone feedback): the glider is now
+// rendered as classic black/white Game-of-Life squares (live = white tile, dead
+// = dark "black" tile) instead of green, plus a "J C" homage to John Horton
+// Conway (inventor of the Game of Life) under the wordmark.
+const LIVE = "#f7f9fc";                       // live cell — white square
+const DEAD = "#161b23";                       // dead cell — dark ("black") square
+const DEAD_BORDER = "rgba(255,255,255,0.07)"; // faint edge so dead cells read as tiles
 
 // Classic Conway glider on a 3x3 raster. Live cells per spec:
-// (row,col) = (0,1), (1,2), (2,0), (2,1), (2,2). One green square per live cell.
+// (row,col) = (0,1), (1,2), (2,0), (2,1), (2,2). One white square per live cell;
+// the remaining cells are dark tiles (black/white GoL look).
 const GLIDER = [
   [0, 1],
   [1, 2],
@@ -129,8 +138,9 @@ export default function Splash({ version, holdMs = 1500, onDismiss }) {
                 width: cell,
                 height: cell,
                 borderRadius: 4,
-                background: live ? GREEN : "transparent",
-                boxShadow: live ? `0 0 10px ${GREEN}66` : "none",
+                background: live ? LIVE : DEAD,
+                border: live ? "none" : `1px solid ${DEAD_BORDER}`,
+                boxShadow: live ? "0 0 9px rgba(255,255,255,0.28)" : "none",
               }}
             />
           );
@@ -161,6 +171,22 @@ export default function Splash({ version, holdMs = 1500, onDismiss }) {
         >
           HEX
         </div>
+      </div>
+
+      {/* John Conway homage — initials under the wordmark */}
+      <div
+        aria-label="John Conway"
+        title="John Horton Conway — Erfinder von Game of Life"
+        style={{
+          fontSize: "clamp(13px, 3.4vw, 18px)",
+          fontWeight: 700,
+          letterSpacing: "0.5em",
+          paddingLeft: "0.5em",
+          color: "#cbd5e1",
+          marginTop: "-4px",
+        }}
+      >
+        · J C ·
       </div>
 
       {/* Tagline + real version */}

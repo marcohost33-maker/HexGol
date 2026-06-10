@@ -82,16 +82,89 @@ export function kColorByIndex(len, k) {
 // zum Zentrum in WELT-Koordinaten. Rot/Sektor 0 startet "oben" (Itten-Konvention,
 // konsistent mit placeColorWheel: -90 Grad = oben, im Uhrzeigersinn).
 //   wxFn/wyFn: Welt-Koordinaten-Funktionen (row,col)->Welt; cube->odd-r via cubeToOddR.
+//
+// WARNUNG (Bug #5): per-Zelle-Winkelschnitt verteilt die Zellen UNGLEICH auf die
+// Farben — Hex-Zellzentren liegen nicht aequidistant im Winkel und die Sektor-
+// Grenzen schneiden willkuerlich (Disk n=1: 7 Zellen, k=2 -> 4/3; k=3 -> 3/2/2).
+// Fuer "moeglichst gleich viele Zellen pro Farbe" stattdessen
+// balancedAngularSectors() nutzen (sortiert nach Winkel + gleich grosse Index-
+// Sektoren). Diese Funktion bleibt fuer Faelle, in denen der reine Winkel-Sektor
+// (nicht die Zellzahl) das gewuenschte Kriterium ist.
 export function sectorByAngle(cube, center, k, wxFn, wyFn) {
   if (k <= 1) return 0;
+  return angleSectorRaw(angleOf(cube, center, wxFn, wyFn), k);
+}
+
+// Winkel einer Zelle relativ zum Zentrum in der kanonischen Konvention
+// (oben = 0, im Uhrzeigersinn, Bereich [0, 2*PI)). Zentrum -> -1 (Sonderfall).
+function angleOf(cube, center, wxFn, wyFn) {
   const a = cubeToOddR(cube), c = cubeToOddR(center);
   const dx = wxFn(a.row, a.col) - wxFn(c.row, c.col);
   const dy = wyFn(a.row) - wyFn(c.row);
-  if (dx === 0 && dy === 0) return 0; // Zentrum -> Sektor 0
-  let raw = Math.atan2(dy, dx);        // 0 = rechts, +unten
-  let ang = -(raw + Math.PI / 2);      // oben -> 0, im Uhrzeigersinn
+  if (dx === 0 && dy === 0) return -1; // Zentrum
+  let ang = -(Math.atan2(dy, dx) + Math.PI / 2); // oben -> 0, im Uhrzeigersinn
   ang %= (2 * Math.PI); if (ang < 0) ang += 2 * Math.PI;
+  return ang;
+}
+
+// Reiner Winkel->Sektor-Schnitt (k zusammenhaengende Winkel-Tortenstuecke).
+function angleSectorRaw(ang, k) {
+  if (ang < 0) return 0; // Zentrum -> Sektor 0
   return Math.min(k - 1, Math.floor((ang / (2 * Math.PI)) * k));
+}
+
+// --- Bug #5: ausbalancierte Winkel-Sektoren fuer Scheibe/Hex-Stempel ----------
+// Ziel (gewuenschtes Verhalten): die Stempel-Zellen einer Scheibe/eines Hexagons
+// auf k Farben aufteilen, sodass JEDE Farbe ein ZUSAMMENHAENGENDES Winkel-Torten-
+// stueck bildet UND die Zellzahlen pro Farbe MOEGLICHST GLEICH sind
+// (|maxCount - minCount| <= 1; == 0 genau dann, wenn cellCount % k == 0).
+//
+// Warum nicht sectorByAngle (per-Zelle-Winkelschnitt)? Hex-Zellzentren sind nicht
+// gleichmaessig im Winkel verteilt; feste Winkelgrenzen schneiden daher ungleich
+// grosse Mengen (Disk n=1 = 7 Zellen: k=2 -> 4/3, k=3 -> 3/2/2 ist Zufall der
+// Geometrie, nicht steuerbar). RING ist exakt, weil 6n stets durch 1/2/3 teilbar
+// ist und kColorByIndex auf der geordneten Ring-Liste schneidet — dieselbe Idee
+// wird hier auf die Scheibe uebertragen:
+//   1) Zellen nach Winkel sortieren (oben=0, im Uhrzeigersinn; gleiche Konvention
+//      wie sectorByAngle). Tie-Break ueber den hex-Radius (stabil, deterministisch),
+//      damit gleiche Winkel reproduzierbar geordnet sind.
+//   2) Die ZENTRUMSZELLE (hexDist 0, kein definierter Winkel) deterministisch ZUERST
+//      einsortieren -> sie faellt in Farbe 0 (konsistent mit der bisherigen
+//      Zentrum->Sektor-0-Konvention).
+//   3) Gleich grosse, zusammenhaengende Index-Sektoren via kColorByIndex auf der
+//      sortierten Liste schneiden -> Zellzahlen unterscheiden sich um <= 1.
+//
+// EHRLICHE GRENZE: perfekt gleich (Delta 0) nur bei Teilbarkeit (cellCount % k == 0).
+// Sonst bekommen die ersten (cellCount % k) Sektoren eine Zelle mehr — das ist die
+// kleinstmoegliche Ungleichheit (floor/ceil-Verteilung).
+//
+// Rueckgabe: Map<cubeKey, colorIndex 0..k-1>, Schluessel = `${x},${y},${z}`. Der
+// Aufrufer mappt jede seiner Zellen ueber denselben Schluessel auf den Farb-Index
+// (Vorschau == Resultat, da identische Eingabeliste + identische Funktion).
+export function balancedAngularSectors(disk, center, k, wxFn, wyFn) {
+  const key = (cu) => `${cu.x},${cu.y},${cu.z}`;
+  const out = new Map();
+  if (!Array.isArray(disk) || disk.length === 0) return out;
+  if (k <= 1) { for (const cu of disk) out.set(key(cu), 0); return out; }
+  // Pro Zelle Winkel + Radius bestimmen; Zentrum (-1) bekommt Winkel 0 und Radius 0
+  // -> sortiert garantiert an den Anfang (Farbe 0).
+  const enriched = disk.map((cu) => {
+    const ang = angleOf(cu, center, wxFn, wyFn);
+    const isCenter = ang < 0;
+    return { cu, ang: isCenter ? 0 : ang, isCenter, dist: hexDist(cu, center) };
+  });
+  // Stabil sortieren: Zentrum zuerst, dann nach Winkel, Tie-Break nach Radius,
+  // dann nach Cube-Schluessel (voll-deterministisch, unabhaengig von der Eingabe-
+  // reihenfolge).
+  enriched.sort((p, q) => {
+    if (p.isCenter !== q.isCenter) return p.isCenter ? -1 : 1;
+    if (p.ang !== q.ang) return p.ang - q.ang;
+    if (p.dist !== q.dist) return p.dist - q.dist;
+    return key(p.cu) < key(q.cu) ? -1 : 1;
+  });
+  const sectorOf = kColorByIndex(enriched.length, k);
+  enriched.forEach((e, i) => out.set(key(e.cu), sectorOf(i)));
+  return out;
 }
 
 // --- v33 PR-E: Punkt-in-Polygon via Winding-Number (Hormann-Agathos 2001) -----
