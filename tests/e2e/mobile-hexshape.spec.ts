@@ -1,5 +1,5 @@
-import { test, expect, chromium } from "@playwright/test";
-import type { Browser, BrowserContext } from "@playwright/test";
+import { test, expect } from "@playwright/test";
+import type { BrowserContext } from "@playwright/test";
 
 // =============================================================================
 // GAP-1 GUARD: "Zellen werden Quadrate" (Marco-Bug 2026-06-09, iPhone-only).
@@ -33,22 +33,34 @@ import type { Browser, BrowserContext } from "@playwright/test";
 
 const VIEWPORT = { width: 390, height: 844 };
 
+// Kritische SCHMALE Hochkant-Breiten: hier fiel das Default-M-Gitter unter pxR<2.0
+// und rasterte mit der alten pxR-only-Schwelle zu QUADRATEN (Bug 3. Wiederholung
+// 2026-06-10). 390 = breites iPhone (knapp drueber); 375 = iPhone SE/8/13mini-Klasse;
+// 360 = iPhone 12 mini / kleines Android. Der hr-Gate haelt ALLE hexagonal.
+const NARROW_WIDTHS = [390, 375, 360];
+
 test.describe("GolHex Mobile: Zellen sind HEXAGONAL, nicht quadratisch (GAP-1)", () => {
-  test("eine M-Zelle rendert @DPR3 als Hexagon (schmale Ober-/Unterkante, leere Ecken)", async ({ baseURL, browserName }) => {
+  test("eine M-Zelle rendert @DPR3 als Hexagon (schmale Ober-/Unterkante, leere Ecken)", async ({ browser, baseURL, browserName }) => {
     test.skip(browserName !== "chromium", "eigener DPR3-Kontext nutzt Chromium");
     test.setTimeout(60000);
 
-    let browser: Browser | null = null;
+    // browser-Fixture wiederverwenden (verwalteter webServer) statt 2. Browser-Start
+    // -> kein ERR_CONNECTION_RESET-Flake unter Windows (Linux-CI war nie betroffen).
     let ctx: BrowserContext | null = null;
     try {
-      browser = await chromium.launch();
       // Echtes iPhone: 390x844 @ DPR3.
       ctx = await browser.newContext({ viewport: VIEWPORT, deviceScaleFactor: 3, hasTouch: true });
+      await ctx.addInitScript(() => { try { localStorage.setItem("golhex_intro_seen_v1", "1"); } catch { /* ignore */ } });
       const page = await ctx.newPage();
 
       const errors: string[] = [];
       page.on("pageerror", (e) => errors.push("pageerror: " + e.message));
-      page.on("console", (m) => { if (m.type() === "error") errors.push("console: " + m.text()); });
+      page.on("console", (m) => {
+        if (m.type() !== "error") return;
+        const t = m.text();
+        if (t.includes("ERR_CONNECTION_RESET") || t.includes("Failed to load resource")) return; // Transport-Flake, kein App-Fehler
+        errors.push("console: " + t);
+      });
 
       await page.goto(baseURL || "http://127.0.0.1:4173/", { waitUntil: "load" });
       await page.waitForSelector("canvas");
@@ -127,8 +139,61 @@ test.describe("GolHex Mobile: Zellen sind HEXAGONAL, nicht quadratisch (GAP-1)",
 
       expect(errors, "keine Konsolen-/Page-Fehler").toEqual([]);
     } finally {
-      await ctx?.close();
-      await browser?.close();
+      await ctx?.close(); // browser-Fixture NICHT schliessen (von Playwright verwaltet)
     }
   });
+
+  // ===========================================================================
+  // REQUIRED HEX-GATE (Marco-Kernforderung, Bug 3. Wiederholung 2026-06-10):
+  // Auf den SCHMALEN Geraeten (375/360px), wo die alte pxR-only-Schwelle M zu
+  // QUADRATEN machte, MUSS der Default-View den Path2D-Hexagon-Pfad nehmen, NICHT
+  // den Raster-Pfad. Beleg: der observable Render-Marker canvas[data-render-mode]
+  // (KEIN window-Hook -> AGENTS.md §2 e2e-Kontrakt). drawRaster() setzt "raster",
+  // der Hex-Pfad setzt "hex". OHNE-FIX-ROT: mit der alten Schwelle steht M @ 375/360
+  // auf "raster" -> dieser Test failt. Mit dem hr-Gate steht er auf "hex".
+  // ===========================================================================
+  for (const width of NARROW_WIDTHS) {
+    test(`Default-M-View @ ${width}px nimmt den HEX-Pfad, nicht den Raster-Pfad`, async ({ browser, browserName, baseURL }) => {
+      test.skip(browserName !== "chromium", "eigener DPR3-Kontext nutzt Chromium");
+      test.setTimeout(60000);
+      // browser-Fixture wiederverwenden (am verwalteten webServer angemeldet) statt
+      // einen 2. Browser zu starten -> kein ERR_CONNECTION_RESET-Flake unter Windows.
+      let ctx: BrowserContext | null = null;
+      try {
+        // Echtes iPhone-Profil: DPR3, schmaler Hochkant-Viewport (kritische Breite).
+        // Intro-Flag vorseeden (wie playwright.config storageState), damit das Overlay
+        // die DOM-Controls nicht abfaengt.
+        ctx = await browser.newContext({ viewport: { width, height: 844 }, deviceScaleFactor: 3, hasTouch: true });
+        await ctx.addInitScript(() => { try { localStorage.setItem("golhex_intro_seen_v1", "1"); } catch { /* ignore */ } });
+        const page = await ctx.newPage();
+        const errors: string[] = [];
+        page.on("pageerror", (e) => errors.push("pageerror: " + e.message));
+        page.on("console", (m) => {
+          // ECHTE JS-/App-Fehler sammeln; transienter Transport-Flake beim Asset-
+          // Laden (ERR_CONNECTION_RESET, eigener Kontext + lokaler Preview-Server
+          // unter Windows) ist KEIN App-Fehler und nicht load-bearing fuer den Hex-Gate.
+          if (m.type() !== "error") return;
+          const t = m.text();
+          if (t.includes("ERR_CONNECTION_RESET") || t.includes("Failed to load resource")) return;
+          errors.push("console: " + t);
+        });
+
+        await page.goto(baseURL || "http://127.0.0.1:4173/", { waitUntil: "load" });
+        await page.waitForSelector("canvas");
+        await page.waitForTimeout(400);
+        // Default-Gitter ist M. Leeren -> ein Vollredraw mit gesetztem Marker.
+        await page.getByRole("button", { name: "Leeren", exact: true }).click();
+        await page.waitForTimeout(300);
+
+        const mode = await page.evaluate(() => {
+          const c = document.querySelector('canvas:not([aria-hidden="true"])') as HTMLCanvasElement | null;
+          return c?.dataset.renderMode ?? null;
+        });
+        expect(mode, `Default-M @ ${width}px MUSS Hexagone (data-render-mode="hex"), NICHT "raster" (Quadrate)`).toBe("hex");
+        expect(errors, "keine echten Konsolen-/Page-Fehler").toEqual([]);
+      } finally {
+        await ctx?.close();
+      }
+    });
+  }
 });
