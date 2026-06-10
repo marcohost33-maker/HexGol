@@ -14,6 +14,7 @@ import {
   cubeRing, cubeDisk, kColorByIndex, balancedAngularSectors,
 } from "./lib/sim-engine.js";
 import Splash from "./lib/Splash.jsx"; // v33 Branding: einmaliger Intro-/Splash-Screen (additiv)
+import ConwayIntro, { introSeen } from "./lib/ConwayIntro.jsx"; // Bildungs-Intro (einmalig, nach Splash; ⓘ re-open)
 import { renderRaster } from "./lib/raster-render.js"; // geteilter Raster-Pfad (Worker + Main)
 import { supportsOffscreenWorker } from "./lib/worker-support.js"; // Feature-Detection (fail-closed)
 import { shouldStartPan, decideCloseAction } from "./lib/ui-gestures.js"; // pure UI-Entscheider (Pan-Hit-Test + Schliess-Dispatch)
@@ -359,6 +360,12 @@ export default function GolHex() {
   // v33 Branding: einmaliger Intro-Splash. Blockiert den App-Start NICHT (App
   // mountet/laeuft darunter); Overlay verschwindet nach ~1.5 s oder bei Tap/Esc.
   const [showSplash, setShowSplash] = useState(true);
+  // Bildungs-Intro (Conway / Game of Life / GolHex). Erscheint NACH dem Splash,
+  // nur beim ERSTEN Besuch (localStorage golhex_intro_seen_v1). Spaeter jederzeit
+  // ueber den dezenten ⓘ-Button in der Top-Leiste re-openbar (introForced=true,
+  // dann unabhaengig vom Flag sichtbar). introForced trennt First-Open vom Re-Open.
+  const [showIntro, setShowIntro] = useState(false);
+  const [introForced, setIntroForced] = useState(false); // true = manuell (ⓘ) geoeffnet
   const [sizeIdx, setSizeIdx] = useState(1); // M default
   const [frameShape, setFrameShape] = useState("box"); // "box" Rechteck | "circle" Scheibe | "hexagon" | "triangle" | "ellipse" (v33 PR-E) | "freeform" (v33 PR-E)
   // AP-2: EXPLIZITER Kreis-Radius (Gitterschritte, Marco: Default 250, Max 500).
@@ -3460,7 +3467,28 @@ export default function GolHex() {
       : { fontFamily: DISP, background: `radial-gradient(120% 80% at 50% 0%, ${T.bg2} 0%, ${T.bg} 70%)`, minHeight: "100%", color: T.text, padding: "12px 12px 26px", boxSizing: "border-box", overscrollBehavior: "contain", touchAction: "pan-y" }
     }>
       {showSplash && (
-        <Splash version={APP_VERSION} onDismiss={() => setShowSplash(false)} />
+        <Splash
+          version={APP_VERSION}
+          onDismiss={() => {
+            setShowSplash(false);
+            // Bildungs-Intro nur beim ERSTEN Besuch automatisch nachladen.
+            if (!introSeen()) {
+              setIntroForced(false);
+              setShowIntro(true);
+            }
+          }}
+        />
+      )}
+      {/* Bildungs-Intro (Conway / Game of Life / GolHex). First-Open: persist=true
+          (Schliessen setzt das localStorage-Flag). Re-Open via ⓘ: persist=false. */}
+      {showIntro && (
+        <ConwayIntro
+          persist={!introForced}
+          onDismiss={() => {
+            setShowIntro(false);
+            setIntroForced(false);
+          }}
+        />
       )}
       {/* Globale UI-Standards (WCAG 2.2): jeder Button mindestens 44px Touch-Target,
           sichtbarer Fokusring fuer Tastaturbedienung, leichtes Hover/Active-Feedback.
@@ -3516,6 +3544,13 @@ export default function GolHex() {
           })}
         </div>
         <div style={{ display: "flex", flexShrink: 0 }}>
+          {/* Bildungs-Intro jederzeit wieder oeffnen (ⓘ). Dezent, gleicher Icon-Stil
+              wie die uebrigen Aktions-Knoepfe; bricht das v33-Layout nicht. */}
+          <button onClick={() => { setIntroForced(true); setShowIntro(true); }}
+            aria-label="Einfuehrung anzeigen (Was ist GolHex?)"
+            title="Was ist GolHex? — Einfuehrung"
+            data-testid="intro-btn"
+            style={{ width: 42, border: "none", borderLeft: `1px solid ${T.border}`, background: "transparent", color: T.sub, fontSize: 17, cursor: "pointer" }}>&#9432;</button>
           {/* v33 PR-D: Snapshot (canvas.toBlob -> Web Share L2 / Download-Fallback).
               1 Tipp -> System-Share-Sheet bzw. Download startet (kein Zwischendialog). */}
           <button onClick={shareCanvasImage} aria-label="Snapshot teilen"
