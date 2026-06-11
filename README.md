@@ -393,9 +393,22 @@ only when the browser supports `OffscreenCanvas` + `transferControlToOffscreen` 
 raster render off the main thread via `transferControlToOffscreen`, keeping the
 UI thread free for input. Default **off**: the proven main-thread path is the
 fallback for old/Safari browsers and for the gesture/Path2D-detail/incremental
-paths. The engine and raster code are shared (one source of truth) between the
-main thread (`src/App.tsx`) and the worker (`src/worker/render-worker.js`) via
-`src/lib/sim-engine.js` + `src/lib/raster-render.js`.
+paths. The engine and **both render paths** are shared (one source of truth)
+between the main thread (`src/App.tsx`) and the worker
+(`src/worker/render-worker.js`) via `src/lib/sim-engine.js`,
+`src/lib/raster-render.js` (squares) and `src/lib/hex-render.js` (hexagons).
+
+**Worker renders hexagons when zoomed in (5XL-squares fix, 2026-06-11).** The
+worker now chooses raster vs. hexagons with the **same** pure
+`usesRasterPath(pxR, hr)` gate as the main thread — not raster-only. On a huge
+grid (e.g. 5XL = 250k, `hr = 1.3`) it rasters squares while zoomed out
+(`pxR < 2`, sub-pixel) but switches to real **`Path2D` hexagons** once zoomed in
+(`pxR ≥ 2`), drawing only the **viewport-visible** cells (culling) so 250k cells
+stay interactive instead of freezing. Before this fix the worker drew squares at
+*every* zoom level (Marco's recurring "5XL renders squares" bug). The worker posts
+a `renderMode` message (`raster`/`hex`) that the app mirrors onto
+`canvas[data-render-mode]` — the observable e2e marker (no `window` hook), guarded
+by `tests/e2e/worker-hex-zoom.spec.ts` + `tests/unit/render-worker.test.js`.
 
 **Auto-worker on giant grids (M-2).** Switching to a grid with **≥ `HQST_CELL_CAP`
 (90,000) cells** turns the worker **on automatically** (with a plain-language

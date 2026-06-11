@@ -12,11 +12,17 @@
 //   - Raster-Fast-Path (Pixel)                : src/lib/raster-render.js
 // Damit ist die Engine-Arithmetik im Worker bit-identisch zum Main-Thread-Pfad.
 //
-// SCOPE AP-1: nur der Raster-Fast-Path (winzige Zellen / XXL / 500x500) wird im
-// Worker gezeichnet - genau der Pfad, der bei 250k Zellen den Main-Thread
-// blockieren wuerde. Path2D-Detailrender (grosse Zellen) + Gesten + inkrementelles
-// Neuzeichnen bleiben Main-Thread (Fallback-Pfad in App.tsx). Der Worker ist
-// feature-detektiert + optional; faellt er weg, laeuft der bisherige Pfad voll.
+// SCOPE: der Worker zeichnet BEIDE Pfade und waehlt sie pro Render mit DERSELBEN
+// reinen Logik wie der Main-Thread (usesRasterPath, src/lib/ui-gestures.js):
+//   - sub-aufloesende Zellen (pxR < 2.0, grosse Gitter) -> renderRaster (Quadrate,
+//     korrekt weil <2px keine Hexform zeigt; Freeze-Schutz fuer 250k);
+//   - aufloesbare Zellen (pxR >= 2.0, ODER hr>5) -> renderHex (Path2D-Hexagone mit
+//     Viewport-Culling, src/lib/hex-render.js) -- gespiegelt von App.tsx draw().
+// WURZEL des wiederkehrenden "5XL rendert Quadrate"-Bugs (Marco, 4. Wiederholung
+// 2026-06-11): bisher kannte der Worker NUR renderRaster -> hineingezoomt blieben
+// 250k-Zellen Quadrate. Jetzt schaltet er bei pxR>=2 auf echte Hexagone um.
+// Gesten + inkrementelles Neuzeichnen bleiben Main-Thread (Fallback-Pfad). Der
+// Worker ist feature-detektiert + optional; faellt er weg, laeuft der Main-Pfad voll.
 // =============================================================================
 import {
   buildNeighbors, mkHqstWork, stepHQST, stepReiter, stepWater, stepCollatz, stepGenes,
@@ -24,6 +30,8 @@ import {
   birthColorQuad, cMixVec, mMixCnt, driftHue, hash2, PRIMARY,
 } from "../lib/sim-engine.js";
 import { renderRaster } from "../lib/raster-render.js";
+import { renderHex } from "../lib/hex-render.js";
+import { usesRasterPath } from "../lib/ui-gestures.js";
 
 // --- Worker-State ------------------------------------------------------------
 let canvas = null;        // OffscreenCanvas
@@ -52,6 +60,7 @@ let Wc = 0, Hc = 0;
 let tick = 0, stepsSinceReport = 0, t0 = 0;
 let speedMs = 16;          // iv (0 = TURBO)
 let solverWarn = false, diverged = false;
+let lastRenderMode = null; // "raster" | "hex" -- nur bei Wechsel an den Main melden
 
 // --- Sim-Schritt (Spiegel von App.tsx step(), gleiche Engine-Aufrufe) --------
 function stepLife() {
@@ -158,24 +167,53 @@ function stepRval() {
 
 function doStep() { if (mode === "rval") stepRval(); else stepLife(); stepsSinceReport++; }
 
-// --- Render (geteilter Raster-Pfad in die OffscreenCanvas) -------------------
+// --- Render (Pfad-Wahl raster vs. hex -- DIESELBE Logik wie der Main-Thread) --
+// Meldet einen Wechsel des Render-Modus an den Main-Thread, der ihn auf
+// canvas[data-render-mode] spiegelt (observable e2e-Marker, KEIN window-Hook ->
+// AGENTS.md §2). Damit kann der Hex-Gate-Test beweisen, dass 5XL hineingezoomt
+// HEXAGONE rendert (mode==="hex"), nicht Quadrate.
+function reportRenderMode(m) {
+  if (m === lastRenderMode) return;
+  lastRenderMode = m;
+  postMessage({ type: "renderMode", mode: m });
+}
+
 function renderToCanvas() {
   if (!ctx || !canvas) return;
   if (Wc !== canvas.width || Hc !== canvas.height) { Wc = canvas.width; Hc = canvas.height; }
-  // ImageData wiederverwenden waere ideal; OffscreenCanvas-2D unterstuetzt
-  // createImageData/putImageData identisch zum Main-Thread.
-  if (!renderToCanvas._img || renderToCanvas._img.width !== Wc || renderToCanvas._img.height !== Hc) {
-    renderToCanvas._img = ctx.createImageData(Wc, Hc);
+  const pxR = hr * view.s;
+  // EINE Quelle der Wahrheit fuer die Pfad-Wahl (src/lib/ui-gestures.js): bei
+  // sub-aufloesenden Zellen grosser Gitter (pxR<2, hr<=5) -> Raster (Quadrate ok);
+  // sonst -> echte Hexagone. Identisch zu App.tsx draw() (Main-Thread).
+  if (usesRasterPath(pxR, hr)) {
+    // ImageData wiederverwenden; OffscreenCanvas-2D unterstuetzt createImageData/
+    // putImageData identisch zum Main-Thread. putImageData ignoriert die Transform
+    // -> wir muessen sie hier NICHT zuruecksetzen (der Hex-Pfad setzt sie selbst).
+    if (!renderToCanvas._img || renderToCanvas._img.width !== Wc || renderToCanvas._img.height !== Hc) {
+      renderToCanvas._img = ctx.createImageData(Wc, Hc);
+    }
+    const img = renderToCanvas._img, d32 = new Uint32Array(img.data.buffer);
+    renderRaster(d32, {
+      Wc, Hc, hr, s: view.s, tx: view.tx, ty: view.ty, dpr, CX, CY,
+      mode, rule, col, fld, fim,
+    });
+    ctx.putImageData(img, 0, 0);
+    reportRenderMode("raster");
+    return;
   }
-  const img = renderToCanvas._img, d32 = new Uint32Array(img.data.buffer);
-  renderRaster(d32, {
+  // Path2D-Hexagon-Pfad mit Viewport-Culling (src/lib/hex-render.js). Spiegelt
+  // App.tsx draw() (gleiche Ecken/Radien/Farben/Reihenfolge). Beim Hineinzoomen
+  // auf 250k liegt nur ein Bruchteil im Viewport -> die teure Pfad-Arbeit bleibt
+  // beschraenkt (Freeze-Schutz, gegen den der Raster-Pfad gebaut war, haelt).
+  renderHex(ctx, {
     Wc, Hc, hr, s: view.s, tx: view.tx, ty: view.ty, dpr, CX, CY,
-    mode, rule, col, fld, fim,
+    mode, rule, col, gh, fld, fim,
   });
-  ctx.putImageData(img, 0, 0);
-  // Hinweis: der v31-Rahmen-Umriss (drawFrame) wird im AP-1-Worker NICHT gezeichnet
-  // (er gehoert zum Path2D-Detailpfad). Der Worker-Render ist der reine Raster-
-  // Fast-Path; die Rahmen-Linie liefert der Main-Thread-Pfad. Bewusst eng gehalten.
+  reportRenderMode("hex");
+  // Hinweis: der v31-Rahmen-Umriss (drawFrame) wird im Worker NICHT gezeichnet
+  // (er gehoert zum Main-Thread-Detailpfad). Die Rahmen-Linie liefert der
+  // Main-Thread-Pfad bei aktivem Worker nicht -- bewusst eng gehalten (das Feld
+  // selbst ist im Worker-Modus die observable Wahrheit; Rahmen ist dekorativ).
 }
 
 // --- Loop (Worker-eigen, spiegelt das Step-Budget aus App.tsx) ---------------
@@ -253,6 +291,8 @@ function applyGeometry(m) {
   }
   // Resize eines 2D-Kontexts loescht den ImageData-Cache-Bedarf -> neu anlegen.
   renderToCanvas._img = null;
+  // Geometrie-Wechsel (Grid/hr) kann die Pfad-Wahl kippen -> Marker neu melden lassen.
+  lastRenderMode = null;
   view = m.view || view;
   tick = Number.isFinite(m.tick) ? m.tick : 0;
 }

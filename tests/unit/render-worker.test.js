@@ -88,4 +88,43 @@ describe("render-worker — Nachrichten-Protokoll", () => {
     const snap = posted.find((m) => m.type === "snapshot");
     expect(snap.col.byteLength).toBe(64); // Uint8 64 Zellen
   });
+
+  // ===========================================================================
+  // MARCO 5XL-QUADRATE-BUG (dauerhafte Loesung, 4. Wiederholung 2026-06-11):
+  // Der Worker MUSS denselben Pfad-Wahl-Schalter wie der Main-Thread haben
+  // (usesRasterPath, src/lib/ui-gestures.js). Beleg ueber den observable
+  // renderMode-postMessage-Marker (KEIN window-Hook -> AGENTS.md §2):
+  //   - 5XL (hr=1.3) HERAUSGEZOOMT (pxR<2) -> "raster" (Quadrate ok, Freeze-Schutz);
+  //   - 5XL HINEINGEZOOMT (pxR>=2) -> "hex" (echte Hexagone).
+  // FALSIFIKATION: vor dem Fix kannte der Worker nur renderRaster -> er haette bei
+  // JEDER Zoomstufe "raster"/Quadrate geliefert. Der zoomed-in "hex"-Marker ist
+  // genau der Beweis, dass der Hex-Pfad jetzt im Worker greift.
+  // ===========================================================================
+  it("5XL herausgezoomt meldet renderMode 'raster' (Quadrate, Freeze-Schutz)", () => {
+    // 5XL: hr=1.3, default view s=1 -> pxR = 1.3 < 2.0 -> Raster bereits beim init.
+    send(initMsg({ R: 500, C: 500, hr: 1.3, width: 360, height: 700 }));
+    const rmInit = posted.filter((m) => m.type === "renderMode").pop();
+    expect(rmInit, "init postet einen renderMode-Marker").toBeTruthy();
+    expect(rmInit.mode, "herausgezoomt -> Raster (Quadrate)").toBe("raster");
+  });
+
+  it("5XL HINEINGEZOOMT meldet renderMode 'hex' (echte Hexagone, kein Quadrat)", () => {
+    send(initMsg({ R: 500, C: 500, hr: 1.3, width: 360, height: 700 }));
+    posted.length = 0;
+    // pxR = hr * s = 1.3 * 2.0 = 2.6 >= RASTER_PX_THRESHOLD(2.0) -> Hexagone.
+    send({ type: "view", view: { s: 2.0, tx: 0, ty: 0 } });
+    const rm = posted.filter((m) => m.type === "renderMode").pop();
+    expect(rm, "renderMode-Marker gepostet").toBeTruthy();
+    expect(rm.mode, "5XL hineingezoomt MUSS Hexagone (hex), NICHT Quadrate (raster)").toBe("hex");
+  });
+
+  it("renderMode wird NUR bei Wechsel gemeldet (kein Spam pro Frame)", () => {
+    send(initMsg({ R: 500, C: 500, hr: 1.3, width: 360, height: 700 }));
+    // zweimal derselbe hineingezoomte View -> hoechstens EIN 'hex'-Marker dazu.
+    send({ type: "view", view: { s: 2.0, tx: 0, ty: 0 } });
+    posted.length = 0;
+    send({ type: "view", view: { s: 2.0, tx: 0, ty: 0 } }); // identisch -> kein neuer Marker
+    send({ type: "redraw" });
+    expect(posted.filter((m) => m.type === "renderMode").length, "kein redundanter Marker bei gleichem Modus").toBe(0);
+  });
 });
