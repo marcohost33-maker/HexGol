@@ -785,6 +785,13 @@ export default function GolHex() {
           spsRef.current = m.sps;
           if (m.solverWarn) setSolverWarn(true);
           if (m.diverged) { setSolverDiverged(true); setRunning(false); }
+        } else if (m.type === "renderMode") {
+          // Worker meldet seinen aktiven Render-Pfad (raster=Quadrate / hex=Hexagone).
+          // Auf das (DOM-verbliebene) Canvas-Element spiegeln -> observable e2e-Marker,
+          // identisch zum Main-Thread-drawRaster/draw (canvas[data-render-mode]).
+          // Belegt: 5XL hineingezoomt steht auf "hex" (Marco 5XL-Quadrate-Bug).
+          const cv = canvasRef.current;
+          if (cv && (m.mode === "hex" || m.mode === "raster")) { try { cv.dataset.renderMode = m.mode; } catch { /* ignore */ } }
         } else if (m.type === "snapshot") {
           // P1 (Codex-Review 2026-06-08): Pull des EVOLVIERTEN Worker-Zustands zurück
           // in die Main-Arrays (bei Pause angefordert). Hält colorRef/age/field frisch,
