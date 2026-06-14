@@ -17,7 +17,7 @@ import Splash from "./lib/Splash.jsx"; // v33 Branding: einmaliger Intro-/Splash
 import ConwayIntro, { introSeen } from "./lib/ConwayIntro.jsx"; // Bildungs-Intro (einmalig, nach Splash; ⓘ re-open)
 import { renderRaster } from "./lib/raster-render.js"; // geteilter Raster-Pfad (Worker + Main)
 import { supportsOffscreenWorker } from "./lib/worker-support.js"; // Feature-Detection (fail-closed)
-import { shouldStartPan, decideCloseAction, usesRasterPath } from "./lib/ui-gestures.js"; // pure UI-Entscheider (Pan-Hit-Test + Schliess-Dispatch + HEX-Render-Gate)
+import { shouldStartPan, decideCloseAction, usesRasterPath, wheelSelectionEffect, WHEEL_ERASE } from "./lib/ui-gestures.js"; // pure UI-Entscheider (Pan-Hit-Test + Schliess-Dispatch + HEX-Render-Gate + Farbrad-Wahl)
 // v33 PR-C: Spielstand-Speichern (IndexedDB + Datei-Export/Import + Urzustand).
 import {
   serializeSave, deserializeSave, makeOriginSnapshot, shouldCaptureOrigin,
@@ -1548,25 +1548,32 @@ export default function GolHex() {
     setWheel({ x: clientX - wrect.left, y: clientY - wrect.top, idx });
   };
   // Auswahl: gewaehlte Farbe (State-ID 1..12) faerbt die Zelle SOFORT + wird neue
-  // Pinselfarbe (M-3 "Beides"). Danach Rad schliessen; direkt weitermalen moeglich.
-  const pickWheelColor = (stateId) => {
+  // Pinselfarbe (M-3 "Beides"). 13. Wahl WHEEL_ERASE leert die Zelle (tot=C0) +
+  // setzt den Pinsel auf "erase" (Radiergummi, deckt sich mit paintCell-erase-Pfad
+  // + Panel-Swatch "Leer"; Marco-Wunsch 2026-06-14). Entscheidung pur via
+  // wheelSelectionEffect (src/lib/ui-gestures.js, unit-getestet, fail-closed bei
+  // ungueltiger Auswahl). Danach Rad schliessen; direkt weitermalen/-radieren moeglich.
+  const pickWheelColor = (sel) => {
     const w = wheelRef.current; if (!w) { setWheel(null); return; }
+    const eff = wheelSelectionEffect(sel);
+    if (!eff) { setWheel(null); return; } // ungueltige Auswahl -> nichts tun (fail closed)
     const idx = w.idx;
     if (idx >= 0) {
       pushUndo();
       if (simRef.current === "rval") {
-        // rval-Modus: Farbe steuert keinen reellen Wert -> Zelle setzen (regelabhaengig)
-        // und Pinsel auf die Farbe stellen (wirkt im booleschen Modus).
+        // rval-Modus: Farbe steuert keinen reellen Wert -> Zelle setzen (regelabhaengig).
+        // Erase leert das reelle Feld an dieser Zelle (auf Null-/Ruhewert).
         const fld = fieldRef.current, fim = fieldImRef.current, rule = rvalRef.current;
-        if (rule === "snow" || rule === "water" || rule === "hqst") { fld[idx] = 1; if (rule === "hqst") fim[idx] = 0; }
+        if (eff.erase) { fld[idx] = 0; if (rule === "hqst") fim[idx] = 0; }
+        else if (rule === "snow" || rule === "water" || rule === "hqst") { fld[idx] = 1; if (rule === "hqst") fim[idx] = 0; }
         else if (rule === "collatz") fld[idx] = 27;
         else if (rule === "genes") fld[idx] = G_Aa;
       } else {
-        colorRef.current[idx] = stateId; ageRef.current[idx] = 1; ghostRef.current[idx] = 0;
+        colorRef.current[idx] = eff.cellState; ageRef.current[idx] = eff.erase ? 0 : 1; ghostRef.current[idx] = 0;
       }
       dirtyRef.current = true; syncWorkerState(); updatePop();
     }
-    setBrush(stateId); brushRef.current = stateId; // aktive Pinselfarbe wechseln
+    setBrush(eff.brush); brushRef.current = eff.brush; // aktive Pinsel-/Radier-Wahl wechseln
     setWheel(null);
   };
   const cancelWheel = () => setWheel(null);
@@ -3711,12 +3718,32 @@ export default function GolHex() {
                 />
               );
             })}
-            {/* Mitte: Abbruch-Markierung (zeigt den Druckpunkt; Tipp ausserhalb bricht ab) */}
-            <div style={{
-              position: "absolute", left: wheel.x - 9, top: wheel.y - 9, width: 18, height: 18,
-              borderRadius: "50%", border: "2px solid rgba(255,255,255,0.6)",
-              background: "rgba(6,15,18,0.55)", pointerEvents: "none",
-            }} />
+            {/* 13. Wahl (Marco-Wunsch 2026-06-14): "leere Zelle / loeschen" in der Mitte
+                des Rads. Visuell klar unterscheidbar von den 12 Farb-Toenen: dunkles,
+                halbtransparentes Swatch mit weissem Loesch-Symbol + Diagonalstrich.
+                Auswahl leert die gedrueckte Zelle (tot) UND setzt den Pinsel auf
+                "erase" (Radiergummi). Abbruch: Tipp auf den Hintergrund AUSSERHALB des
+                Rads (dieser Button stoppt die Propagation, faengt also nur Mittel-Tipps). */}
+            <button
+              data-color-state={WHEEL_ERASE}
+              aria-label="Leere Zelle / loeschen"
+              title="Leere Zelle / loeschen"
+              onClick={(e) => { e.stopPropagation(); pickWheelColor(WHEEL_ERASE); }}
+              onPointerUp={(e) => { e.stopPropagation(); pickWheelColor(WHEEL_ERASE); }}
+              style={{
+                position: "absolute", left: wheel.x - 19, top: wheel.y - 19, width: 38, height: 38,
+                borderRadius: "50%", border: "2px dashed rgba(255,255,255,0.85)",
+                background: "rgba(6,15,18,0.78)", boxShadow: "0 2px 8px rgba(0,0,0,0.55)",
+                cursor: "pointer", padding: 0, touchAction: "none",
+                display: "flex", alignItems: "center", justifyContent: "center",
+              }}
+            >
+              {/* Diagonaler Loesch-/Leer-Strich + Symbol; rein dekorativ (Label am Button) */}
+              <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true" focusable="false">
+                <circle cx="11" cy="11" r="8.5" fill="none" stroke="rgba(255,255,255,0.55)" strokeWidth="1.3" />
+                <line x1="5" y1="17" x2="17" y2="5" stroke="rgba(255,255,255,0.92)" strokeWidth="2.2" strokeLinecap="round" />
+              </svg>
+            </button>
           </div>
         )}
         {/* v33 PR-B: LINKS-Drawer fuer Farben (1) + Formen/Stempel (2). Ueberlagert nur
