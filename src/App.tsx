@@ -17,7 +17,7 @@ import Splash from "./lib/Splash.jsx"; // v33 Branding: einmaliger Intro-/Splash
 import ConwayIntro, { introSeen } from "./lib/ConwayIntro.jsx"; // Bildungs-Intro (einmalig, nach Splash; ⓘ re-open)
 import { renderRaster } from "./lib/raster-render.js"; // geteilter Raster-Pfad (Worker + Main)
 import { supportsOffscreenWorker } from "./lib/worker-support.js"; // Feature-Detection (fail-closed)
-import { shouldStartPan, decideCloseAction, usesRasterPath, wheelSelectionEffect, WHEEL_ERASE } from "./lib/ui-gestures.js"; // pure UI-Entscheider (Pan-Hit-Test + Schliess-Dispatch + HEX-Render-Gate + Farbrad-Wahl)
+import { shouldStartPan, decideCloseAction, usesRasterPath, wheelSelectionEffect, WHEEL_ERASE, clampWheelCenter } from "./lib/ui-gestures.js"; // pure UI-Entscheider (Pan-Hit-Test + Schliess-Dispatch + HEX-Render-Gate + Farbrad-Wahl + Rad-Clamp)
 // v33 PR-C: Spielstand-Speichern (IndexedDB + Datei-Export/Import + Urzustand).
 import {
   serializeSave, deserializeSave, makeOriginSnapshot, shouldCaptureOrigin,
@@ -1538,14 +1538,19 @@ export default function GolHex() {
   const clearLongPress = () => { if (lpTimer.current) { clearTimeout(lpTimer.current); lpTimer.current = null; } lpOrigin.current = null; };
   // Sicherheit: haengender Long-Press-Timer beim Unmount aufraeumen (kein Leak).
   useEffect(() => () => { if (lpTimer.current) { clearTimeout(lpTimer.current); lpTimer.current = null; } }, []);
-  // Rad oeffnen: Druckpunkt -> Zelle bestimmen, Rad zentriert auf dem Druckpunkt.
+  // Rad oeffnen: Druckpunkt -> Zelle bestimmen; Rad-ZENTRUM auf den Druckpunkt,
+  // aber per clampWheelCenter so nach innen geklemmt, dass der ganze Ring im
+  // Canvas-Wrapper (overflow:hidden) liegt -> keine am Rand abgeschnittenen /
+  // gedraengten Swatches mehr (Marco-Bug IMG_0527 2026-06-14). Die getroffene
+  // Zelle (idx) kommt aus dem ECHTEN Druckpunkt und bleibt vom Clamp unberuehrt.
   const openWheel = (clientX, clientY) => {
     const wrap = wrapRef.current, canvas = canvasRef.current;
     if (!wrap || !canvas) return;
     const wrect = wrap.getBoundingClientRect();
     const { wx, wy } = toWorld(clientX, clientY);
     const idx = pixelToOddR(wx, wy, HR, R, C);
-    setWheel({ x: clientX - wrect.left, y: clientY - wrect.top, idx });
+    const { x, y } = clampWheelCenter(clientX - wrect.left, clientY - wrect.top, wrect.width, wrect.height);
+    setWheel({ x, y, idx });
   };
   // Auswahl: gewaehlte Farbe (State-ID 1..12) faerbt die Zelle SOFORT + wird neue
   // Pinselfarbe (M-3 "Beides"). 13. Wahl WHEEL_ERASE leert die Zelle (tot=C0) +
