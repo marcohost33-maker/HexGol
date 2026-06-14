@@ -175,3 +175,49 @@ export function wheelSelectionEffect(sel) {
   }
   return null; // ungueltige Auswahl -> Aufrufer ignoriert (fail closed)
 }
+
+// -----------------------------------------------------------------------------
+// 5) Long-Press-Farbrad: Druckpunkt-Clamp (Marco-Bug 2026-06-14, IMG_0527)
+// -----------------------------------------------------------------------------
+// Das Rad ist radial um den DRUCKPUNKT zentriert (openWheel: wheel.x/y =
+// clientX/Y - wrapperRect). Der Canvas-Wrapper hat overflow:hidden. Ohne Clamp
+// schneidet er bei randnahem Long-Press (z.B. eine Zelle in der oberen Spielfeld-
+// haelfte) die aeusseren Swatch-Kreise ab -> der Ring wirkt ungleichmaessig /
+// "ueberfuellt" / gedraengt, statt als sauberer, voll sichtbarer Kreis (Foto
+// IMG_0527: Rot/Orange oben gequetscht). Die 12 Swatch-WINKEL sind bereits exakt
+// gleichverteilt (i/12 * 2PI) und werden NICHT veraendert — nur das Ring-ZENTRUM
+// wird nach innen geschoben, damit der ganze Ring in den sichtbaren Bereich passt.
+//
+// WICHTIG: Diese Funktion bewegt NUR die RENDER-Position des Rads. Die getroffene
+// Zelle (wheel.idx) wird in openWheel separat aus dem echten Druckpunkt bestimmt
+// und bleibt unveraendert — der Clamp faerbt also nie eine andere Zelle.
+//
+// Geometrie (muss zur Render-Konstanten in App.tsx passen): RAD=76 (Ring-Radius),
+// SWATCH/2=17 (halber Swatch-Durchmesser 34). margin = kleiner Innenabstand zum
+// Rand, damit der weisse Swatch-Rahmen + Schatten nicht am Wrapper-Rand klebt.
+export const WHEEL_RING_RADIUS = 76; // CSS-px; identisch zur RAD-Konstante im Render
+export const WHEEL_SWATCH_HALF = 17; // halber Swatch-Durchmesser (34/2)
+
+/**
+ * Schiebe das Ring-ZENTRUM so, dass der gesamte Ring (Radius + halber Swatch +
+ * margin) innerhalb [0, W] x [0, H] liegt. Ist der Bereich kleiner als der Ring-
+ * Durchmesser, wird auf der zu schmalen Achse mittig zentriert (kein einseitiges
+ * Quetschen). Fail-safe: bei nicht-finiten Eingaben wird der rohe Punkt zurueck-
+ * gegeben (lieber unveraendert rendern als NaN-Positionen erzeugen).
+ *
+ * @param {number} x  roher Druckpunkt-X relativ zum Wrapper (CSS-px)
+ * @param {number} y  roher Druckpunkt-Y relativ zum Wrapper (CSS-px)
+ * @param {number} W  Wrapper-Breite (CSS-px)
+ * @param {number} H  Wrapper-Hoehe (CSS-px)
+ * @param {number} [margin=6] Innenabstand zum Wrapper-Rand
+ * @returns {{x:number, y:number}} geklemmtes Ring-Zentrum
+ */
+export function clampWheelCenter(x, y, W, H, margin = 6) {
+  if (![x, y, W, H].every(Number.isFinite)) return { x, y }; // fail-safe: roh lassen
+  const r = WHEEL_RING_RADIUS + WHEEL_SWATCH_HALF + margin; // benoetigter Halbraum
+  const clamp1 = (v, span) => {
+    if (span < 2 * r) return span / 2;        // zu schmal -> mittig zentrieren
+    return Math.min(Math.max(v, r), span - r); // sonst in [r, span-r] klemmen
+  };
+  return { x: clamp1(x, W), y: clamp1(y, H) };
+}

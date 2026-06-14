@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { shouldStartPan, isInsideDomain, decideCloseAction, wheelSelectionEffect, WHEEL_ERASE, DEAD_STATE } from "../../src/lib/ui-gestures.js";
+import { shouldStartPan, isInsideDomain, decideCloseAction, wheelSelectionEffect, WHEEL_ERASE, DEAD_STATE, clampWheelCenter, WHEEL_RING_RADIUS, WHEEL_SWATCH_HALF } from "../../src/lib/ui-gestures.js";
 
 // Frame-pan hit-test (Marco bug 2026-06-09: touch in the black margin around the
 // framed field must NOT start a pan / move the frame).
@@ -117,5 +117,62 @@ describe("wheelSelectionEffect — Farbrad-Wahl (12 Farben + 13. Leer-Zelle)", (
     expect(wheelSelectionEffect("5")).toBeNull();      // String-"5" ist KEINE Farb-ID
     expect(wheelSelectionEffect("eras")).toBeNull();   // beinahe-Sentinel, aber falsch
     expect(wheelSelectionEffect({})).toBeNull();
+  });
+});
+
+// Druckpunkt-Clamp des Long-Press-Farbrads (Marco-Bug IMG_0527 2026-06-14): das
+// Rad-ZENTRUM wird so nach innen geschoben, dass der ganze 12er-Ring im Canvas-
+// Wrapper (overflow:hidden) liegt -> keine abgeschnittenen/gedraengten Swatches.
+describe("clampWheelCenter — Farbrad bleibt voll im Wrapper", () => {
+  // Unabhaengiges Orakel: reproduziere die 12 Swatch-Zentren wie der Render
+  // (i/12 * 2PI - PI/2, RAD=WHEEL_RING_RADIUS) und pruefe, dass KEIN Swatch
+  // (Zentrum +- halber Swatch) ueber [0,W] x [0,H] hinausragt.
+  const ringFitsInside = (cx, cy, W, H) => {
+    const RAD = WHEEL_RING_RADIUS, H2 = WHEEL_SWATCH_HALF;
+    for (let i = 0; i < 12; i++) {
+      const ang = (i / 12) * 2 * Math.PI - Math.PI / 2;
+      const sx = cx + RAD * Math.cos(ang);
+      const sy = cy + RAD * Math.sin(ang);
+      if (sx - H2 < 0 || sy - H2 < 0 || sx + H2 > W || sy + H2 > H) return false;
+    }
+    return true;
+  };
+
+  it("randnaher Druck (oben) wird so geklemmt, dass der ganze Ring sichtbar bleibt", () => {
+    // iPhone-aehnlicher Wrapper, Druckpunkt sehr weit oben (wie IMG_0527).
+    const W = 360, H = 620;
+    const c = clampWheelCenter(180, 30, W, H);
+    expect(ringFitsInside(c.x, c.y, W, H)).toBe(true);
+    expect(c.y).toBeGreaterThan(30); // Zentrum wurde nach unten/innen geschoben
+  });
+
+  it("Druck in allen vier Ecken haelt den Ring komplett im Wrapper", () => {
+    const W = 360, H = 620;
+    for (const [px, py] of [[0, 0], [W, 0], [0, H], [W, H], [5, 5], [W - 3, H - 2]]) {
+      const c = clampWheelCenter(px, py, W, H);
+      expect(ringFitsInside(c.x, c.y, W, H)).toBe(true);
+    }
+  });
+
+  it("zentraler Druck bleibt unveraendert (Ring passt ohnehin)", () => {
+    const W = 360, H = 620;
+    const c = clampWheelCenter(180, 310, W, H);
+    expect(c).toEqual({ x: 180, y: 310 });
+    expect(ringFitsInside(c.x, c.y, W, H)).toBe(true);
+  });
+
+  it("Wrapper schmaler als der Ring-Durchmesser -> mittig zentriert (kein Quetschen)", () => {
+    // 2*(76+17+6)=198 noetig; W=160 ist zu schmal -> x mittig auf W/2.
+    const W = 160, H = 620;
+    const c = clampWheelCenter(20, 300, W, H);
+    expect(c.x).toBe(W / 2);
+  });
+
+  // --- Silent-Failure-Gate: nicht-finite Eingaben duerfen keine NaN-Position erzeugen ---
+  it("nicht-finite Eingaben fallen fail-safe auf den rohen Punkt zurueck (kein NaN-Render)", () => {
+    expect(clampWheelCenter(NaN, 10, 360, 620)).toEqual({ x: NaN, y: 10 });
+    expect(clampWheelCenter(100, 100, 0, 0)).toEqual({ x: 0, y: 0 }); // span 0 -> span/2 = 0, kein NaN
+    const c = clampWheelCenter(100, 100, Infinity, 620);
+    expect(Number.isNaN(c.x)).toBe(false);
   });
 });
