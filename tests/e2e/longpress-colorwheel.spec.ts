@@ -105,7 +105,7 @@ const collectErrors = (page: import("@playwright/test").Page) => {
 };
 
 test.describe("GolHex AP-3 Long-Press-Farbrad", () => {
-  test("Long-Press (Touch) oeffnet das Rad mit 12 Farben", async ({ page }) => {
+  test("Long-Press (Touch) oeffnet das Rad mit 12 Farben + Leer-Wahl (13)", async ({ page }) => {
     const errors = collectErrors(page);
     await page.goto("/");
     await page.waitForTimeout(400);
@@ -117,8 +117,10 @@ test.describe("GolHex AP-3 Long-Press-Farbrad", () => {
 
     const wheel = page.locator('[data-testid="color-wheel"]');
     await expect(wheel).toBeVisible();
-    // alle 12 Itten-Farben als Buttons im Rad
-    await expect(wheel.locator("button[data-color-state]")).toHaveCount(12);
+    // 12 Itten-Farben + 1 "leere Zelle / loeschen" (Marco-Wunsch 2026-06-14) = 13.
+    await expect(wheel.locator("button[data-color-state]")).toHaveCount(13);
+    // die 13. Wahl ist die Leer-/Loesch-Zelle (eigenes aria-label, distinkt).
+    await expect(wheel.getByRole("button", { name: "Leere Zelle / loeschen" })).toBeVisible();
     expect(errors).toEqual([]);
   });
 
@@ -296,6 +298,53 @@ test.describe("GolHex AP-3 Long-Press-Farbrad", () => {
     // oben verifiziert); nur an die korrekte Hex-Geometrie angepasst.
     const after = await countColorNear(page, DX, DY, RED);
     expect(after, "Nachzustand: getroffene Zelle ist real rot gerendert (Pixel-Readback)").toBeGreaterThan(15);
+    expect(errors).toEqual([]);
+  });
+
+  // Marco-Wunsch 2026-06-14: die 13. Wahl "leere Zelle / loeschen" radiert eine
+  // lebende Zelle REAL aus (Canvas-Pixel-Readback): erst rot faerben, dann via
+  // Leer-Wahl im selben Rad loeschen -> rote Pixel verschwinden.
+  test("13. Wahl 'Leer' loescht die getroffene Zelle REAL (Pixel-Readback)", async ({ page }) => {
+    const errors = collectErrors(page);
+    await page.goto("/");
+    await page.waitForTimeout(400);
+
+    await page.getByRole("button", { name: "Leeren", exact: true }).click();
+    await page.waitForTimeout(200);
+
+    const cbox = await page.locator("canvas").first().boundingBox();
+    const DX = Math.round(cbox!.width / 2), DY = Math.round(cbox!.height / 2);
+    const RED = [255, 0, 0];
+
+    // 1) Zelle rot faerben (Vorbedingung: rote Pixel da).
+    await pointerDownOnCanvas(page, DX, DY, "touch");
+    await page.waitForTimeout(650);
+    await releaseAtOrigin(page, "touch");
+    const wheel = page.locator('[data-testid="color-wheel"]');
+    await expect(wheel).toBeVisible();
+    await wheel.locator('button[data-color-state="1"]').click(); // CR (Rot)
+    await expect(wheel).toHaveCount(0);
+    await page.waitForTimeout(250);
+    const painted = await countColorNear(page, DX, DY, RED);
+    expect(painted, "Zelle ist real rot gefaerbt (Vorbedingung)").toBeGreaterThan(15);
+
+    // 2) erneut Long-Press auf DIESELBE Zelle -> 13. Wahl "Leer" -> Zelle wird tot.
+    await pointerDownOnCanvas(page, DX, DY, "touch");
+    await page.waitForTimeout(650);
+    await releaseAtOrigin(page, "touch");
+    await expect(wheel).toBeVisible();
+    await wheel.getByRole("button", { name: "Leere Zelle / loeschen" }).click();
+    await expect(wheel).toHaveCount(0);
+    await page.waitForTimeout(250);
+
+    // Nachzustand: keine roten Pixel mehr -> die Zelle wurde real geleert.
+    const erased = await countColorNear(page, DX, DY, RED);
+    expect(erased, "Zelle ist nach Leer-Wahl real geloescht (keine roten Pixel)").toBe(0);
+
+    // Pinsel ist jetzt der Radiergummi: Tab 1 oeffnen, "Leer"-Swatch aria-pressed.
+    await page.getByRole("button", { name: "Tab 1 Farben" }).click();
+    await page.waitForTimeout(250);
+    await expect(page.getByRole("button", { name: "Leer", pressed: true })).toBeVisible();
     expect(errors).toEqual([]);
   });
 

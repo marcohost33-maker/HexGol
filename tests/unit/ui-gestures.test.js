@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { shouldStartPan, isInsideDomain, decideCloseAction } from "../../src/lib/ui-gestures.js";
+import { shouldStartPan, isInsideDomain, decideCloseAction, wheelSelectionEffect, WHEEL_ERASE, DEAD_STATE } from "../../src/lib/ui-gestures.js";
 
 // Frame-pan hit-test (Marco bug 2026-06-09: touch in the black margin around the
 // framed field must NOT start a pan / move the frame).
@@ -85,5 +85,37 @@ describe("decideCloseAction — platform-honest close", () => {
     expect(decideCloseAction(null)).toBe("fallback");
     expect(decideCloseAction({})).toBe("fallback");
     expect(decideCloseAction({ historyLength: NaN })).toBe("fallback");
+  });
+});
+
+// Long-Press-Farbrad: 13. Wahl "leere Zelle / loeschen" (Marco-Wunsch 2026-06-14).
+// Die Wahl-Entscheidung (Farbe 1..12 vs. Leeren) ist pur + load-bearing -> hier
+// gegen ein unabhaengiges Orakel geprueft (nicht nur per e2e).
+describe("wheelSelectionEffect — Farbrad-Wahl (12 Farben + 13. Leer-Zelle)", () => {
+  it("gueltige Farb-State-IDs 1..12 faerben + setzen den Pinsel auf die Farbe", () => {
+    for (let id = 1; id <= 12; id++) {
+      expect(wheelSelectionEffect(id)).toEqual({ erase: false, cellState: id, brush: id });
+    }
+  });
+
+  it("die 13. Wahl (WHEEL_ERASE) leert die Zelle (tot=0) + Pinsel = Radiergummi", () => {
+    const eff = wheelSelectionEffect(WHEEL_ERASE);
+    expect(eff).toEqual({ erase: true, cellState: DEAD_STATE, brush: WHEEL_ERASE });
+    expect(eff.cellState).toBe(0);   // C0 = tote/leere Zelle
+    expect(eff.brush).toBe("erase"); // deckt sich mit paintCell-erase-Pfad
+  });
+
+  // --- Silent-Failure-Gate: ungueltige Auswahl darf NICHT still faerben/loeschen ---
+  it("ungueltige Auswahl faellt fail-closed auf null (kein Farb-/Loesch-Effekt)", () => {
+    expect(wheelSelectionEffect(0)).toBeNull();        // tot-State ist KEINE waehlbare Farbe
+    expect(wheelSelectionEffect(13)).toBeNull();       // jenseits der 12 Farben
+    expect(wheelSelectionEffect(-1)).toBeNull();
+    expect(wheelSelectionEffect(2.5)).toBeNull();      // nicht-ganzzahlig
+    expect(wheelSelectionEffect(NaN)).toBeNull();
+    expect(wheelSelectionEffect(undefined)).toBeNull();
+    expect(wheelSelectionEffect(null)).toBeNull();
+    expect(wheelSelectionEffect("5")).toBeNull();      // String-"5" ist KEINE Farb-ID
+    expect(wheelSelectionEffect("eras")).toBeNull();   // beinahe-Sentinel, aber falsch
+    expect(wheelSelectionEffect({})).toBeNull();
   });
 });

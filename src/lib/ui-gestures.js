@@ -134,3 +134,44 @@ export function usesRasterPath(pxR, hr) {
   // Large grids: raster only once a cell is too small to resolve a hexagon.
   return pxR < RASTER_PX_THRESHOLD;
 }
+
+// -----------------------------------------------------------------------------
+// 4) Long-Press-Farbrad: 13. Wahl "leere Zelle / loeschen" (Marco-Wunsch 2026-06-14)
+// -----------------------------------------------------------------------------
+// Das radiale Long-Press-Farbrad bietet die 12 Itten-Toene (State-IDs 1..12) zum
+// SOFORT-Faerben der gedrueckten Zelle + Pinselwechsel. Marco-Wunsch: eine 13.
+// Wahl, die die Zelle LEERT (auf tot = C0 = 0 setzt) und als "Radiergummi"-Pinsel
+// (brush "erase") aktiv bleibt — konsistent mit dem schon vorhandenen "erase"-
+// Pfad in paintCell (App.tsx) und dem Panel-Swatch "Leer".
+//
+// Diese Wahl ist KEINE Farb-State-ID, sondern ein Sentinel. Wir halten die
+// Entscheidung "Farbe vs. Leeren" rein + unit-testbar (gleicher Stil wie oben),
+// damit der load-bearing Selektions-Pfad gegen ein unabhaengiges Orakel geprueft
+// werden kann (nicht nur per e2e).
+export const WHEEL_ERASE = "erase"; // Sentinel der 13. Wahl (deckt sich mit brush="erase")
+export const DEAD_STATE = 0;        // C0 — tote/leere Zelle (sim-engine const C0)
+
+/**
+ * Bilde eine Farbrad-Auswahl auf ihre Wirkung ab.
+ *   - 12 gueltige Farb-State-IDs (1..12) -> { erase:false, cellState:<id>, brush:<id> }
+ *     (Zelle wird auf die Farbe gesetzt, Pinsel wechselt auf die Farbe).
+ *   - WHEEL_ERASE ("erase")            -> { erase:true,  cellState:0,    brush:"erase" }
+ *     (Zelle wird geleert/getoetet, Pinsel wird zum Radiergummi).
+ *
+ * Fail-closed: jede ungueltige Eingabe (NaN, 0, <0, >12, undefined, Objekte)
+ * faellt auf die Erase-Semantik NICHT zurueck, sondern wird als "keine gueltige
+ * Auswahl" (null) gemeldet — der Aufrufer ignoriert sie dann (kein stilles
+ * Setzen einer falschen Farbe, kein versehentliches Loeschen).
+ *
+ * @param {number|string} sel  Wheel-Auswahl: 1..12 (Farbe) oder WHEEL_ERASE.
+ * @returns {{erase:boolean, cellState:number, brush:(number|string)}|null}
+ */
+export function wheelSelectionEffect(sel) {
+  if (sel === WHEEL_ERASE) {
+    return { erase: true, cellState: DEAD_STATE, brush: WHEEL_ERASE };
+  }
+  if (Number.isInteger(sel) && sel >= 1 && sel <= 12) {
+    return { erase: false, cellState: sel, brush: sel };
+  }
+  return null; // ungueltige Auswahl -> Aufrufer ignoriert (fail closed)
+}

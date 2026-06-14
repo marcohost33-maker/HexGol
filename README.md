@@ -58,6 +58,17 @@ colour does **both** (Marco decision M-3): it colours the pressed cell
 immediately **and** switches the active brush colour, so you keep painting in the
 new colour. Cancel by tapping outside the ring (or releasing without a pick).
 
+A **13th choice sits in the centre of the wheel — "empty cell / erase"**
+(Marco wish 2026-06-14): a dark, dashed swatch with a strike-through symbol,
+visually distinct from the 12 colour tones. Picking it **clears the pressed cell
+(sets it dead)** and switches the brush to the eraser (`brush = "erase"`, the same
+path as the panel "Leer" swatch), so you can keep wiping cells empty — including
+on drag, consistent with the existing paint interaction. `aria-label` is
+"Leere Zelle / loeschen". (Tapping outside the ring still cancels; only the centre
+tap erases.) The wheel-selection decision is the pure, unit-tested
+`wheelSelectionEffect` helper in `src/lib/ui-gestures.js` (fail-closed on invalid
+selection).
+
 - Works with **mouse** (long click) and **touch**, unified through Pointer
   Events; the native context menu is suppressed so a touch long-press / right
   click never pops the OS menu.
