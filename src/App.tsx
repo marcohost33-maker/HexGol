@@ -440,6 +440,15 @@ export default function GolHex() {
   const [snapWatermark, setSnapWatermark] = useState(true);
   const snapBusyRef = useRef(false); // Doppelklick-Schutz waehrend toBlob/share
   const fileInputRef = useRef(null); // versteckter <input type=file> fuer Import
+  // Capture-Mirror (Snapshot/Recorder im Worker-Modus): die per
+  // transferControlToOffscreen uebergebene Live-Canvas ist im Main-Thread NICHT
+  // lesbar (getContext wirft; toBlob/captureStream liefern ein LEERES Placeholder-
+  // Bild -- empirisch 0,0,0,0). Der Worker reicht das echte (Hexagon-)Bild als
+  // ImageBitmap zurueck; wir zeichnen es auf diese IMMER lesbare Spiegel-Canvas, von
+  // der Snapshot (toBlob) und Recorder (captureStream) dann das KORREKTE Bild
+  // beziehen. Im Main-Thread-Modus wird die Live-Canvas direkt erfasst (kein Mirror).
+  const captureCanvasRef = useRef(null);   // <canvas> (nie transferiert)
+  const captureFrameWaitRef = useRef(null); // Resolver fuer den naechsten Snapshot-Frame
   // v34 Feature 2: Video-Aufnahme der Feld-Evolution (captureStream+MediaRecorder).
   // EIGENE Namen — NICHT mit dem LiouScope-Zeitreihen-Recorder (recording/recMsg)
   // kollidieren. clipState: "idle"|"recording"|"encoding"|"error" (s. recorder.js).
@@ -806,6 +815,30 @@ export default function GolHex() {
           if (m.fim) fieldImRef.current.set(new Float32Array(m.fim));
           if (typeof m.tick === "number") { tickRef.current = m.tick; setGen(m.tick); }
           updatePop(); dirtyRef.current = true;
+        } else if (m.type === "frame") {
+          // Worker hat das echte (Hexagon-)Bild als ImageBitmap geliefert -> auf die
+          // lesbare Spiegel-Canvas zeichnen. "snapshot" (Einmal-Foto) loest zusaetzlich
+          // den wartenden Snapshot-Resolver aus; "mirror" (Recording) haelt die Canvas
+          // laufend aktuell, von der der MediaRecorder-captureStream sampelt.
+          const bmp = m.bitmap;
+          const cap = captureCanvasRef.current;
+          if (cap && bmp) {
+            if (cap.width !== bmp.width || cap.height !== bmp.height) { cap.width = bmp.width; cap.height = bmp.height; }
+            const cctx = cap.getContext("2d", { alpha: false });
+            if (cctx) { cctx.setTransform(1, 0, 0, 1, 0, 0); cctx.drawImage(bmp, 0, 0); }
+          }
+          if (bmp && typeof bmp.close === "function") { try { bmp.close(); } catch { /* ignore */ } }
+          // Wartenden Resolver ausloesen (Snapshot-Foto ODER erster Mirror-Seed-Frame
+          // vor dem Recording-Start). Jeder eintreffende Frame zaehlt als "Bild da".
+          if (captureFrameWaitRef.current) {
+            const resolve = captureFrameWaitRef.current; captureFrameWaitRef.current = null;
+            resolve(!!cap);
+          }
+        } else if (m.type === "frameError") {
+          if (m.kind === "snapshot") {
+            const resolve = captureFrameWaitRef.current; captureFrameWaitRef.current = null;
+            if (resolve) resolve(false);
+          }
         } else if (m.type === "error") {
           // Worker konnte nicht initialisieren -> ehrlicher Fallback auf Main-Thread.
           // eslint-disable-next-line no-console
@@ -2434,12 +2467,36 @@ export default function GolHex() {
   // Offscreen-Render in Original-Aufloesung ist als Folge-PR notiert (XXL-Raster).
   // Das share() laeuft im selben Klick-Handler-Zweig (iOS-Geste; toBlob ist async,
   // der nachgelagerte share-Call bleibt im User-aktivierten Kontext, iOS 15+).
+  // Liefert eine IMMER lesbare Canvas mit dem AKTUELLEN Live-Bild:
+  //  - Main-Thread-Modus: die Live-Canvas selbst (rendert hex/raster genau wie sichtbar).
+  //  - Worker-Modus: die per transferControlToOffscreen uebergebene Live-Canvas ist
+  //    NICHT lesbar -> wir fordern beim Worker einen frischen ImageBitmap-Frame an,
+  //    der auf die Spiegel-Canvas gezeichnet wird, und geben DIESE zurueck. So
+  //    enthaelt der Snapshot exakt das Live-Hexagon-Rendering (Bug: vorher leeres
+  //    Placeholder-Bild). Bricht den absichtlichen Quadrat-Raster-Fast-Path NICHT:
+  //    der Worker rendert mit DERSELBEN usesRasterPath-Logik wie die Live-Anzeige.
+  const acquireCaptureCanvas = async () => {
+    if (workerActiveRef.current && workerRef.current) {
+      const cap = captureCanvasRef.current;
+      if (!cap) return canvasRef.current; // Spiegel fehlt -> ehrlicher Fallback
+      const ok = await new Promise((resolve) => {
+        captureFrameWaitRef.current = resolve;
+        try { workerRef.current.postMessage({ type: "captureFrame" }); }
+        catch { resolve(false); }
+        // Sicherung gegen einen nie eintreffenden Frame (Worker-Stall) -> nicht haengen.
+        setTimeout(() => { if (captureFrameWaitRef.current === resolve) { captureFrameWaitRef.current = null; resolve(false); } }, 2000);
+      });
+      return ok ? cap : null;
+    }
+    return canvasRef.current;
+  };
+
   const shareCanvasImage = async () => {
     if (snapBusyRef.current) return;
-    const src = canvasRef.current;
-    if (!src) { setSnapMsg("Snapshot: keine Leinwand gefunden."); return; }
-    snapBusyRef.current = true;
+    snapBusyRef.current = true; // synchron sperren VOR dem async Frame-Pull (Doppeltap)
     setSnapMsg("Snapshot wird erstellt …");
+    const src = await acquireCaptureCanvas();
+    if (!src) { setSnapMsg("Snapshot: keine Leinwand gefunden."); snapBusyRef.current = false; return; }
     // Audit #7 (Snapshot-Determinismus): Gen-Label SYNCHRON einfrieren, bevor der
     // async toBlob/share-Pfad laeuft. Sonst kann tickRef bis zum Resolve
     // weitergelaufen sein -> Dateiname gen42, Bild zeigt gen45.
@@ -2533,15 +2590,41 @@ export default function GolHex() {
     }
   }, [canvasKey]);
 
-  // Aufnahme starten: captureStream vom AKTIVEN Canvas (Main- oder Worker-Pfad —
-  // der Worker rendert ins SELBE Canvas-Element, captureStream funktioniert auf
-  // beiden). Wir starten die Sim automatisch nicht; der Nutzer steuert Play.
-  const startClip = () => {
+  // Aufnahme starten: captureStream von der lesbaren Capture-Quelle.
+  //  - Main-Thread-Modus: die Live-Canvas selbst (rendert hex/raster wie sichtbar).
+  //  - Worker-Modus: die transferierte Live-Canvas liefert via captureStream NUR ein
+  //    LEERES Placeholder-Bild -> wir nehmen die Spiegel-Canvas auf und lassen den
+  //    Worker laufend echte (Hexagon-)Frames hineinspiegeln (mirror-Stream). Damit
+  //    enthaelt das Video exakt das Live-Hexagon-Rendering (Bug: vorher leer/falsch).
+  // Wir starten die Sim automatisch nicht; der Nutzer steuert Play.
+  const stopWorkerMirror = () => {
+    if (workerRef.current) { try { workerRef.current.postMessage({ type: "mirror", on: false }); } catch { /* ignore */ } }
+  };
+  const startClip = async () => {
     if (clipBusyRef.current || clipState === "recording") return;
-    const canvas = canvasRef.current;
+    const workerCap = workerActiveRef.current && workerRef.current && captureCanvasRef.current;
+    const canvas = workerCap ? captureCanvasRef.current : canvasRef.current;
     if (!canvas) { setClipMsg("Aufnahme: keine Leinwand gefunden."); return; }
+    if (workerCap) {
+      // Worker-Mirror starten + ersten Frame abwarten, damit captureStream nicht auf
+      // einer 0x0/leeren Spiegel-Canvas startet (sonst leerer Clip).
+      clipBusyRef.current = true;
+      try { workerRef.current.postMessage({ type: "mirror", on: true }); } catch { /* ignore */ }
+      await new Promise((res) => {
+        captureFrameWaitRef.current = res;
+        setTimeout(() => { if (captureFrameWaitRef.current === res) { captureFrameWaitRef.current = null; res(false); } }, 1500);
+      });
+      clipBusyRef.current = false;
+      if (!captureCanvasRef.current || captureCanvasRef.current.width === 0) {
+        try { workerRef.current.postMessage({ type: "mirror", on: false }); } catch { /* ignore */ }
+        setClipState("error");
+        setClipMsg("Aufnahme nicht moeglich (kein Bild vom Render-Worker).");
+        return;
+      }
+    }
     const sup = detectRecordingSupport(canvas);
     if (!sup.ok) {
+      if (workerCap) { try { workerRef.current.postMessage({ type: "mirror", on: false }); } catch { /* ignore */ } }
       setClipState("error");
       setClipMsg(`Aufnahme nicht moeglich (${sup.reason}). Auf iPhone evtl. erst ab neuerem iOS.`);
       return;
@@ -2555,6 +2638,7 @@ export default function GolHex() {
       fps: 30,
       onState: (s) => setClipState(s),
       onResult: (blob, mime, durationMs) => {
+        stopWorkerMirror(); // Worker-Frame-Stream beenden (kein Leerlauf-Traffic)
         clipBlobRef.current = { blob, mime };
         clipBusyRef.current = false;
         clipStoppingRef.current = false;
@@ -2564,6 +2648,7 @@ export default function GolHex() {
         setClipMsg(`Clip fertig: ${formatDuration(durationMs)}, ${kb} KB (${ext.toUpperCase()}). „Teilen" zum Senden/Speichern.`);
       },
       onError: (reason) => {
+        stopWorkerMirror();
         clipBusyRef.current = false;
         clipStoppingRef.current = false;
         // Befund 3: clipBlobRef bleibt unangetastet -> letzter guter Clip teilbar.
@@ -2575,6 +2660,7 @@ export default function GolHex() {
     clipT0Ref.current = Date.now();
     setClipElapsed(0);
     if (!ctrl.start()) {
+      stopWorkerMirror();
       clipBusyRef.current = false;
       // onError hat clipMsg bereits gesetzt.
       return;
@@ -3691,6 +3777,11 @@ export default function GolHex() {
           <canvas ref={overlayRef} aria-hidden="true"
             style={{ position: "absolute", inset: 0, zIndex: 5, pointerEvents: "none" }} />
         )}
+        {/* Capture-Mirror (Snapshot/Recorder im Worker-Modus): unsichtbar (display:none
+            -> Visual-Baselines unberuehrt), aber IMMER lesbar. Der Worker spiegelt
+            sein echtes Hexagon-Bild als ImageBitmap hierher; Snapshot/captureStream
+            beziehen das KORREKTE Bild statt des leeren transferierten Placeholders. */}
+        <canvas ref={captureCanvasRef} data-testid="capture-mirror" aria-hidden="true" style={{ display: "none" }} />
         {/* AP-3: Long-Press-Farbrad. Radiale 12-Farb-Auswahl, zentriert auf dem
             Druckpunkt; deckt die Leinwand mit einem Abbruch-Layer (Tipp ausserhalb
             schliesst ohne Auswahl). Erscheint NUR bei aktivem Long-Press -> nicht
