@@ -61,6 +61,13 @@ let tick = 0, stepsSinceReport = 0, t0 = 0;
 let speedMs = 16;          // iv (0 = TURBO)
 let solverWarn = false, diverged = false;
 let lastRenderMode = null; // "raster" | "hex" -- nur bei Wechsel an den Main melden
+// Capture-Mirror (Snapshot/Recorder, worker-mode): nach transferControlToOffscreen
+// ist das Main-Thread-Placeholder-<canvas> NICHT lesbar (getContext wirft, toBlob/
+// captureStream liefern ein LEERES Bild -- empirisch 0,0,0,0). Das vom Worker
+// gezeichnete (Hexagon-)Bild lebt allein in DIESER OffscreenCanvas. Deshalb reicht
+// der Worker das aktuelle Bild als ImageBitmap an den Main zurueck, der es auf eine
+// lesbare Spiegel-Canvas zeichnet -> Capture == Live-Render (gleiche Geometrie).
+let mirrorStream = false;  // true = nach jedem Render einen Frame zurueckschicken (Recording)
 
 // --- Sim-Schritt (Spiegel von App.tsx step(), gleiche Engine-Aufrufe) --------
 function stepLife() {
@@ -178,6 +185,18 @@ function reportRenderMode(m) {
   postMessage({ type: "renderMode", mode: m });
 }
 
+// Schickt das AKTUELLE OffscreenCanvas-Bild als ImageBitmap an den Main-Thread.
+// createImageBitmap(canvas) ist nicht-destruktiv (anders als transferToImageBitmap,
+// das die Canvas leeren wuerde) -> die laufende Live-Anzeige bleibt unberuehrt.
+// kind="snapshot" (einmalig, Foto) | "mirror" (laufend, Recording-Stream).
+function emitFrame(kind) {
+  if (!canvas) return;
+  Promise.resolve()
+    .then(() => createImageBitmap(canvas))
+    .then((bmp) => { postMessage({ type: "frame", kind, bitmap: bmp }, [bmp]); })
+    .catch((err) => { postMessage({ type: "frameError", kind, message: err && err.message ? err.message : String(err) }); });
+}
+
 function renderToCanvas() {
   if (!ctx || !canvas) return;
   if (Wc !== canvas.width || Hc !== canvas.height) { Wc = canvas.width; Hc = canvas.height; }
@@ -199,6 +218,7 @@ function renderToCanvas() {
     });
     ctx.putImageData(img, 0, 0);
     reportRenderMode("raster");
+    if (mirrorStream) emitFrame("mirror");
     return;
   }
   // Path2D-Hexagon-Pfad mit Viewport-Culling (src/lib/hex-render.js). Spiegelt
@@ -210,6 +230,7 @@ function renderToCanvas() {
     mode, rule, col, gh, fld, fim,
   });
   reportRenderMode("hex");
+  if (mirrorStream) emitFrame("mirror");
   // Hinweis: der v31-Rahmen-Umriss (drawFrame) wird im Worker NICHT gezeichnet
   // (er gehoert zum Main-Thread-Detailpfad). Die Rahmen-Linie liefert der
   // Main-Thread-Pfad bei aktivem Worker nicht -- bewusst eng gehalten (das Feld
@@ -339,6 +360,21 @@ self.onmessage = (e) => {
       break;
     case "run": running = !!m.running; if (running) startLoop(); else { stopLoop(); renderToCanvas(); } break;
     case "redraw": renderToCanvas(); break;
+    case "captureFrame": {
+      // Einmal-Foto (Snapshot): frischen Frame rendern, damit das Bild aktuell ist,
+      // dann als ImageBitmap zurueck. Die Live-Anzeige bleibt unberuehrt
+      // (createImageBitmap kopiert, transferiert nicht den Canvas-Inhalt).
+      renderToCanvas();
+      emitFrame("snapshot");
+      break;
+    }
+    case "mirror": {
+      // Recording-Stream an/aus: bei "an" sofort einen Startframe liefern, danach
+      // schickt renderToCanvas() laufend Frames (Live == aufgenommenes Bild).
+      mirrorStream = !!m.on;
+      if (mirrorStream) { renderToCanvas(); emitFrame("mirror"); }
+      break;
+    }
     case "snapshot": {
       // Forschungs-Haken: aktuellen Zustand zur Main-Thread-Seite zuruecksenden
       // (Snapshot/Recorder/Undo bleiben Main-Thread-Verantwortung -> Readback ok).
