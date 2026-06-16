@@ -55,8 +55,11 @@ test.describe("GolHex v29L.2 visual baselines", () => {
     // Overlay zeichnet erst, wenn der Worker WIRKLICH aktiv ist (workerActiveRef) —
     // grosszuegig warten, bis transferControlToOffscreen + "ready" durch sind.
     await page.waitForTimeout(1200);
-    // Strukturelle Zusicherung: die Overlay-Canvas (aria-hidden) ist gemountet.
-    await expect(page.locator('canvas[aria-hidden="true"]')).toHaveCount(1);
+    // Strukturelle Zusicherung: die Overlay-Canvas (aria-hidden, sichtbar) ist
+    // gemountet. Die unsichtbare Capture-Spiegel-Canvas (data-testid=capture-mirror,
+    // display:none -- Snapshot/Recorder-Pfad) ist ebenfalls aria-hidden, zaehlt hier
+    // aber NICHT (eigene Verantwortung, eigener Test worker-snapshot-hex.spec.ts).
+    await expect(page.locator('canvas[aria-hidden="true"]:not([data-testid="capture-mirror"])')).toHaveCount(1);
     // Composite (Feld-Worker-Render + Overlay-Umriss) ueber den Feld-Container.
     await expect(page.locator(".ghx-canvas")).toHaveScreenshot("worker-overlay-outline.png");
     expect(errors, "keine Konsolen-/Page-Fehler im Overlay-Pfad").toEqual([]);

@@ -35,6 +35,9 @@ beforeAll(async () => {
   globalThis.postMessage = (m) => posted.push(m);
   if (typeof globalThis.self === "undefined") globalThis.self = globalThis;
   globalThis.self.postMessage = globalThis.postMessage;
+  // Capture-Mirror (Snapshot/Recorder): emitFrame nutzt createImageBitmap(canvas)
+  // (nicht-destruktiv) -> hier auf eine triviale Fake-Bitmap stubben.
+  globalThis.createImageBitmap = (src) => Promise.resolve({ width: (src && src.width) || 0, height: (src && src.height) || 0, close() {} });
   await import("../../src/worker/render-worker.js");
   dispatch = globalThis.self.onmessage;
   expect(typeof dispatch).toBe("function"); // Handler wurde registriert
@@ -126,5 +129,42 @@ describe("render-worker — Nachrichten-Protokoll", () => {
     send({ type: "view", view: { s: 2.0, tx: 0, ty: 0 } }); // identisch -> kein neuer Marker
     send({ type: "redraw" });
     expect(posted.filter((m) => m.type === "renderMode").length, "kein redundanter Marker bei gleichem Modus").toBe(0);
+  });
+
+  // ===========================================================================
+  // SNAPSHOT/REC-HEXAGON-BUG (Marco, 2026-06-16): im Worker-Modus ist die
+  // transferierte Live-Canvas im Main-Thread NICHT lesbar (toBlob/captureStream =
+  // leeres Placeholder). FIX: der Worker reicht sein echtes Bild als ImageBitmap
+  // zurueck (captureFrame=Foto / mirror=Recording-Stream), das der Main-Thread auf
+  // eine lesbare Spiegel-Canvas zeichnet. Hier: der Message-Kontrakt wird gelockt.
+  // ===========================================================================
+  it("captureFrame: liefert genau einen 'frame' (kind=snapshot) als ImageBitmap", async () => {
+    send(initMsg());
+    posted.length = 0;
+    send({ type: "captureFrame" });
+    await new Promise((r) => setTimeout(r, 0)); // createImageBitmap-Promise + postMessage flushen
+    const frames = posted.filter((m) => m.type === "frame");
+    expect(frames.length, "genau ein Snapshot-Frame").toBe(1);
+    expect(frames[0].kind, "kind=snapshot (Einmal-Foto)").toBe("snapshot");
+    expect(frames[0].bitmap, "Frame traegt eine (Fake-)Bitmap").toBeTruthy();
+  });
+
+  it("mirror an: postet laufende 'frame' (kind=mirror) bei jedem Render; aus: stoppt", async () => {
+    send(initMsg());
+    posted.length = 0;
+    send({ type: "mirror", on: true });        // Seed-Frame
+    await new Promise((r) => setTimeout(r, 0));
+    expect(posted.some((m) => m.type === "frame" && m.kind === "mirror"), "Seed-Mirror-Frame").toBe(true);
+    posted.length = 0;
+    send({ type: "redraw" });                  // weiterer Render -> weiterer Mirror-Frame
+    await new Promise((r) => setTimeout(r, 0));
+    expect(posted.some((m) => m.type === "frame" && m.kind === "mirror"), "Mirror-Frame bei Render").toBe(true);
+    // Mirror aus -> ein folgender Render liefert KEINEN Mirror-Frame mehr.
+    send({ type: "mirror", on: false });
+    await new Promise((r) => setTimeout(r, 0));
+    posted.length = 0;
+    send({ type: "redraw" });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(posted.some((m) => m.type === "frame"), "kein Mirror-Frame mehr nach mirror-aus").toBe(false);
   });
 });
