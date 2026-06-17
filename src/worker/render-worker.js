@@ -68,6 +68,17 @@ let lastRenderMode = null; // "raster" | "hex" -- nur bei Wechsel an den Main me
 // der Worker das aktuelle Bild als ImageBitmap an den Main zurueck, der es auf eine
 // lesbare Spiegel-Canvas zeichnet -> Capture == Live-Render (gleiche Geometrie).
 let mirrorStream = false;  // true = nach jedem Render einen Frame zurueckschicken (Recording)
+// Snapshot-„Beauty-Shot": ein Foto wird IMMER als echte Hexagone gerendert -- auch
+// wenn die Live-Anzeige aus Performancegruenden den Raster-Fast-Path (Quadrate bei
+// sub-2px-Zellen, Freeze-Schutz fuer 250k) nutzt. Marco-Befund 2026-06-17: „nach dem
+// Snapshot sind es Quadrate statt Hexagons". WURZEL: der bisherige captureFrame rief
+// renderToCanvas(), das bei pxR<2 den Raster-Pfad waehlt -> das Foto erbte die
+// Quadrate. Ein Foto ist aber ein bewusster Einmal-Render, fuer den das Freeze-Budget
+// NICHT gilt. Deshalb zeichnen wir den Snapshot in eine SEPARATE Scratch-Canvas mit
+// erzwungenem renderHex (Path2D-Hexagone), ohne die Live-OffscreenCanvas zu beruehren
+// (kein Flackern). Recording (mirror) bleibt Live-treu (per-Frame-Forcing waere bei
+// 250k zu teuer). Plattform-unabhaengig (greift in Chromium UND iOS/WebKit).
+let capCanvas = null, capCtx = null;
 
 // --- Sim-Schritt (Spiegel von App.tsx step(), gleiche Engine-Aufrufe) --------
 function stepLife() {
@@ -195,6 +206,36 @@ function emitFrame(kind) {
     .then(() => createImageBitmap(canvas))
     .then((bmp) => { postMessage({ type: "frame", kind, bitmap: bmp }, [bmp]); })
     .catch((err) => { postMessage({ type: "frameError", kind, message: err && err.message ? err.message : String(err) }); });
+}
+
+// Snapshot-Frame: erzwingt den Hexagon-Pfad in eine Scratch-Canvas (siehe capCanvas-
+// Kommentar oben). Liefert das ECHTE Hexagon-Bild als ImageBitmap fuer das Foto,
+// unabhaengig davon, ob die Live-Anzeige gerade Raster (Quadrate) zeigt. Die Live-
+// OffscreenCanvas bleibt unberuehrt. Faellt etwas aus (kein OffscreenCanvas-Ctor o.ae.),
+// degradiert es ehrlich auf den bisherigen Live-Frame statt zu haengen.
+function emitSnapshotHexFrame() {
+  if (!canvas) return;
+  Promise.resolve()
+    .then(() => {
+      if (typeof OffscreenCanvas === "undefined") throw new Error("no OffscreenCanvas");
+      const w = canvas.width, h = canvas.height;
+      if (!capCanvas) { capCanvas = new OffscreenCanvas(w, h); capCtx = capCanvas.getContext("2d", { alpha: false }); }
+      if (capCanvas.width !== w || capCanvas.height !== h) { capCanvas.width = w; capCanvas.height = h; }
+      if (!capCtx) throw new Error("no capture 2d ctx");
+      // Erzwungener Hexagon-Render mit DENSELBEN Geometrie-/Farbparametern wie der Live-
+      // Hex-Pfad (renderToCanvas hex-Zweig) -- nur ohne die usesRasterPath-Weiche.
+      renderHex(capCtx, {
+        Wc: w, Hc: h, hr, s: view.s, tx: view.tx, ty: view.ty, dpr, CX, CY,
+        mode, rule, col, gh, fld, fim,
+      });
+      return createImageBitmap(capCanvas);
+    })
+    .then((bmp) => { postMessage({ type: "frame", kind: "snapshot", bitmap: bmp }, [bmp]); })
+    .catch(() => {
+      // Robuster Fallback: bisheriges Live-Bild (kann Raster sein, aber besser als kein Foto).
+      try { renderToCanvas(); emitFrame("snapshot"); }
+      catch (err) { postMessage({ type: "frameError", kind: "snapshot", message: err && err.message ? err.message : String(err) }); }
+    });
 }
 
 function renderToCanvas() {
@@ -361,11 +402,10 @@ self.onmessage = (e) => {
     case "run": running = !!m.running; if (running) startLoop(); else { stopLoop(); renderToCanvas(); } break;
     case "redraw": renderToCanvas(); break;
     case "captureFrame": {
-      // Einmal-Foto (Snapshot): frischen Frame rendern, damit das Bild aktuell ist,
-      // dann als ImageBitmap zurueck. Die Live-Anzeige bleibt unberuehrt
-      // (createImageBitmap kopiert, transferiert nicht den Canvas-Inhalt).
-      renderToCanvas();
-      emitFrame("snapshot");
+      // Einmal-Foto (Snapshot): IMMER als echte Hexagone in eine Scratch-Canvas
+      // rendern (emitSnapshotHexFrame), unabhaengig vom Live-Raster-Fast-Path.
+      // Die Live-OffscreenCanvas bleibt unberuehrt (kein renderToCanvas auf ihr).
+      emitSnapshotHexFrame();
       break;
     }
     case "mirror": {
