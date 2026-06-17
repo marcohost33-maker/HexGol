@@ -815,6 +815,33 @@ export default function GolHex() {
           if (m.fim) fieldImRef.current.set(new Float32Array(m.fim));
           if (typeof m.tick === "number") { tickRef.current = m.tick; setGen(m.tick); }
           updatePop(); dirtyRef.current = true;
+        } else if (m.type === "snapshotBlob") {
+          // SOTA-Readback (2026-06-17): der Worker hat das Foto SELBST als PNG-Blob
+          // encodiert (OffscreenCanvas.convertToBlob) -- iOS-robust, umgeht
+          // createImageBitmap(OffscreenCanvas)+ImageBitmap-Transfer (dokumentierte
+          // WebKit-Defekte). Hier den Blob via createImageBitmap(Blob) -- der
+          // verlaessliche BILD-Dekodier-Pfad -- auf die lesbare Spiegel-Canvas zeichnen.
+          // Danach laeuft der bestehende Wasserzeichen-/Share-/Download-Flow IDENTISCH
+          // weiter (acquireCaptureCanvas gibt weiter die Spiegel-Canvas zurueck).
+          const blob = m.blob;
+          const cap = captureCanvasRef.current;
+          Promise.resolve()
+            .then(() => (blob && typeof createImageBitmap === "function") ? createImageBitmap(blob) : null)
+            .then((bmp) => {
+              if (cap && bmp) {
+                if (cap.width !== bmp.width || cap.height !== bmp.height) { cap.width = bmp.width; cap.height = bmp.height; }
+                const cctx = cap.getContext("2d", { alpha: false });
+                if (cctx) { cctx.setTransform(1, 0, 0, 1, 0, 0); cctx.drawImage(bmp, 0, 0); }
+                if (typeof bmp.close === "function") { try { bmp.close(); } catch { /* ignore */ } }
+              }
+            })
+            .catch(() => { /* Decode fehlgeschlagen -> Spiegel unveraendert; Resolver feuert trotzdem (kein Haenger) */ })
+            .finally(() => {
+              if (captureFrameWaitRef.current) {
+                const resolve = captureFrameWaitRef.current; captureFrameWaitRef.current = null;
+                resolve(!!(cap && cap.width));
+              }
+            });
         } else if (m.type === "frame") {
           // Worker hat das echte (Hexagon-)Bild als ImageBitmap geliefert -> auf die
           // lesbare Spiegel-Canvas zeichnen. "snapshot" (Einmal-Foto) loest zusaetzlich

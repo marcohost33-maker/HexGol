@@ -208,29 +208,49 @@ function emitFrame(kind) {
     .catch((err) => { postMessage({ type: "frameError", kind, message: err && err.message ? err.message : String(err) }); });
 }
 
+// Rendert den erzwungenen Hexagon-Pfad (renderHex, OHNE usesRasterPath-Weiche) in die
+// Scratch-Canvas capCanvas und liefert sie zurueck. Wirft, wenn kein OffscreenCanvas/
+// 2D-Kontext verfuegbar ist. Beruehrt die Live-OffscreenCanvas NICHT.
+function renderCaptureHex() {
+  if (typeof OffscreenCanvas === "undefined") throw new Error("no OffscreenCanvas");
+  const w = canvas.width, h = canvas.height;
+  if (!capCanvas) { capCanvas = new OffscreenCanvas(w, h); capCtx = capCanvas.getContext("2d", { alpha: false }); }
+  if (capCanvas.width !== w || capCanvas.height !== h) { capCanvas.width = w; capCanvas.height = h; }
+  if (!capCtx) throw new Error("no capture 2d ctx");
+  // DIESELBEN Geometrie-/Farbparameter wie der Live-Hex-Pfad (renderToCanvas hex-Zweig).
+  renderHex(capCtx, {
+    Wc: w, Hc: h, hr, s: view.s, tx: view.tx, ty: view.ty, dpr, CX, CY,
+    mode, rule, col, gh, fld, fim,
+  });
+  return capCanvas;
+}
+
 // Snapshot-Frame: erzwingt den Hexagon-Pfad in eine Scratch-Canvas (siehe capCanvas-
-// Kommentar oben). Liefert das ECHTE Hexagon-Bild als ImageBitmap fuer das Foto,
-// unabhaengig davon, ob die Live-Anzeige gerade Raster (Quadrate) zeigt. Die Live-
-// OffscreenCanvas bleibt unberuehrt. Faellt etwas aus (kein OffscreenCanvas-Ctor o.ae.),
-// degradiert es ehrlich auf den bisherigen Live-Frame statt zu haengen.
+// Kommentar oben), unabhaengig davon, ob die Live-Anzeige gerade Raster (Quadrate)
+// zeigt. Die Live-OffscreenCanvas bleibt unberuehrt.
+//
+// READBACK-HAERTUNG (SOTA, 2026-06-17): PRIMAER ueber OffscreenCanvas.convertToBlob()
+// -> der Worker encodiert das PNG SELBST und liefert einen Blob. Das umgeht
+// createImageBitmap(OffscreenCanvas) + ImageBitmap-Transfer, die Klasse mit
+// dokumentierten iOS/WebKit-Defekten (WebKit #229825 createImageBitmap-Leak;
+// OffscreenCanvas auf iOS historisch inkomplett). convertToBlob ist seit Safari 16.4
+// (03/2023) breit verfuegbar. Der Main-Thread dekodiert den Blob via
+// createImageBitmap(Blob) -- das ist der verlaessliche Bild-Dekodier-Pfad, NICHT der
+// fragile OffscreenCanvas-Snapshot-Pfad. FALLBACK (aelteres Safari < 16.4 ohne
+// convertToBlob): createImageBitmap(capCanvas) wie bisher. LETZTER Fallback: Live-Bild.
 function emitSnapshotHexFrame() {
   if (!canvas) return;
   Promise.resolve()
     .then(() => {
-      if (typeof OffscreenCanvas === "undefined") throw new Error("no OffscreenCanvas");
-      const w = canvas.width, h = canvas.height;
-      if (!capCanvas) { capCanvas = new OffscreenCanvas(w, h); capCtx = capCanvas.getContext("2d", { alpha: false }); }
-      if (capCanvas.width !== w || capCanvas.height !== h) { capCanvas.width = w; capCanvas.height = h; }
-      if (!capCtx) throw new Error("no capture 2d ctx");
-      // Erzwungener Hexagon-Render mit DENSELBEN Geometrie-/Farbparametern wie der Live-
-      // Hex-Pfad (renderToCanvas hex-Zweig) -- nur ohne die usesRasterPath-Weiche.
-      renderHex(capCtx, {
-        Wc: w, Hc: h, hr, s: view.s, tx: view.tx, ty: view.ty, dpr, CX, CY,
-        mode, rule, col, gh, fld, fim,
-      });
-      return createImageBitmap(capCanvas);
+      const cap = renderCaptureHex();
+      // PRIMAER: worker-direkter PNG-Blob (iOS-robust).
+      if (typeof cap.convertToBlob === "function") {
+        return cap.convertToBlob({ type: "image/png" })
+          .then((blob) => { postMessage({ type: "snapshotBlob", blob }); });
+      }
+      // FALLBACK: ImageBitmap (Chromium/aeltere Pfade).
+      return createImageBitmap(cap).then((bmp) => { postMessage({ type: "frame", kind: "snapshot", bitmap: bmp }, [bmp]); });
     })
-    .then((bmp) => { postMessage({ type: "frame", kind: "snapshot", bitmap: bmp }, [bmp]); })
     .catch(() => {
       // Robuster Fallback: bisheriges Live-Bild (kann Raster sein, aber besser als kein Foto).
       try { renderToCanvas(); emitFrame("snapshot"); }
