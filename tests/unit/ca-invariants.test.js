@@ -6,19 +6,18 @@
 // Periodizitaet, Bit-Stabilitaet, Populations-Erhaltung und die volle D6-Lattice-
 // Symmetrie. Jede Konstante ist GEMESSEN (nicht angenommen) und im Kommentar belegt.
 //
-// WICHTIGER Mess-Befund (kein Bug, eine Topologie-Eigenschaft):
-//   Der in der Literatur (Carter Bays, Complex Systems 15(3) 2005, B2/S35) beschriebene
-//   Hex-Glider gleitet auf DIESER Engine-Topologie NICHT. Das PATS.BaysGlider-Muster
-//   ist in axialen Koordinaten der Bays-Konvention notiert; die Engine nutzt eine
-//   odd-r-Nachbarschaft (oddOff/evenOff in buildNeighbors). Auf der odd-r-Topologie
-//   zerfaellt das Muster (Pop 5->7->3->2) und setzt sich ab Gen 5 als PERIODE-2-
-//   Oszillator (Pop 2) fest. Ein Brute-Force-Scan (>68000 Seeds, k<=5, 5x5-Fenster,
-//   edge+torus) fand unter B2/S35 KEINEN translierenden Spaceship — translierende
-//   Gleiter sind auf dieser Speicher-Topologie fuer kleine Muster nicht vorhanden.
-//   Deshalb testen wir die GEMESSENE Realitaet (formerhaltende periodische
-//   Wiederkehr), nicht eine angenommene Translation. Die Engine ist intern konsistent
-//   (Paritaets-Orakel step-life.test.js gruen) — das ist eine Koordinaten-Konvention,
-//   kein Defekt.
+// Mess-Befund zu PATS.BaysGlider (siehe Issue #99):
+//   Carter Bays (Complex Systems 15(3):245, 2005, Regel "3,5/2" = B2/S35) beweist die
+//   EXISTENZ eines Glider der Periode 5 auf dem Hexgitter (extern validiert). B2/S35 ist
+//   totalistisch und die odd-r-Engine-Topologie ist ein isotropes 6-Nachbar-Hexgitter
+//   (der D6-Lattice-Test unten bestaetigt das) -> ein Periode-5-Glider MUSS existieren.
+//   ABER: das Muster `PATS.BaysGlider` ([[0,0],[0,1],[1,0],[1,1],[2,1]]) ist NICHT dieser
+//   Glider, sondern ein fehlbenannter 5-Zell-Klumpen: unter B2/S35 zerfaellt er
+//   (Pop 5->7->3->2) und wird ab Gen 5 ein PERIODE-2-Oszillator (Pop 2). Ein
+//   Brute-Force-Scan (kleines Fenster) fand keinen translierenden Spaceship -- das ist
+//   FENSTER-BEGRENZT (Bays' echter Glider ist groesser), KEIN Beweis seiner Abwesenheit.
+//   Daher testet dieser Test ehrlich die GEMESSENE periodische Wiederkehr von
+//   PATS.BaysGlider, NICHT eine Translation. Umbenennen/Ersetzen des Musters -> Issue #99.
 import { describe, it, expect } from "vitest";
 import {
   RULES, RMETA, PATS, buildNeighbors, stepLife,
