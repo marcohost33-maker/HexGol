@@ -5,8 +5,11 @@
 // distinguishes cell states by COLOUR ALONE in the default render. For viewers
 // with colour-vision deficiency (CVD) that is not robust. This module maps the
 // four boolean life-states to a CVD-safe Okabe-Ito palette PLUS a per-state
-// FORM cue (hole / ring), so the states stay distinguishable in a greyscale
-// (deuteranopia-proxy) test — never colour alone.
+// FORM cue (hole / ring). The Okabe-Ito colours themselves stay distinct under
+// real CVD simulation (Machado 2009 deuteranopia/protanopia/tritanopia); the
+// form cue is the independent second channel that survives even full greyscale
+// (achromatopsia) — so states are never distinguished by colour alone. Both are
+// asserted in tests/unit/cvd-validation.test.js.
 //
 // OPT-IN: cvdMode === false returns the sentinel { kind: "default" }. Callers
 // MUST then keep their existing colour path unchanged, so the default render is
