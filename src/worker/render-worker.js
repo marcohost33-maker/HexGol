@@ -58,6 +58,7 @@ let dpr = 1;
 let Wc = 0, Hc = 0;
 
 let tick = 0, stepsSinceReport = 0, t0 = 0;
+let cvd = false;           // F10: CVD-safe Encoding (opt-in; vom Main via init/config)
 let speedMs = 16;          // iv (0 = TURBO)
 let solverWarn = false, diverged = false;
 let lastRenderMode = null; // "raster" | "hex" -- nur bei Wechsel an den Main melden
@@ -288,7 +289,7 @@ function renderToCanvas() {
   // beschraenkt (Freeze-Schutz, gegen den der Raster-Pfad gebaut war, haelt).
   renderHex(ctx, {
     Wc, Hc, hr, s: view.s, tx: view.tx, ty: view.ty, dpr, CX, CY,
-    mode, rule, col, gh, fld, fim,
+    mode, rule, col, gh, age, fld, fim, cvd,
   });
   reportRenderMode("hex");
   if (mirrorStream) emitFrame("mirror");
@@ -388,6 +389,7 @@ self.onmessage = (e) => {
       try { ctx = canvas.getContext("2d", { alpha: false }); }
       catch (err) { postMessage({ type: "error", message: "getContext failed: " + err.message }); return; }
       cfg = m.cfg; mode = m.mode; rule = m.rule; speedMs = m.speedMs ?? 16;
+      if (typeof m.cvd === "boolean") cvd = m.cvd;
       applyGeometry(m);
       renderToCanvas();
       postMessage({ type: "ready" });
@@ -407,7 +409,7 @@ self.onmessage = (e) => {
     }
     case "view": view = m.view; if (!running) renderToCanvas(); break;
     case "resize": if (canvas) { canvas.width = m.width; canvas.height = m.height; dpr = m.dpr || dpr; if (!running) renderToCanvas(); } break;
-    case "config": if (m.cfg) cfg = m.cfg; if (m.mode) mode = m.mode; if (m.rule) rule = m.rule; if (typeof m.speedMs === "number") speedMs = m.speedMs; if (!running) renderToCanvas(); break;
+    case "config": if (m.cfg) cfg = m.cfg; if (m.mode) mode = m.mode; if (m.rule) rule = m.rule; if (typeof m.speedMs === "number") speedMs = m.speedMs; if (typeof m.cvd === "boolean") cvd = m.cvd; if (!running) renderToCanvas(); break;
     case "state": // vollstaendiger Zustands-Push (z.B. nach Paint/Reset/Undo im Main-Thread)
       if (m.col) col = new Uint8Array(m.col);
       if (m.gh) gh = new Uint8Array(m.gh);

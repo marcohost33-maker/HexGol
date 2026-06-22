@@ -398,6 +398,30 @@ bare `pxR` threshold let narrow phones (≤375px) raster the default grid into
 *squares* (hex-cells-load-bearing; guarded by `tests/unit/raster-gate.test.js` +
 `tests/e2e/mobile-hexshape.spec.ts`).
 
+**Colorblind-safe encoding (F10, opt-in).** A *Farbenblind-sicher* checkbox
+(under **DARSTELLUNG**, default **off**) re-encodes the boolean Game-of-Life cell
+states so they no longer rely on colour alone (WCAG 1.4.1). When **off** the
+render is **byte-identical** to the default (all visual baselines stay valid).
+When **on**, the four boolean states get a CVD-safe Okabe-Ito colour **plus a
+form cue**, so they stay distinguishable in a greyscale (deuteranopia-proxy)
+test:
+
+| State | Meaning | Encoding |
+|-------|---------|----------|
+| Survivor | alive, was alive last gen | full **blue** fill `#0072B2` |
+| Newborn  | just born this generation | **orange** fill `#E69F00` + central **hole** |
+| Dying    | was alive, now a decay ghost | **ring/outline** only `#CC79A7` (no fill) |
+| Dead     | empty | thin line (unchanged) |
+
+The colour/form choice lives in the pure, unit-tested `cellStyle(state, cvdMode)`
+(`src/lib/cell-style.js`, oracle `tests/unit/cell-style.test.js`) using the exact
+corrected Okabe-Ito palette. The toggle works in **both** render paths — the
+main-thread `draw()` and the worker (`src/lib/hex-render.js`, state pushed via the
+worker `config`/`init` message). It persists in `localStorage` (`golhex_cvd_v1`).
+Scope: the boolean cellular-automaton states. The real-valued physics gradients
+(snow/water/HQST/collatz) and the sub-pixel raster path are **not** re-encoded yet
+(form cues are not resolvable at sub-pixel cell sizes) — deferred as a follow-up.
+
 **OffscreenCanvas worker (Stufe 1, opt-in).** A *Worker (Beta)* toggle (visible
 only when the browser supports `OffscreenCanvas` + `transferControlToOffscreen` +
 `Worker` — fail-closed feature detection) moves the simulation step **and** the

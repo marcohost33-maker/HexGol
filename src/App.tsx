@@ -18,6 +18,7 @@ import ConwayIntro, { introSeen } from "./lib/ConwayIntro.jsx"; // Bildungs-Intr
 import { renderRaster } from "./lib/raster-render.js"; // geteilter Raster-Pfad (Worker + Main)
 import { supportsOffscreenWorker } from "./lib/worker-support.js"; // Feature-Detection (fail-closed)
 import { shouldStartPan, decideCloseAction, usesRasterPath, wheelSelectionEffect, WHEEL_ERASE, clampWheelCenter } from "./lib/ui-gestures.js"; // pure UI-Entscheider (Pan-Hit-Test + Schliess-Dispatch + HEX-Render-Gate + Farbrad-Wahl + Rad-Clamp)
+import { CVD_STYLE, OKABE_ITO } from "./lib/cell-style.js"; // F10: reine CVD-safe Zellstil-Wahl (Okabe-Ito + Form-Cue)
 // v33 PR-C: Spielstand-Speichern (IndexedDB + Datei-Export/Import + Urzustand).
 import {
   serializeSave, deserializeSave, makeOriginSnapshot, shouldCaptureOrigin,
@@ -476,6 +477,14 @@ export default function GolHex() {
   // standardmaessig eingeklappt, damit die Leinwand oben sichtbar bleibt (visuelle
   // Hierarchie + progressive disclosure, web-fundiert).
   const [showMoreColors, setShowMoreColors] = useState(false);
+  // F10: opt-in CVD-safe (colorblind-safe) Zell-Encoding. Default OFF -> Default-
+  // Render byte-identisch wie heute (alle Visual-Baselines bleiben gueltig). ON ->
+  // die booleschen Zellzustaende (Survivor/Newborn/Dying) werden CVD-sicher +
+  // form-redundant kodiert (Okabe-Ito + Loch/Ring), nie Farbe allein (WCAG 1.4.1).
+  // Persistenz: localStorage golhex_cvd_v1 (nur lesen wenn vorhanden; Default OFF).
+  const [cvdMode, setCvdMode] = useState(() => {
+    try { return localStorage.getItem("golhex_cvd_v1") === "1"; } catch { return false; }
+  });
   const [brush, setBrush] = useState("cycle"); // cycle | CR | CB | CY | erase
   // AP-3: Long-Press-Farbrad. Hold ~500 ms ohne Bewegung > Touch-Slop oeffnet ein
   // radiales 12-Farb-Rad um den Druckpunkt; Auswahl faerbt die Zelle SOFORT und
@@ -648,6 +657,19 @@ export default function GolHex() {
   const solverWarnRef = useRef(false);
   const solverDivergedRef = useRef(false);
   const rvalRef = useRef(rvalRule); useEffect(() => { rvalRef.current = rvalRule; }, [rvalRule]);
+  // F10: CVD-Modus -> Render-Pfad (cvdRef) + Persistenz + Vollredraw beim Umschalten.
+  const cvdRef = useRef(cvdMode);
+  useEffect(() => {
+    cvdRef.current = cvdMode;
+    try { localStorage.setItem("golhex_cvd_v1", cvdMode ? "1" : "0"); } catch { /* private mode */ }
+    // Umschalten aendert die Farb-/Form-Wahl global -> Vollredraw erzwingen
+    // (inkrementeller Diff-Pfad wuerde sonst alte Stile stehen lassen). Bei aktivem
+    // Worker den neuen Zustand mitschicken, sonst rendert er inkonsistent (alt).
+    dirtyRef.current = true;
+    if (workerActiveRef.current && workerRef.current) {
+      try { workerRef.current.postMessage({ type: "config", cvd: cvdMode }); } catch { /* ignore */ }
+    }
+  }, [cvdMode]);
 
   // Grid-Wechsel: Buffer + Geometrie neu
   useEffect(() => {
@@ -884,7 +906,7 @@ export default function GolHex() {
       worker.postMessage({
         type: "init", canvas: off,
         R, C, hr: HR, shape: frameShape, circleRadius, ellipseA, ellipseB, polygon: freeformPolygon, dpr,
-        cfg: buildWorkerCfg(), mode: simMode, rule: rvalRule,
+        cfg: buildWorkerCfg(), mode: simMode, rule: rvalRule, cvd: cvdRef.current,
         speedMs: SPEEDS[speedIdx], view, tick: tickRef.current,
         col: colorRef.current.slice().buffer, gh: ghostRef.current.slice().buffer, age: ageRef.current.slice().buffer,
         fld: fieldRef.current.slice().buffer, fim: fieldImRef.current.slice().buffer,
@@ -1220,7 +1242,11 @@ export default function GolHex() {
     // (ab pxR>=5) sind globale/ueberlappende Ebenen, die sich nicht lokal
     // ueberzeichnen lassen. Beim Hineinzoomen sind ohnehin wenige Zellen sichtbar
     // -> Vollredraw guenstig. Verifiziert mit allen Ebenen (test_incremental_layers).
-    if (incremental && simRef.current === "life" && pxR < 4) {
+    // F10: im CVD-Modus den inkrementellen Diff-Pfad ueberspringen. Der CVD-Stil ist
+    // ein Verbund aus Fuellung + Loch + Ring je Zelle, den der Diff-Pfad (nur Farbe
+    // ueberzeichnen) nicht korrekt teil-erneuern kann -> Vollredraw (unten) ist
+    // korrekt und bei pxR<4 (wenige Zellen sichtbar) guenstig.
+    if (incremental && simRef.current === "life" && pxR < 4 && !cvdRef.current) {
       const col = colorRef.current, prev = prevColorRef.current;
       const gh = ghostRef.current, pgh = prevGhostRef.current;
       // Pro geaenderter Zelle: erst loeschen, dann Geist (Untergrund) + Farbe.
@@ -1293,6 +1319,41 @@ export default function GolHex() {
       }
       drawFrame(ctx, s);
       dirtyRef.current = false;
+      return;
+    }
+
+    // --- F10 CVD-safe life-Vollredraw (opt-in, nur cvdRef.current === true) -----
+    // Kollabiert die 12-Farb-CA auf 4 BOOLESCHE Zustaende (Survivor/Newborn/Dying/
+    // Dead) und kodiert sie CVD-sicher + form-redundant (Okabe-Ito + Loch/Ring),
+    // nie Farbe allein (WCAG 1.4.1). Stil-Wahl liegt in der reinen, unit-getesteten
+    // cellStyle()/CVD_STYLE (src/lib/cell-style.js); hier nur die Canvas-Geometrie.
+    // Batching pro Zustand (je ein Path2D), Reihenfolge: Dying-Ringe (Untergrund) ->
+    // Survivor-Fuellung -> Newborn-Fuellung -> Newborn-Loecher (Hintergrund-Punkt).
+    if (simRef.current === "life" && cvdRef.current) {
+      const col = colorRef.current, gh = ghostRef.current, age = ageRef.current;
+      const survP = new Path2D(), newbP = new Path2D(), holeP = new Path2D(), ringP = new Path2D();
+      let anyS = false, anyN = false, anyD = false;
+      for (let i = 0; i < col.length; i++) {
+        if (col[i] !== 0) {
+          if (age[i] > 1) { addHexIdx(survP, i, hr * 0.92); anyS = true; }
+          else { addHexIdx(newbP, i, hr * 0.92); addHexIdx(holeP, i, hr * 0.34); anyN = true; }
+        } else if (gh[i]) { addHexIdx(ringP, i, hr * 0.92); anyD = true; }
+      }
+      // Dying: nur Ring/Outline (kein Fill) -> Form-Cue.
+      if (anyD) { ctx.lineWidth = Math.max(0.6, 1.6 / s); ctx.strokeStyle = CVD_STYLE.dying.stroke; ctx.stroke(ringP); }
+      // Survivor: Vollfuellung blau.
+      if (anyS) { ctx.fillStyle = CVD_STYLE.survivor.fill; ctx.fill(survP); }
+      // Newborn: Fuellung orange + zentrales Loch (Hintergrund) als Form-Cue.
+      if (anyN) {
+        ctx.fillStyle = CVD_STYLE.newborn.fill; ctx.fill(newbP);
+        ctx.fillStyle = T.bg; ctx.fill(holeP);
+      }
+      drawFrame(ctx, s);
+      // Diff-Gedaechtnis konsistent halten (auch wenn der Diff-Pfad im CVD-Modus
+      // uebersprungen wird), damit ein spaeteres Umschalten auf OFF nicht gegen
+      // einen stale Snapshot difft.
+      prevColorRef.current.set(col); prevGhostRef.current.set(gh);
+      dirtyRef.current = false; stepDirtyRef.current = false;
       return;
     }
 
@@ -3189,6 +3250,32 @@ export default function GolHex() {
           Tab 3, weil ein Preset Regel + Groesse mitsetzt. Baut auf dem bestehenden
           Speicher-/Ladepfad (savestate-Huelle -> applyLoadedState) auf. */}
       {renderPresetGallery()}
+
+      {/* F10: opt-in Colorblind-safe-Encoding. Default AUS -> Default-Render
+          unveraendert (alle Visual-Baselines gueltig). AN -> boolesche Zellzustaende
+          CVD-sicher + form-redundant (Okabe-Ito + Loch/Ring), nie Farbe allein. */}
+      <div style={{ marginBottom: 10 }}>
+        <div style={{ fontSize: 11, color: T.sub, fontFamily: MONO, marginBottom: 4 }}>DARSTELLUNG</div>
+        <label
+          htmlFor="cvd-toggle"
+          style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontFamily: MONO, fontSize: 11.5, color: cvdMode ? T.accent : T.sub, padding: "8px 10px", borderRadius: 9, border: `1px solid ${cvdMode ? T.accent : "rgba(92,240,204,0.14)"}`, background: cvdMode ? "rgba(92,240,204,0.12)" : T.bg2 }}
+        >
+          <input
+            id="cvd-toggle"
+            type="checkbox"
+            checked={cvdMode}
+            onChange={(e) => setCvdMode(e.target.checked)}
+            aria-label="Farbenblind-sichere Darstellung"
+            style={{ width: 16, height: 16, cursor: "pointer", accentColor: T.accent }}
+          />
+          <span style={{ fontWeight: 700 }}>Farbenblind-sicher {cvdMode ? "AN" : "AUS"}</span>
+        </label>
+        <div style={{ fontSize: 10, color: T.sub, opacity: 0.7, fontFamily: MONO, lineHeight: 1.4, marginTop: 4 }}>
+          {cvdMode
+            ? `Zellzustaende form-redundant + CVD-sicher (Okabe-Ito): Survivor = blau ${OKABE_ITO.blue} voll, Newborn = orange ${OKABE_ITO.orange} mit Loch, Dying = Ring ${OKABE_ITO.reddishPurple}. Nie Farbe allein (WCAG 1.4.1). Gilt fuer den booleschen Modus (Game of Life).`
+            : "Aus: Standard-Farbdarstellung (12 Itten-Toene). Anschalten fuer eine farbenblind-sichere, form-redundante Kodierung der Zellzustaende."}
+        </div>
+      </div>
 
       <div style={{ marginBottom: 10 }}>
         <div style={{ fontSize: 11, color: T.sub, fontFamily: MONO, marginBottom: 4 }}>TOPOLOGIE &amp; RAHMEN</div>
