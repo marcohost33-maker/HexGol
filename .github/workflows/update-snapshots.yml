@@ -26,7 +26,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     container:
-      image: mcr.microsoft.com/playwright:v1.60.0-noble
+      # tag v1.60.0-noble pinned by digest (resolved 2026-06-22)
+      image: mcr.microsoft.com/playwright:v1.60.0-noble@sha256:9bd26ad900bb5e0f4dee75839e957a89ae89c2b7ab1e76050e559790e946b948
       options: --user 1001:1001
     steps:
       # persist-credentials must stay TRUE here: this workflow pushes the
