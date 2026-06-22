@@ -3090,6 +3090,13 @@ export default function GolHex() {
   const sizeLbl = frameShape === "circle" ? `r${circleRadius}` : (GRID_SIZES[sizeIdx]?.l || "");
   const frameChip = `${frameShape === "circle" ? "◯" : frameShape === "box" ? "▭" : "⬢"} ${frameLbl} ${sizeLbl}`;
 
+  // F9 (a11y): Text-Aequivalent fuer die canvas-gerenderte Spielfeld-Leinwand.
+  // Eine <canvas> ist fuer Screenreader OPAK (kein DOM-Zellgitter) — der WAI-ARIA-
+  // Weg ist role="img" + dynamisches aria-label PLUS eine aria-live-Statusregion,
+  // die dieselbe Live-Lage in Worten traegt. KEIN eigener State: alle Werte sind
+  // bestehend (gen/total/ruleChip/running) -> kein Duplikat, kein Drift.
+  const gridLabel = `Hexagonales Game of Life, Generation ${gen}, ${stats.rval ? "aktive Zellen" : "Population"} ${total}, Regel ${ruleChip}, ${running ? "laeuft" : "pausiert"}`;
+
   // v33: Tab-Meta (Reihenfolge + Icon + Kurzname). 4 inhaltliche Tabs (Recherche
   // Thema 3: Aktionen sind keine Tabs -> rechts als Icon-Buttons abgesetzt).
   const TABS = [
@@ -3794,7 +3801,18 @@ export default function GolHex() {
       <div ref={wrapRef} className="ghx-canvas" style={{ position: "relative", width: "100%", flex: compact ? "1 1 0" : "none", minHeight: compact ? 0 : 360, borderRadius: compact ? 10 : 14, overflow: "hidden", border: `1px solid ${T.border}`, background: T.bg, boxShadow: `0 0 30px rgba(92,240,204,0.06) inset` }}>
         <canvas key={canvasKey} ref={canvasRef} onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp}
           onContextMenu={(e) => e.preventDefault()}
+          role="img" aria-label={gridLabel} tabIndex={0}
           style={{ display: "block", touchAction: "none", cursor: brush === "cycle" ? "pointer" : "crosshair" }} />
+        {/* F9 (a11y): visuell verborgene Live-Statusregion (aria-live=polite). Traegt
+            denselben Text wie das canvas-aria-label; Screenreader sprechen Aenderungen
+            (Gen/Pop/Regel/Lauf) an, ohne den Fokus zu stehlen. KEIN <canvas> (sonst
+            brechen die Canvas-Zaehl-Asserts in smoke/visual) und visuell verborgen
+            ueber die clip-rect-Technik -> 0 Layout/Pixel-Effekt (Visual-Baselines
+            unberuehrt). */}
+        <div data-testid="grid-status" role="status" aria-live="polite"
+          style={{ position: "absolute", width: 1, height: 1, padding: 0, margin: -1, overflow: "hidden", clip: "rect(0 0 0 0)", clipPath: "inset(50%)", whiteSpace: "nowrap", border: 0 }}>
+          {gridLabel}
+        </div>
         {/* v33.0.2: Rahmen-Umriss-Overlay. Liegt über der Feld-Canvas, leitet keine
             Pointer-Events ab (transparent). Nötig, weil im Worker-Modus die Feld-Canvas
             an den Worker übergeben ist und der Worker den dünnen Umriss nicht zeichnet.
