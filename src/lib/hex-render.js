@@ -36,6 +36,7 @@ import {
   ALLCOL, COLA, COLHEX, PI3,
   G_AA, G_Aa, G_aa, geneColor, collatzColor, rvalColor,
 } from "./sim-engine.js";
+import { CVD_STYLE } from "./cell-style.js"; // F10: CVD-safe Stil-Wahl (shared mit App.tsx)
 
 // pointy-top-Hexagon: 6 Ecken bei -PI/2 + k*PI3 (identisch zu App.tsx draw()).
 const COSA = [], SINA = [];
@@ -148,6 +149,35 @@ export function renderHex(ctx, p) {
   // ---------------------------------------------------------------------------
   if (!P2D) return;
   const col = p.col, gh = p.gh || null;
+
+  // --- F10 CVD-safe life-Pfad (opt-in, p.cvd === true) -----------------------
+  // Spiegelt EXAKT App.tsx draw() CVD-Zweig: 4 boolesche Zustaende, Okabe-Ito +
+  // Form-Cue (Loch/Ring), nie Farbe allein (WCAG 1.4.1). Reihenfolge: Dying-Ringe
+  // (Untergrund) -> Survivor-Fuellung -> Newborn-Fuellung -> Newborn-Loecher.
+  // Radien identisch zum Main-Thread: Fuellung hr*0.92, Loch hr*0.34.
+  if (p.cvd) {
+    const age = p.age || null;
+    // Loch-Farbe == Clear-Farbe dieses Pfads (oben: p.bgFill || "#0a0e0d"), damit
+    // das Loch im Worker-Pfad ein echtes "Loch" (= Hintergrund) ist, nicht ein Fleck.
+    const bg = (p.bgFill || "#0a0e0d");
+    const survP = new P2D(), newbP = new P2D(), holeP = new P2D(), ringP = new P2D();
+    let anyS = false, anyN = false, anyD = false;
+    for (let i = 0; i < N; i++) {
+      if (!visible(i)) continue;
+      if (col[i] !== 0) {
+        if (age && age[i] > 1) { addHex(survP, i, hr * 0.92); anyS = true; }
+        else { addHex(newbP, i, hr * 0.92); addHex(holeP, i, hr * 0.34); anyN = true; }
+      } else if (gh && gh[i]) { addHex(ringP, i, hr * 0.92); anyD = true; }
+    }
+    if (anyD) { ctx.lineWidth = Math.max(0.6, 1.6 / s); ctx.strokeStyle = CVD_STYLE.dying.stroke; ctx.stroke(ringP); }
+    if (anyS) { ctx.fillStyle = CVD_STYLE.survivor.fill; ctx.fill(survP); }
+    if (anyN) {
+      ctx.fillStyle = CVD_STYLE.newborn.fill; ctx.fill(newbP);
+      ctx.fillStyle = bg; ctx.fill(holeP);
+    }
+    return;
+  }
+
   const drawGrid = pxR >= 4, drawGlow = pxR >= 5;
   const gridP = drawGrid ? new P2D() : null;
   const gp = new P2D(); let anyG = false;
