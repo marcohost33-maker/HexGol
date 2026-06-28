@@ -491,7 +491,7 @@ export default function GolHex() {
   // setzt die aktive Pinselfarbe (Marco-Entscheid M-3 "Beides"). null = geschlossen.
   // {x,y} = Druckpunkt in CSS-Pixeln relativ zum Canvas-Wrapper; idx = getroffene Zelle.
   const [wheel, setWheel] = useState(null);
-  const [pattern, setPattern] = useState("BaysGlider");
+  const [pattern, setPattern] = useState("BaysP2Blob");
   // v33 Einwisch-Drawer (PR-B): von links einfahrendes Panel fuer Farben (Tab 1) +
   // Formen/Stempel (Tab 2). null = zu; 1 = Farben offen; 2 = Formen offen. Tab-Tipp
   // (toggleTab) ODER Handle ODER Edge-Swipe (Bonus) oeffnet; Feld bleibt rechts sichtbar.
@@ -911,9 +911,13 @@ export default function GolHex() {
         col: colorRef.current.slice().buffer, gh: ghostRef.current.slice().buffer, age: ageRef.current.slice().buffer,
         fld: fieldRef.current.slice().buffer, fim: fieldImRef.current.slice().buffer,
         CX: cellCxRef.current.slice().buffer, CY: cellCyRef.current.slice().buffer,
-      }, [off,
-        // transferierte Buffer (Performance, kein Copy)
-      ]);
+        // F8 (Issue #97): NUR die OffscreenCanvas (off) wird transferiert. Die
+        // col/gh/age/fld/fim/CX/CY oben sind bewusst .slice()-Kopien und werden
+        // strukturell GEKLONT (nicht transferiert) -- das ist ein Kaltpfad (init,
+        // 1x pro Worker-Spawn), kein Per-Frame-Hotpath. Der Per-Frame-Hotpath
+        // nutzt ImageBitmap-Transferables korrekt (render-worker.js). Frueherer
+        // Kommentar "transferierte Buffer (kein Copy)" war irrefuehrend.
+      }, [off]);
     } catch (err) {
       // Jeder Fehler beim Transfer/Spawn -> sauberer Fallback auf den Main-Thread.
       // eslint-disable-next-line no-console

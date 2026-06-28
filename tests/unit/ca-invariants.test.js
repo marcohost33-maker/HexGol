@@ -6,18 +6,18 @@
 // Periodizitaet, Bit-Stabilitaet, Populations-Erhaltung und die volle D6-Lattice-
 // Symmetrie. Jede Konstante ist GEMESSEN (nicht angenommen) und im Kommentar belegt.
 //
-// Mess-Befund zu PATS.BaysGlider (siehe Issue #99):
+// Mess-Befund zu PATS.BaysP2Blob (vormals "BaysGlider"; umbenannt -> Issue #99):
 //   Carter Bays (Complex Systems 15(3):245, 2005, Regel "3,5/2" = B2/S35) beweist die
 //   EXISTENZ eines Glider der Periode 5 auf dem Hexgitter (extern validiert). B2/S35 ist
 //   totalistisch und die odd-r-Engine-Topologie ist ein isotropes 6-Nachbar-Hexgitter
 //   (der D6-Lattice-Test unten bestaetigt das) -> ein Periode-5-Glider MUSS existieren.
-//   ABER: das Muster `PATS.BaysGlider` ([[0,0],[0,1],[1,0],[1,1],[2,1]]) ist NICHT dieser
-//   Glider, sondern ein fehlbenannter 5-Zell-Klumpen: unter B2/S35 zerfaellt er
-//   (Pop 5->7->3->2) und wird ab Gen 5 ein PERIODE-2-Oszillator (Pop 2). Ein
-//   Brute-Force-Scan (kleines Fenster) fand keinen translierenden Spaceship -- das ist
-//   FENSTER-BEGRENZT (Bays' echter Glider ist groesser), KEIN Beweis seiner Abwesenheit.
-//   Daher testet dieser Test ehrlich die GEMESSENE periodische Wiederkehr von
-//   PATS.BaysGlider, NICHT eine Translation. Umbenennen/Ersetzen des Musters -> Issue #99.
+//   ABER: das Muster `PATS.BaysP2Blob` ([[0,0],[0,1],[1,0],[1,1],[2,1]]) ist NICHT dieser
+//   Glider, sondern ein 5-Zell-Klumpen (frueher faelschlich "BaysGlider" genannt): unter
+//   B2/S35 zerfaellt er (Pop 5->7->3->2) und wird ab Gen 5 ein PERIODE-2-Oszillator
+//   (Pop 2). Ein Brute-Force-Scan (kleines Fenster) fand keinen translierenden Spaceship
+//   -- das ist FENSTER-BEGRENZT (Bays' echter Glider ist groesser), KEIN Beweis seiner
+//   Abwesenheit. Daher testet dieser Test ehrlich die GEMESSENE periodische Wiederkehr von
+//   PATS.BaysP2Blob, NICHT eine Translation. Das Muster wurde gemaess Issue #99 umbenannt.
 import { describe, it, expect } from "vitest";
 import {
   RULES, RMETA, PATS, buildNeighbors, stepLife,
@@ -63,10 +63,10 @@ function bitEq(a, b) {
 //    stabiler P2-Zyklus mit Pop 2; gen5 == gen7 (bit), gen5 != gen6.
 // --------------------------------------------------------------------------
 describe("Bays-Glider unter B2/S35: gemessene periodische Wiederkehr (Topologie-treu)", () => {
-  it("PATS.BaysGlider zerfaellt zu einem Periode-2-Oszillator (Pop 5->...->2), kein Glider auf odd-r", () => {
+  it("PATS.BaysP2Blob zerfaellt zu einem Periode-2-Oszillator (Pop 5->...->2), kein Glider auf odd-r", () => {
     const R = 24, C = 24;
     const { edge, mask } = buildNeighbors(R, C, "box");
-    const seed = PATS.BaysGlider.map(([r, c]) => (r + 10) * C + (c + 10));
+    const seed = PATS.BaysP2Blob.map(([r, c]) => (r + 10) * C + (c + 10));
     const snaps = evolve(RMETA[BAYS], R, C, seed, 10, edge, mask);
     const pops = snaps.map(popOf);
     // GEMESSENE Populations-Folge (belegt, deterministisch).
