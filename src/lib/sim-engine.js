@@ -173,7 +173,13 @@ const PATS = {
   Line4: [[0, 0], [0, 1], [0, 2], [0, 3]],
   Star: [[0, 2], [1, 1], [1, 2], [1, 3], [2, 0], [2, 2], [2, 4], [3, 1], [3, 2], [3, 3], [4, 2]],
   Pentagon: [[0, 1], [1, 0], [1, 1], [1, 2], [2, 1]],
-  BaysGlider: [[0, 0], [0, 1], [1, 0], [1, 1], [2, 1]],
+  // KEIN Glider: dieses 5-Zell-Muster wurde frueher faelschlich "BaysGlider"
+  // genannt. Gemessen (tests/unit/ca-invariants.test.js) zerfaellt es unter
+  // H:B2/S35 (Bays) (Pop 5->7->3->2) und wird ab Gen 5 ein Periode-2-Oszillator
+  // -- es gleitet NICHT. Bays' echter Periode-5-Glider existiert auf dieser
+  // Topologie theoretisch (Bays, Complex Systems 15(3):245, 2005), ist aber NICHT
+  // dieses Muster. Ehrlich umbenannt -> Issue #99.
+  BaysP2Blob: [[0, 0], [0, 1], [1, 0], [1, 1], [2, 1]],
 };
 
 const AXIOMS = [
