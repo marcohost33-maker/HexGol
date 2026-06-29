@@ -8,3 +8,13 @@
 rules:
   impostor-commit:
     disable: true
+  # [2026-06-29] artipacked intentionally accepted for update-snapshots.yml:
+  # that job pushes refreshed visual baselines back to the branch and therefore
+  # MUST keep persist-credentials TRUE (the in-step comment documents the WHY).
+  # Moved here from an inline `# zizmor: ignore[artipacked]` so the action line
+  # stays clean and Dependabot's version-comment bumps no longer go stale.
+  # Per docs.zizmor.sh/configuration the ignore key is a base filename
+  # (optionally :line:col), not a path glob.
+  artipacked:
+    ignore:
+      - update-snapshots.yml
