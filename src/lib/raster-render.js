@@ -13,6 +13,10 @@ import {
   ALLCOL, COLA, BG_PACK, packRGB, parsePack,
   G_AA, G_Aa, G_aa, geneColor, collatzColor, rvalColor,
 } from "./sim-engine.js";
+// F10-ext: CVD-safe Familien/cividis fuer den Raster-Fast-Path (winzige Zellen).
+import { familyColor, GENE_CVD, cividisCss } from "./cell-style.js";
+// Hex (#RRGGBB) -> gepacktes RGBA-little-endian (parsePack kann nur "rgb(...)").
+const hexPack = (h) => { const n = String(h).replace("#", ""); return packRGB(parseInt(n.slice(0, 2), 16), parseInt(n.slice(2, 4), 16), parseInt(n.slice(4, 6), 16)); };
 
 /**
  * Fuellt d32 (Wc*Hc Uint32-Pixel) mit dem Raster-Fast-Path.
@@ -37,17 +41,21 @@ export function renderRaster(d32, p) {
     if (y0 < 0) y0 = 0; if (y1 >= Hc) y1 = Hc - 1; if (x0 < 0) x0 = 0; if (x1 >= Wc) x1 = Wc - 1;
     for (let yy = y0; yy <= y1; yy++) { const row = yy * Wc; for (let xx = x0; xx <= x1; xx++) d32[row + xx] = packed; }
   };
+  const cvd = !!p.cvd; // F10-ext: opt-in CVD-safe Faerbung (Default OFF = bytegleich)
   if (mode === "rval") {
     const rule = p.rule, fld = p.fld, fim = p.fim;
     if (rule === "genes") {
-      const gp = { [G_AA]: parsePack(geneColor(G_AA)), [G_Aa]: parsePack(geneColor(G_Aa)), [G_aa]: parsePack(geneColor(G_aa)) };
+      const gp = cvd
+        ? { [G_AA]: hexPack(GENE_CVD.AA), [G_Aa]: hexPack(GENE_CVD.Aa), [G_aa]: hexPack(GENE_CVD.aa) }
+        : { [G_AA]: parsePack(geneColor(G_AA)), [G_Aa]: parsePack(geneColor(G_Aa)), [G_aa]: parsePack(geneColor(G_aa)) };
       for (let i = 0; i < fld.length; i++) { const gv = fld[i]; if (!gv || !gp[gv]) continue; plot(Math.round((CX[i] * s + tx) * dpr), Math.round((CY[i] * s + ty) * dpr), gp[gv]); }
     } else {
       const BUCKETS = 24; let thresh = 0, vmax = 0;
       if (rule === "snow") thresh = 0.02; else if (rule === "water") thresh = 0.01; else if (rule === "hqst") thresh = 1e-5; else thresh = 1.0001;
       if (rule === "hqst") { for (let i = 0; i < fld.length; i++) { const pr = fld[i] * fld[i] + fim[i] * fim[i]; if (pr > vmax) vmax = pr; } if (vmax < 1e-12) vmax = 1; }
       const bcol = new Array(BUCKETS);
-      for (let bi = 0; bi < BUCKETS; bi++) { let repV; if (rule === "collatz") repV = Math.pow(2, (bi + 0.5) / BUCKETS * 30); else if (rule === "hqst") repV = (bi + 0.5) / BUCKETS * vmax; else repV = (bi + 0.5) / (BUCKETS - 1); bcol[bi] = parsePack(rule === "collatz" ? collatzColor(repV) : rvalColor(repV, rule)); }
+      // CVD: cividis ueber die wert-geordnete Bucket-Position (graustufenlesbar).
+      for (let bi = 0; bi < BUCKETS; bi++) { let repV; if (rule === "collatz") repV = Math.pow(2, (bi + 0.5) / BUCKETS * 30); else if (rule === "hqst") repV = (bi + 0.5) / BUCKETS * vmax; else repV = (bi + 0.5) / (BUCKETS - 1); bcol[bi] = cvd ? parsePack(cividisCss(bi / (BUCKETS - 1))) : parsePack(rule === "collatz" ? collatzColor(repV) : rvalColor(repV, rule)); }
       for (let i = 0; i < fld.length; i++) {
         let v = fld[i];
         if (rule === "hqst") { v = fld[i] * fld[i] + fim[i] * fim[i]; if (v < thresh) continue; }
@@ -62,7 +70,11 @@ export function renderRaster(d32, p) {
     }
   } else {
     const col = p.col, packed = {};
-    for (const cc of ALLCOL) { const a = COLA[cc]; packed[cc] = packRGB(a[0], a[1], a[2]); }
+    // F10-ext: bei winzigen Zellen (Raster) traegt FARBE die Spezies-Familie (6
+    // CVD-sichere Toene); die Lebenszyklus-FORM ist hier ohnehin sub-pixel (Spec
+    // §3.4: exakte Spezies via Tap). Default OFF -> volle 12 Itten-Toene wie bisher.
+    if (cvd) { for (const cc of ALLCOL) packed[cc] = hexPack(familyColor(cc)); }
+    else { for (const cc of ALLCOL) { const a = COLA[cc]; packed[cc] = packRGB(a[0], a[1], a[2]); } }
     for (let i = 0; i < col.length; i++) { const cc = col[i]; if (!cc) continue; plot(Math.round((CX[i] * s + tx) * dpr), Math.round((CY[i] * s + ty) * dpr), packed[cc]); }
   }
 }

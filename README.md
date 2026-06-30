@@ -398,29 +398,44 @@ bare `pxR` threshold let narrow phones (≤375px) raster the default grid into
 *squares* (hex-cells-load-bearing; guarded by `tests/unit/raster-gate.test.js` +
 `tests/e2e/mobile-hexshape.spec.ts`).
 
-**Colorblind-safe encoding (F10, opt-in).** A *Farbenblind-sicher* checkbox
-(under **DARSTELLUNG**, default **off**) re-encodes the boolean Game-of-Life cell
-states so they no longer rely on colour alone (WCAG 1.4.1). When **off** the
-render is **byte-identical** to the default (all visual baselines stay valid).
-When **on**, the four boolean states get a CVD-safe Okabe-Ito colour **plus a
-form cue**, so they stay distinguishable in a greyscale (deuteranopia-proxy)
-test:
+**Colorblind-safe encoding (F10 + F10-ext, opt-in).** A *Farbenblind-sicher*
+checkbox (under **DARSTELLUNG**, default **off**) re-encodes the render so it no
+longer relies on colour alone (WCAG 1.4.1). When **off** the render is
+**byte-identical** to the default (all visual baselines stay valid). When **on**:
 
-| State | Meaning | Encoding |
-|-------|---------|----------|
-| Survivor | alive, was alive last gen | full **blue** fill `#0072B2` |
-| Newborn  | just born this generation | **orange** fill `#E69F00` + central **hole** |
-| Dying    | was alive, now a decay ghost | **ring/outline** only `#CC79A7` (no fill) |
-| Dead     | empty | thin line (unchanged) |
+*Species (boolean Game-of-Life) — orthogonal two-channel design.* The 12 Itten
+species keep their identity instead of collapsing: **colour = species family**
+(6 CVD-safe Okabe-Ito hues, survives to ~2px) and **form = lifecycle** (survives
+greyscale). 6 × 4 = 24 CVD-safe combinations.
 
-The colour/form choice lives in the pure, unit-tested `cellStyle(state, cvdMode)`
-(`src/lib/cell-style.js`, oracle `tests/unit/cell-style.test.js`) using the exact
-corrected Okabe-Ito palette. The toggle works in **both** render paths — the
-main-thread `draw()` and the worker (`src/lib/hex-render.js`, state pushed via the
-worker `config`/`init` message). It persists in `localStorage` (`golhex_cvd_v1`).
-Scope: the boolean cellular-automaton states. The real-valued physics gradients
-(snow/water/HQST/collatz) and the sub-pixel raster path are **not** re-encoded yet
-(form cues are not resolvable at sub-pixel cell sizes) — deferred as a follow-up.
+| Lifecycle (form) | Encoding | Species family (colour) | Okabe-Ito |
+|---|---|---|---|
+| Survivor | full fill | red family (ids 1-2) | sky-blue `#56B4E9` * |
+| Newborn  | fill + central **hole** | orange (3-4) | `#E69F00` |
+| Dying    | **ring/outline** only, in the real last-known family | yellow (5-6) | `#F0E442` |
+| Dead     | thin line (unchanged) | green (7-8) | `#009E73` |
+| | | blue (9-10) | `#0072B2` |
+| | | violet (11-12) | `#CC79A7` |
+
+\* family 0 uses sky-blue (not vermillion) for a wider deuteranopia gap. The exact
+12th bit (member A/B inside a family) shows as a **corner glyph** above ~10px cell
+size and is always available via **inspect-on-tap/hover** (exact species name + hue).
+Below ~3px the form cue degrades gracefully to colour-only (`formParams(pxR)`).
+
+*Physics gradients (snow / water / HQST / collatz)* now use **cividis** (Nuñez,
+Anderton & Renslow 2018) — a CVD-optimised colormap whose **luminance is
+monotonic**, so the field value is readable even in full greyscale. The discrete
+Mendel genotype field uses three pairwise CVD-distinct Okabe-Ito tones.
+
+The colour/form/colormap logic lives in the pure, unit-tested `cell-style.js`
+(`familyOf`, `formParams`, `cividisRGB`, `GENE_CVD`; oracles
+`tests/unit/cvd-validation.test.js` + `cell-style.test.js`, incl. WCAG 1.4.11
+≥3:1 contrast and Machado-2009 pairwise ΔE > 10 for all six families). It works in
+**all** render paths — main-thread `draw()`, the worker (`src/lib/hex-render.js`)
+and the sub-pixel raster fast-path (`src/lib/raster-render.js`, family colour only,
+exact species via tap) — and persists in `localStorage` (`golhex_cvd_v1`). Worker
+note: the worker dying-ring uses the neutral family (no cross-frame last-live
+buffer there); the main thread carries the true last-known family.
 
 **OffscreenCanvas worker (Stufe 1, opt-in).** A *Worker (Beta)* toggle (visible
 only when the browser supports `OffscreenCanvas` + `transferControlToOffscreen` +
