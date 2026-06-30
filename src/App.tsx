@@ -18,7 +18,11 @@ import ConwayIntro, { introSeen } from "./lib/ConwayIntro.jsx"; // Bildungs-Intr
 import { renderRaster } from "./lib/raster-render.js"; // geteilter Raster-Pfad (Worker + Main)
 import { supportsOffscreenWorker } from "./lib/worker-support.js"; // Feature-Detection (fail-closed)
 import { shouldStartPan, decideCloseAction, usesRasterPath, wheelSelectionEffect, WHEEL_ERASE, clampWheelCenter } from "./lib/ui-gestures.js"; // pure UI-Entscheider (Pan-Hit-Test + Schliess-Dispatch + HEX-Render-Gate + Farbrad-Wahl + Rad-Clamp)
-import { CVD_STYLE, OKABE_ITO } from "./lib/cell-style.js"; // F10: reine CVD-safe Zellstil-Wahl (Okabe-Ito + Form-Cue)
+import {
+  CVD_STYLE, OKABE_ITO,
+  SPECIES_FAMILY, familyOf, familyColor, memberOf, DYING_NEUTRAL,
+  formParams, GLYPH_MIN_PX, GENE_CVD, cividisCss,
+} from "./lib/cell-style.js"; // F10/F10-ext: reine CVD-safe Zellstil-Wahl (Okabe-Ito Familien + Form-Cue + cividis Physik)
 // v33 PR-C: Spielstand-Speichern (IndexedDB + Datei-Export/Import + Urzustand).
 import {
   serializeSave, deserializeSave, makeOriginSnapshot, shouldCaptureOrigin,
@@ -485,6 +489,11 @@ export default function GolHex() {
   const [cvdMode, setCvdMode] = useState(() => {
     try { return localStorage.getItem("golhex_cvd_v1") === "1"; } catch { return false; }
   });
+  // F10-ext (#97 Tier-C): Inspect-on-Tap/Hover -> exakte Spezies (das 12. Bit, das
+  // die 6 Familien nicht aufloesen). null = kein Readout. Desktop: reiner Hover;
+  // Touch: Tap (kein Hover). Nur im CVD-Modus + life sichtbar.
+  const [inspect, setInspect] = useState(null);
+  const lastInspectIdxRef = useRef(-1);
   const [brush, setBrush] = useState("cycle"); // cycle | CR | CB | CY | erase
   // AP-3: Long-Press-Farbrad. Hold ~500 ms ohne Bewegung > Touch-Slop oeffnet ein
   // radiales 12-Farb-Rad um den Druckpunkt; Auswahl faerbt die Zelle SOFORT und
@@ -614,6 +623,11 @@ export default function GolHex() {
   const stepDirtyRef = useRef(false);
   const prevColorRef = useRef(new Uint8Array(N));
   const prevGhostRef = useRef(new Uint8Array(N)); // Gedaechtnis der Geister-Ebene
+  // F10-ext (#97 Marco-Entscheid 3): persistente "letzte lebende Farbe" je Zelle.
+  // Anders als prevColorRef (wird jeden Frame auf den Ist-Zustand gesetzt -> nach
+  // dem 1. Sterbe-Frame 0) behaelt dieser Puffer die letzte Spezies-Farbe ueber die
+  // GESAMTE Geister-Lebensdauer, damit der Dying-Ring die echte Familie traegt.
+  const lastLiveColorRef = useRef(new Uint8Array(N));
   const statsRef = useRef({ births: 0, deaths: 0 });
   const histRef = useRef([]);
   // Feature 1: Ring-Buffer (Pop + Aktiv) der letzten ~200 Generationen fuer die
@@ -669,6 +683,8 @@ export default function GolHex() {
     if (workerActiveRef.current && workerRef.current) {
       try { workerRef.current.postMessage({ type: "config", cvd: cvdMode }); } catch { /* ignore */ }
     }
+    // CVD aus -> Inspect-Readout schliessen (gehoert nur zum CVD-Modus).
+    if (!cvdMode) { setInspect(null); lastInspectIdxRef.current = -1; }
   }, [cvdMode]);
 
   // Grid-Wechsel: Buffer + Geometrie neu
@@ -677,6 +693,7 @@ export default function GolHex() {
     nColorRef.current = new Uint8Array(N); nGhostRef.current = new Uint8Array(N); nAgeRef.current = new Uint16Array(N);
     prevColorRef.current = new Uint8Array(N); stepDirtyRef.current = false;
     prevGhostRef.current = new Uint8Array(N);
+    lastLiveColorRef.current = new Uint8Array(N);
     fieldRef.current = new Float32Array(N); fieldImRef.current = new Float32Array(N);
     fBufRef.current = new Float32Array(N); fBufImRef.current = new Float32Array(N);
     fRecRef.current = new Uint8Array(N);
@@ -1143,6 +1160,7 @@ export default function GolHex() {
       rule: rvalRef.current,
       col: colorRef.current,
       fld: fieldRef.current, fim: fieldImRef.current,
+      cvd: cvdRef.current, // F10-ext: CVD-safe Familien/cividis auch im Raster-Pfad
     });
     ctx.putImageData(img, 0, 0);
     ctx.setTransform(dpr * s, 0, 0, dpr * s, dpr * tx, dpr * ty);
@@ -1281,7 +1299,14 @@ export default function GolHex() {
       // Performance: Zellen nach Farbe buendeln und je Farbe EIN fill() (Batching).
       // Discrete Regeln (collatz/genes) haben endliche Farbmengen -> echtes Batching.
       if (rule === "genes") {
-        for (const [g, col] of [[G_AA, geneColor(G_AA)], [G_Aa, geneColor(G_Aa)], [G_aa, geneColor(G_aa)]]) {
+        // F10-ext: im CVD-Modus die 3 Genotypen CVD-sicher (paarweise Machado-distinkt)
+        // statt rot/orange/blau, sonst Standard-Genfarben (Default OFF = unveraendert).
+        const cvd = cvdRef.current;
+        for (const [g, col] of [
+          [G_AA, cvd ? GENE_CVD.AA : geneColor(G_AA)],
+          [G_Aa, cvd ? GENE_CVD.Aa : geneColor(G_Aa)],
+          [G_aa, cvd ? GENE_CVD.aa : geneColor(G_aa)],
+        ]) {
           const p = new Path2D(); let any = false;
           for (let i = 0; i < fld.length; i++) { if (fld[i] === g) { addHexIdx(p, i, hr * 0.92); any = true; } }
           if (any) { ctx.fillStyle = col; ctx.fill(p); }
@@ -1318,7 +1343,12 @@ export default function GolHex() {
         if (rule === "collatz") repV = Math.pow(2, (bi + 0.5) / BUCKETS * 30);
         else if (rule === "hqst") repV = (bi + 0.5) / BUCKETS * vmax;
         else repV = (bi + 0.5) / (BUCKETS - 1);
-        ctx.fillStyle = rule === "collatz" ? collatzColor(repV) : rvalColor(repV, rule);
+        // F10-ext (#101-3): im CVD-Modus die kontinuierlichen Physik-Felder ueber
+        // cividis (perzeptuell uniform + MONOTONE Luminanz -> graustufenlesbar,
+        // CVD-sicher) statt der Standard-Rampen. t = wert-geordnete Bucket-Position
+        // 0..1 (monoton im Feldwert, regelunabhaengig). Default OFF = unveraendert.
+        if (cvdRef.current) ctx.fillStyle = cividisCss(bi / (BUCKETS - 1));
+        else ctx.fillStyle = rule === "collatz" ? collatzColor(repV) : rvalColor(repV, rule);
         ctx.fill(bk);
       }
       drawFrame(ctx, s);
@@ -1334,23 +1364,65 @@ export default function GolHex() {
     // Batching pro Zustand (je ein Path2D), Reihenfolge: Dying-Ringe (Untergrund) ->
     // Survivor-Fuellung -> Newborn-Fuellung -> Newborn-Loecher (Hintergrund-Punkt).
     if (simRef.current === "life" && cvdRef.current) {
+      // F10-ext (#97): ORTHOGONALE Zwei-Kanal-Kodierung statt 12->4-Kollaps:
+      //   FARBE  = Spezies-Familie (6 Okabe-Ito, familyOf) -> ueberlebt bis ~2px.
+      //   FORM   = Lebenszyklus (voll/Loch/Ring) -> ueberlebt Graustufe.
+      // #101-1: formParams(pxR) degradiert Loch/Ring-Staerke grazioes, statt sie
+      // sub-pixel kollabieren zu lassen. Dying-Ring traegt die echte letzte Familie
+      // (lastLiveColorRef, Marco-Entscheid 3). Tier-A-Eck-Glyph nur ab GLYPH_MIN_PX.
       const col = colorRef.current, gh = ghostRef.current, age = ageRef.current;
-      const survP = new Path2D(), newbP = new Path2D(), holeP = new Path2D(), ringP = new Path2D();
-      let anyS = false, anyN = false, anyD = false;
+      const lastCol = lastLiveColorRef.current;
+      const fp = formParams(pxR);
+      const survByFam = [], newbByFam = [];
+      for (let f = 0; f < 6; f++) { survByFam[f] = new Path2D(); newbByFam[f] = new Path2D(); }
+      const holeP = new Path2D();
+      const ringByFam = []; for (let f = 0; f < 6; f++) ringByFam[f] = new Path2D();
+      const ringNeutralP = new Path2D();
+      const survAny = [false, false, false, false, false, false];
+      const newbAny = [false, false, false, false, false, false];
+      const ringAny = [false, false, false, false, false, false];
+      let anyNeutral = false, anyHole = false;
+      const drawGlyph = pxR >= GLYPH_MIN_PX;
+      const glyphA = [], glyphB = []; // {x,y} der Live-Zellen mit Member A bzw. B
+      const padHr2 = padHr, wHr2 = wHr, vHr2 = vHr; // Zentrums-Geometrie (s. addHexIdx)
       for (let i = 0; i < col.length; i++) {
-        if (col[i] !== 0) {
-          if (age[i] > 1) { addHexIdx(survP, i, hr * 0.92); anyS = true; }
-          else { addHexIdx(newbP, i, hr * 0.92); addHexIdx(holeP, i, hr * 0.34); anyN = true; }
-        } else if (gh[i]) { addHexIdx(ringP, i, hr * 0.92); anyD = true; }
+        const cc = col[i];
+        if (cc !== 0) {
+          lastCol[i] = cc; // letzte lebende Familie merken (fuer kuenftige Dying-Ringe)
+          const f = familyOf(cc);
+          if (age[i] > 1) { addHexIdx(survByFam[f], i, hr * 0.92); survAny[f] = true; }
+          else {
+            addHexIdx(newbByFam[f], i, hr * 0.92); newbAny[f] = true;
+            if (fp.holeScale > 0) { addHexIdx(holeP, i, hr * fp.holeScale); anyHole = true; }
+          }
+          if (drawGlyph) {
+            const row = (i / c0) | 0, c = i - row * c0;
+            const x = padHr2 + wHr2 * (c + ((row & 1) ? 0.5 : 0)), y = padHr2 + vHr2 * row;
+            (memberOf(cc) === 0 ? glyphA : glyphB).push(x, y);
+          }
+        } else if (gh[i]) {
+          const f = familyOf(lastCol[i]); // echte letzte Familie (ueber Ghost-Lebensdauer)
+          if (f >= 0) { addHexIdx(ringByFam[f], i, hr * fp.ringScale); ringAny[f] = true; }
+          else { addHexIdx(ringNeutralP, i, hr * fp.ringScale); anyNeutral = true; }
+        }
       }
-      // Dying: nur Ring/Outline (kein Fill) -> Form-Cue.
-      if (anyD) { ctx.lineWidth = Math.max(0.6, 1.6 / s); ctx.strokeStyle = CVD_STYLE.dying.stroke; ctx.stroke(ringP); }
-      // Survivor: Vollfuellung blau.
-      if (anyS) { ctx.fillStyle = CVD_STYLE.survivor.fill; ctx.fill(survP); }
-      // Newborn: Fuellung orange + zentrales Loch (Hintergrund) als Form-Cue.
-      if (anyN) {
-        ctx.fillStyle = CVD_STYLE.newborn.fill; ctx.fill(newbP);
-        ctx.fillStyle = T.bg; ctx.fill(holeP);
+      // Dying-Ringe (Untergrund) — je Familie eingefaerbt, neutral als Fallback.
+      ctx.lineWidth = Math.max(0.6, fp.ringWidthK / s);
+      for (let f = 0; f < 6; f++) if (ringAny[f]) { ctx.strokeStyle = SPECIES_FAMILY[f]; ctx.stroke(ringByFam[f]); }
+      if (anyNeutral) { ctx.strokeStyle = DYING_NEUTRAL; ctx.stroke(ringNeutralP); }
+      // Survivor-Vollfuellung je Familie.
+      for (let f = 0; f < 6; f++) if (survAny[f]) { ctx.fillStyle = SPECIES_FAMILY[f]; ctx.fill(survByFam[f]); }
+      // Newborn-Fuellung je Familie + gemeinsames Hintergrund-Loch (Form-Cue).
+      for (let f = 0; f < 6; f++) if (newbAny[f]) { ctx.fillStyle = SPECIES_FAMILY[f]; ctx.fill(newbByFam[f]); }
+      if (anyHole) { ctx.fillStyle = T.bg; ctx.fill(holeP); }
+      // Tier-A-Eck-Glyph (nur ab GLYPH_MIN_PX): 1 Punkt = Member A, 2 Punkte = B.
+      // Loest die vollen 12 Spezies auf, wenn genuegend Zoom/Zell-Groesse da ist.
+      if (drawGlyph && (glyphA.length || glyphB.length)) {
+        const gr = Math.max(0.8 / s, hr * 0.11), off = hr * 0.5, gap = hr * 0.22;
+        ctx.fillStyle = T.bg;
+        const dot = (x, y) => { ctx.beginPath(); ctx.arc(x, y, gr, 0, PI2); ctx.fill(); };
+        for (let k = 0; k < glyphA.length; k += 2) dot(glyphA[k] + off, glyphA[k + 1] - off);
+        for (let k = 0; k < glyphB.length; k += 2) { dot(glyphB[k] + off - gap, glyphB[k + 1] - off); dot(glyphB[k] + off + gap, glyphB[k + 1] - off); }
       }
       drawFrame(ctx, s);
       // Diff-Gedaechtnis konsistent halten (auch wenn der Diff-Pfad im CVD-Modus
@@ -1713,6 +1785,29 @@ export default function GolHex() {
     const { s, tx, ty } = viewRef.current;
     return { wx: (cx - rect.left - tx) / s, wy: (cy - rect.top - ty) / s };
   };
+  // F10-ext (#97 Tier-C): die exakte Spezies einer getippten/ueberfahrenen Zelle
+  // bestimmen und als Readout setzen. Nur CVD + life. Throttle ueber die Zell-ID
+  // (Hover ueber dieselbe Zelle loest kein Re-Render aus -> kein State-Sturm).
+  const inspectCellAt = (clientX, clientY) => {
+    if (!cvdRef.current || simRef.current !== "life" || !canvasRef.current) return;
+    const { wx, wy } = toWorld(clientX, clientY);
+    const idx = pixelToOddR(wx, wy, HR, R, C);
+    if (idx < 0 || idx >= colorRef.current.length) {
+      if (lastInspectIdxRef.current !== -1) { lastInspectIdxRef.current = -1; setInspect(null); }
+      return;
+    }
+    if (idx === lastInspectIdxRef.current) return; // gleiche Zelle -> nichts neu rendern
+    lastInspectIdxRef.current = idx;
+    const cid = colorRef.current[idx] | 0;
+    if (cid >= 1 && cid <= 12) {
+      setInspect({ idx, colorId: cid, name: NAME[cid], family: familyOf(cid), member: memberOf(cid), hueDeg: (cid - 1) * 30, swatch: familyColor(cid) });
+    } else {
+      // tote Zelle: letzte bekannte Familie (Ghost) zeigen, falls vorhanden.
+      const last = lastLiveColorRef.current[idx] | 0;
+      if (last >= 1 && last <= 12) setInspect({ idx, empty: true, name: NAME[last], family: familyOf(last), swatch: familyColor(last) });
+      else setInspect({ idx, empty: true });
+    }
+  };
   const pushUndo = () => {
     if (simRef.current === "rval") {
       undoRef.current.push({ rval: true, fld: fieldRef.current.slice(), fim: fieldImRef.current.slice() });
@@ -1869,6 +1964,10 @@ export default function GolHex() {
     }
   };
   const onMove = (e) => {
+    // F10-ext Inspect-on-Hover (Desktop): reiner Hover (kein Knopf) -> Spezies-
+    // Readout, nicht-destruktiv. Touch hat keinen Hover -> Inspect via Tap (onUp).
+    // Hover hat keinen ptrs-Eintrag -> faellt unten ohnehin durch den Guard.
+    if (cvdRef.current && simRef.current === "life" && e.buttons === 0 && !wheelRef.current) inspectCellAt(e.clientX, e.clientY);
     if (!ptrs.current.has(e.pointerId)) return;
     const prev = ptrs.current.get(e.pointerId); ptrs.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
     // Rad offen: laufende Pointer-Moves auf der Leinwand ignorieren (das Overlay
@@ -1943,6 +2042,10 @@ export default function GolHex() {
     if (was === 1) {
       if (ges.current.mode === "maybe-tap" && ges.current.moved <= 6) {
         pushUndo(); const { wx, wy } = toWorld(e.clientX, e.clientY); paintCell(pixelToOddR(wx, wy, HR, R, C), true); updatePop();
+        // F10-ext Inspect-on-Tap (Touch + Maus): nach dem Setzen die Spezies der
+        // getippten Zelle anzeigen (Ist-Zustand inkl. eben Gesetztem). lastInspectIdx
+        // zuruecksetzen, damit dieselbe Zelle erneut ein Readout erzwingt.
+        if (cvdRef.current && simRef.current === "life") { lastInspectIdxRef.current = -1; inspectCellAt(e.clientX, e.clientY); }
       } else if (ges.current.mode === "paint") updatePop();
     }
     ges.current.mode = ptrs.current.size === 1 ? "maybe-tap" : "";
@@ -3276,8 +3379,8 @@ export default function GolHex() {
         </label>
         <div style={{ fontSize: 10, color: T.sub, opacity: 0.7, fontFamily: MONO, lineHeight: 1.4, marginTop: 4 }}>
           {cvdMode
-            ? `Zellzustaende form-redundant + CVD-sicher (Okabe-Ito): Survivor = blau ${OKABE_ITO.blue} voll, Newborn = orange ${OKABE_ITO.orange} mit Loch, Dying = Ring ${OKABE_ITO.reddishPurple}. Nie Farbe allein (WCAG 1.4.1). Gilt fuer den booleschen Modus (Game of Life).`
-            : "Aus: Standard-Farbdarstellung (12 Itten-Toene). Anschalten fuer eine farbenblind-sichere, form-redundante Kodierung der Zellzustaende."}
+            ? `Spezies = 6 CVD-sichere Farb-Familien (Okabe-Ito), Lebenszyklus = Form (voll / Loch / Ring). Orthogonal: Farbe ueberlebt bis ~2px, Form ueberlebt Graustufe — nie Farbe allein (WCAG 1.4.1). Eck-Glyph loest ab genug Zoom die vollen 12 Spezies auf; Antippen zeigt die exakte Spezies. Physik-Modi (Schnee/Wasser/HQST/Collatz) nutzen cividis (graustufenlesbar), Gene 3 CVD-sichere Toene.`
+            : "Aus: Standard-Farbdarstellung (12 Itten-Toene). Anschalten fuer eine farbenblind-sichere Kodierung: Spezies-Familie (Farbe) + Lebenszyklus (Form) + CVD-sichere Physik-Verlaeufe (cividis)."}
         </div>
       </div>
 
@@ -3904,6 +4007,25 @@ export default function GolHex() {
           style={{ position: "absolute", width: 1, height: 1, padding: 0, margin: -1, overflow: "hidden", clip: "rect(0 0 0 0)", clipPath: "inset(50%)", whiteSpace: "nowrap", border: 0 }}>
           {gridLabel}
         </div>
+        {/* F10-ext (#97 Tier-C): Inspect-Readout. Zeigt die EXAKTE Spezies (das 12.
+            Bit, das die 6 Familien nicht aufloesen) der getippten/ueberfahrenen Zelle.
+            Nur im CVD-Modus + life. Schliessen per × (Coworkerz Zurueck/Schliessen). */}
+        {cvdMode && inspect && simMode === "life" && (
+          <div data-testid="cvd-inspect" role="status" aria-live="polite"
+            style={{ position: "absolute", top: 8, left: 8, zIndex: 6, display: "flex", alignItems: "center", gap: 8,
+              padding: "6px 8px", borderRadius: 9, border: `1px solid ${T.accent}`, background: "rgba(2,6,8,0.92)",
+              fontFamily: MONO, fontSize: 11, color: T.text, maxWidth: "min(78%, 320px)", boxShadow: "0 2px 10px rgba(0,0,0,0.4)" }}>
+            <span aria-hidden="true" style={{ width: 14, height: 14, borderRadius: 3, flexShrink: 0,
+              background: inspect.swatch || "transparent", border: inspect.swatch ? "none" : `1px dashed ${T.sub}` }} />
+            <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {inspect.empty
+                ? (inspect.name ? `Leer · zuletzt ${inspect.name}` : "Leere Zelle")
+                : `${inspect.name} · Familie ${inspect.family + 1}/6 · ${inspect.member === 0 ? "A" : "B"} · ${inspect.hueDeg}°`}
+            </span>
+            <button onClick={() => { setInspect(null); lastInspectIdxRef.current = -1; }} aria-label="Inspect schliessen" title="Schliessen"
+              style={{ marginLeft: "auto", width: 22, height: 22, flexShrink: 0, borderRadius: 6, border: `1px solid ${T.border}`, background: "transparent", color: T.sub, cursor: "pointer", fontSize: 13, lineHeight: 1 }}>&times;</button>
+          </div>
+        )}
         {/* v33.0.2: Rahmen-Umriss-Overlay. Liegt über der Feld-Canvas, leitet keine
             Pointer-Events ab (transparent). Nötig, weil im Worker-Modus die Feld-Canvas
             an den Worker übergeben ist und der Worker den dünnen Umriss nicht zeichnet.

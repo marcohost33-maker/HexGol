@@ -36,7 +36,10 @@ import {
   ALLCOL, COLA, COLHEX, PI3,
   G_AA, G_Aa, G_aa, geneColor, collatzColor, rvalColor,
 } from "./sim-engine.js";
-import { CVD_STYLE } from "./cell-style.js"; // F10: CVD-safe Stil-Wahl (shared mit App.tsx)
+import {
+  SPECIES_FAMILY, familyOf, DYING_NEUTRAL,
+  formParams, GENE_CVD, cividisCss,
+} from "./cell-style.js"; // F10/F10-ext: CVD-safe Stil-Wahl (shared mit App.tsx)
 
 // pointy-top-Hexagon: 6 Ecken bei -PI/2 + k*PI3 (identisch zu App.tsx draw()).
 const COSA = [], SINA = [];
@@ -104,7 +107,12 @@ export function renderHex(ctx, p) {
     const rule = p.rule, fld = p.fld, fim = p.fim;
     if (!P2D) return;
     if (rule === "genes") {
-      for (const [gv, colStr] of [[G_AA, geneColor(G_AA)], [G_Aa, geneColor(G_Aa)], [G_aa, geneColor(G_aa)]]) {
+      // F10-ext: CVD-Modus -> 3 CVD-sichere Genotyp-Toene; sonst Standard.
+      for (const [gv, colStr] of [
+        [G_AA, p.cvd ? GENE_CVD.AA : geneColor(G_AA)],
+        [G_Aa, p.cvd ? GENE_CVD.Aa : geneColor(G_Aa)],
+        [G_aa, p.cvd ? GENE_CVD.aa : geneColor(G_aa)],
+      ]) {
         const path = new P2D(); let any = false;
         for (let i = 0; i < N; i++) { if (fld[i] === gv && visible(i)) { addHex(path, i, hr * 0.92); any = true; } }
         if (any) { ctx.fillStyle = colStr; ctx.fill(path); }
@@ -136,7 +144,9 @@ export function renderHex(ctx, p) {
       if (rule === "collatz") repV = Math.pow(2, (bi + 0.5) / BUCKETS * 30);
       else if (rule === "hqst") repV = (bi + 0.5) / BUCKETS * vmax;
       else repV = (bi + 0.5) / (BUCKETS - 1);
-      ctx.fillStyle = rule === "collatz" ? collatzColor(repV) : rvalColor(repV, rule);
+      // F10-ext: CVD -> cividis (graustufenlesbar) ueber wert-geordnete Position.
+      if (p.cvd) ctx.fillStyle = cividisCss(bi / (BUCKETS - 1));
+      else ctx.fillStyle = rule === "collatz" ? collatzColor(repV) : rvalColor(repV, rule);
       ctx.fill(bk);
     }
     return;
@@ -156,25 +166,36 @@ export function renderHex(ctx, p) {
   // (Untergrund) -> Survivor-Fuellung -> Newborn-Fuellung -> Newborn-Loecher.
   // Radien identisch zum Main-Thread: Fuellung hr*0.92, Loch hr*0.34.
   if (p.cvd) {
+    // F10-ext (#97): wie App.tsx draw() — 6 Spezies-Familien (Farbe) x Lebenszyklus
+    // (Form). #101-1: formParams(pxR) degradiert Loch/Ring grazioes. Einschraenkung
+    // ggue. Main-Thread: der Worker fuehrt KEINEN persistenten last-live-Puffer, daher
+    // traegt der Dying-Ring hier die NEUTRALE Familie (DYING_NEUTRAL) statt der echten
+    // letzten Spezies — bei den grossen Gittern, fuer die der Worker zustaendig ist,
+    // ist der Ring ohnehin sub-pixel. Survivor/Newborn (Farbe vorhanden) voll-familiar.
     const age = p.age || null;
-    // Loch-Farbe == Clear-Farbe dieses Pfads (oben: p.bgFill || "#0a0e0d"), damit
-    // das Loch im Worker-Pfad ein echtes "Loch" (= Hintergrund) ist, nicht ein Fleck.
     const bg = (p.bgFill || "#0a0e0d");
-    const survP = new P2D(), newbP = new P2D(), holeP = new P2D(), ringP = new P2D();
-    let anyS = false, anyN = false, anyD = false;
+    const fp = formParams(pxR);
+    const survByFam = [], newbByFam = [];
+    for (let f = 0; f < 6; f++) { survByFam[f] = new P2D(); newbByFam[f] = new P2D(); }
+    const holeP = new P2D(), ringP = new P2D();
+    const sAny = [0, 0, 0, 0, 0, 0], nAny = [0, 0, 0, 0, 0, 0];
+    let anyHole = false, anyD = false;
     for (let i = 0; i < N; i++) {
       if (!visible(i)) continue;
-      if (col[i] !== 0) {
-        if (age && age[i] > 1) { addHex(survP, i, hr * 0.92); anyS = true; }
-        else { addHex(newbP, i, hr * 0.92); addHex(holeP, i, hr * 0.34); anyN = true; }
-      } else if (gh && gh[i]) { addHex(ringP, i, hr * 0.92); anyD = true; }
+      const cc = col[i];
+      if (cc !== 0) {
+        const f = familyOf(cc);
+        if (age && age[i] > 1) { addHex(survByFam[f], i, hr * 0.92); sAny[f] = 1; }
+        else {
+          addHex(newbByFam[f], i, hr * 0.92); nAny[f] = 1;
+          if (fp.holeScale > 0) { addHex(holeP, i, hr * fp.holeScale); anyHole = true; }
+        }
+      } else if (gh && gh[i]) { addHex(ringP, i, hr * fp.ringScale); anyD = true; }
     }
-    if (anyD) { ctx.lineWidth = Math.max(0.6, 1.6 / s); ctx.strokeStyle = CVD_STYLE.dying.stroke; ctx.stroke(ringP); }
-    if (anyS) { ctx.fillStyle = CVD_STYLE.survivor.fill; ctx.fill(survP); }
-    if (anyN) {
-      ctx.fillStyle = CVD_STYLE.newborn.fill; ctx.fill(newbP);
-      ctx.fillStyle = bg; ctx.fill(holeP);
-    }
+    if (anyD) { ctx.lineWidth = Math.max(0.6, fp.ringWidthK / s); ctx.strokeStyle = DYING_NEUTRAL; ctx.stroke(ringP); }
+    for (let f = 0; f < 6; f++) if (sAny[f]) { ctx.fillStyle = SPECIES_FAMILY[f]; ctx.fill(survByFam[f]); }
+    for (let f = 0; f < 6; f++) if (nAny[f]) { ctx.fillStyle = SPECIES_FAMILY[f]; ctx.fill(newbByFam[f]); }
+    if (anyHole) { ctx.fillStyle = bg; ctx.fill(holeP); }
     return;
   }
 

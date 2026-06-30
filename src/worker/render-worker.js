@@ -276,7 +276,7 @@ function renderToCanvas() {
     const img = renderToCanvas._img, d32 = new Uint32Array(img.data.buffer);
     renderRaster(d32, {
       Wc, Hc, hr, s: view.s, tx: view.tx, ty: view.ty, dpr, CX, CY,
-      mode, rule, col, fld, fim,
+      mode, rule, col, fld, fim, cvd,
     });
     ctx.putImageData(img, 0, 0);
     reportRenderMode("raster");
