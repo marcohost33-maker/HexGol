@@ -11,7 +11,12 @@ const pkg = JSON.parse(
   readFileSync(fileURLToPath(new URL("./package.json", import.meta.url)), "utf8"),
 );
 
+// GitHub Pages project sites are served below /<repo>/ by default. Keep local
+// development at "/", but let the Pages workflow opt into the correct base.
+const base = process.env.VITE_BASE_PATH || (process.env.GITHUB_PAGES === "true" ? "/HexGol/" : "/");
+
 export default defineConfig({
+  base,
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),
   },
