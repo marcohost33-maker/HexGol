@@ -8,7 +8,8 @@ on:
   workflow_dispatch:
 
 # Visual regression runs Playwright against the production build, taking
-# canvas screenshots driven by the window.__TEST__ bridge. Snapshots are
+# canvas screenshots driven through real DOM controls + the <canvas> (no
+# window/__TEST__ bridge — see AGENTS.md "e2e contract"). Snapshots are
 # checked into the repo under tests/e2e/__snapshots__. Diffs cause the job
 # to fail and upload the playwright-report artifact for inspection.
 #
@@ -60,7 +61,7 @@ jobs:
       - name: Build production bundle
         run: npm run build
 
-      - name: Run Playwright (visual + bridge)
+      - name: Run Playwright (visual + DOM-driven e2e)
         run: npx playwright test
         env:
           CI: "true"

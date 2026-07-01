@@ -1,6 +1,10 @@
 import { defineConfig, devices } from "@playwright/test";
 
-// Visual regression + __TEST__ bridge config.
+// Visual regression + DOM-driven e2e config.
+//
+// e2e contract: NO window/__TEST__ bridge. Specs drive the app through real DOM
+// controls (buttons, the size <select>) plus the <canvas> and assert the
+// observable contract (see AGENTS.md "e2e contract").
 //
 // CI determinism is the priority here:
 //   - viewport is locked to 1280x800 for every project so OS scaling does

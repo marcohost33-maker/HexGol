@@ -31,3 +31,41 @@ describe("PWA/mobile manifest assets", () => {
     }
   });
 });
+
+describe("PWA service-worker registration (B1)", () => {
+  const main = readFileSync(resolve(root, "src/main.jsx"), "utf8");
+
+  it("registers public/sw.js from src/main.jsx", () => {
+    expect(main).toMatch(/navigator\.serviceWorker\.register\(/);
+    expect(main).toContain("sw.js");
+  });
+
+  it("registers only in Production and guards the API", () => {
+    expect(main).toContain("import.meta.env.PROD");
+    expect(main).toContain('"serviceWorker" in navigator');
+  });
+
+  it("uses a base-URL-safe scope so root and subpath both work", () => {
+    expect(main).toContain("import.meta.env.BASE_URL");
+    expect(main).toMatch(/scope:\s*base/);
+  });
+});
+
+describe("index.html asset paths are base-URL-safe (B2)", () => {
+  const html = readFileSync(resolve(root, "index.html"), "utf8");
+
+  it("uses %BASE_URL% for manifest + all icon links", () => {
+    for (const asset of [
+      "manifest.webmanifest",
+      "icon.svg",
+      "icon-192.png",
+      "apple-touch-icon.png",
+    ]) {
+      expect(html).toContain(`%BASE_URL%${asset}`);
+    }
+  });
+
+  it("has no absolute-root href for manifest/icon assets", () => {
+    expect(html).not.toMatch(/href="\/(manifest\.webmanifest|icon\.svg|icon-192\.png|apple-touch-icon\.png)"/);
+  });
+});
