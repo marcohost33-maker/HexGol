@@ -208,7 +208,9 @@ def main():
         "gate_fails": fails,
         "verdict": "PASS" if not fails else "FAIL",
     }
-    with open(os.path.join(HERE, "logs", "oracle_summary.json"), "w", encoding="utf-8") as fh:
+    # newline="" so json.dump's "\n" stays LF (consistent with write_csv); avoids a Windows
+    # text-mode CRLF write that git eol=lf would normalise -> checksum manifest divergence.
+    with open(os.path.join(HERE, "logs", "oracle_summary.json"), "w", encoding="utf-8", newline="") as fh:
         json.dump(summary, fh, indent=2)
     print(json.dumps(summary, indent=2))
     sys.exit(0 if not fails else 1)
