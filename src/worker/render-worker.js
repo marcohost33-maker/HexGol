@@ -48,6 +48,12 @@ let rule = "snow";        // rval-Regel
 
 // Zustands-Arrays (vom Main-Thread per Transfer uebernommen, Worker-eigen).
 let col, gh, age, nCol, nGh, nAge;        // life
+// #111: persistente "letzte lebende Farbe" je Zelle -- Worker-Spiegel von
+// App.tsx lastLiveColorRef (Marco-Entscheid 3 zu #110). Anders als col (jeden
+// Schritt auf den Ist-Zustand gesetzt -> nach dem 1. Sterbe-Schritt 0) behaelt
+// dieser Puffer die letzte Spezies-Farbe ueber die GESAMTE Geister-Lebensdauer,
+// damit der CVD-Dying-Ring die ECHTE letzte Familie traegt (Parity zum Main).
+let lastLive;                             // Uint8Array(N)
 let fld, fim, fBuf, fBufIm, fRec;         // rval
 let hqstWork;
 let CX, CY;                                // Welt-Zentren je Zelle (Render)
@@ -145,6 +151,12 @@ function stepLife() {
       if (silent && hash2(i, t) < 0.012) { nCol[i] = PRIMARY[Math.floor(hash2(i + 7, t * 3 + 1) * 3)]; nAge[i] = 1; }
     }
   }
+  // #111: letzte lebende Familie merken (Worker-Spiegel von App.tsx lastCol[i]=cc).
+  // nCol ist der NEUE Ist-Zustand (wird gleich zu col). Fuer JEDE lebende Zelle die
+  // Spezies-Farbe festhalten -> ueberlebt das Sterben und traegt den Dying-Ring.
+  // Voller O(N)-Durchlauf (nur ein Int-Vergleich je Zelle) fuer ALLE Zellen, nicht
+  // nur die sichtbaren -> Parity auch beim spaeteren Weg-/Hin-Schwenken der Ansicht.
+  if (lastLive) { for (let i = 0; i < n; i++) if (nCol[i] !== 0) lastLive[i] = nCol[i]; }
   // Doppelpuffer-Tausch (wie App.tsx step()).
   let tmp;
   tmp = col; col = nCol; nCol = tmp;
@@ -221,7 +233,7 @@ function renderCaptureHex() {
   // DIESELBEN Geometrie-/Farbparameter wie der Live-Hex-Pfad (renderToCanvas hex-Zweig).
   renderHex(capCtx, {
     Wc: w, Hc: h, hr, s: view.s, tx: view.tx, ty: view.ty, dpr, CX, CY,
-    mode, rule, col, gh, fld, fim,
+    mode, rule, col, gh, age, fld, fim, cvd, lastLive, // #111: Parity zum Live-Hex-Pfad
   });
   return capCanvas;
 }
@@ -289,7 +301,7 @@ function renderToCanvas() {
   // beschraenkt (Freeze-Schutz, gegen den der Raster-Pfad gebaut war, haelt).
   renderHex(ctx, {
     Wc, Hc, hr, s: view.s, tx: view.tx, ty: view.ty, dpr, CX, CY,
-    mode, rule, col, gh, age, fld, fim, cvd,
+    mode, rule, col, gh, age, fld, fim, cvd, lastLive, // #111: echte letzte Familie fuer Dying-Ring
   });
   reportRenderMode("hex");
   if (mirrorStream) emitFrame("mirror");
@@ -360,6 +372,11 @@ function applyGeometry(m) {
   gh = m.gh ? new Uint8Array(m.gh) : new Uint8Array(N);
   age = m.age ? new Uint16Array(m.age) : new Uint16Array(N);
   nCol = new Uint8Array(N); nGh = new Uint8Array(N); nAge = new Uint16Array(N);
+  // #111: frischer last-live-Puffer aufs NEUE N (wie App.tsx bei Grid-Rebuild).
+  // Aus dem initialen col vorbelegen, damit schon vor dem 1. Schritt lebende
+  // Zellen ihre Familie tragen (sonst neutraler Ring beim ersten Sterbe-Schritt).
+  lastLive = new Uint8Array(N);
+  for (let i = 0; i < N; i++) if (col[i] !== 0) lastLive[i] = col[i];
   fld = m.fld ? new Float32Array(m.fld) : new Float32Array(N);
   fim = m.fim ? new Float32Array(m.fim) : new Float32Array(N);
   fBuf = new Float32Array(N); fBufIm = new Float32Array(N); fRec = new Uint8Array(N);
@@ -411,7 +428,13 @@ self.onmessage = (e) => {
     case "resize": if (canvas) { canvas.width = m.width; canvas.height = m.height; dpr = m.dpr || dpr; if (!running) renderToCanvas(); } break;
     case "config": if (m.cfg) cfg = m.cfg; if (m.mode) mode = m.mode; if (m.rule) rule = m.rule; if (typeof m.speedMs === "number") speedMs = m.speedMs; if (typeof m.cvd === "boolean") cvd = m.cvd; if (!running) renderToCanvas(); break;
     case "state": // vollstaendiger Zustands-Push (z.B. nach Paint/Reset/Undo im Main-Thread)
-      if (m.col) col = new Uint8Array(m.col);
+      if (m.col) {
+        col = new Uint8Array(m.col);
+        // #111: last-live aus dem neuen col auffrischen (lebende Zellen). Bestehende
+        // Werte toter Zellen bleiben erhalten -> Geister-Ringe behalten ihre Familie
+        // (wie App.tsx lastLiveColorRef, das nur beim Grid-Rebuild genullt wird).
+        if (lastLive && lastLive.length === col.length) { for (let i = 0; i < col.length; i++) if (col[i] !== 0) lastLive[i] = col[i]; }
+      }
       if (m.gh) gh = new Uint8Array(m.gh);
       if (m.age) age = new Uint16Array(m.age);
       if (m.fld) fld = new Float32Array(m.fld);

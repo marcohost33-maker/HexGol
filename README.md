@@ -434,8 +434,12 @@ The colour/form/colormap logic lives in the pure, unit-tested `cell-style.js`
 **all** render paths — main-thread `draw()`, the worker (`src/lib/hex-render.js`)
 and the sub-pixel raster fast-path (`src/lib/raster-render.js`, family colour only,
 exact species via tap) — and persists in `localStorage` (`golhex_cvd_v1`). Worker
-note: the worker dying-ring uses the neutral family (no cross-frame last-live
-buffer there); the main thread carries the true last-known family.
+parity (#111): the worker now carries its own persistent last-live colour buffer
+(`lastLive` in `src/worker/render-worker.js`, mirroring the main thread's
+`lastLiveColorRef`), so the worker dying-ring shows the **true** last-known
+species family too — the neutral family is only the fallback for cells that never
+held a family. The lifecycle stays encoded by **form** (ring vs. fill/hole,
+WCAG 1.4.1), so this is a species-colour fix, not a CVD-safety change.
 
 **OffscreenCanvas worker (Stufe 1, opt-in).** A *Worker (Beta)* toggle (visible
 only when the browser supports `OffscreenCanvas` + `transferControlToOffscreen` +
