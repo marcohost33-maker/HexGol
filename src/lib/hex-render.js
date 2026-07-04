@@ -167,19 +167,25 @@ export function renderHex(ctx, p) {
   // Radien identisch zum Main-Thread: Fuellung hr*0.92, Loch hr*0.34.
   if (p.cvd) {
     // F10-ext (#97): wie App.tsx draw() — 6 Spezies-Familien (Farbe) x Lebenszyklus
-    // (Form). #101-1: formParams(pxR) degradiert Loch/Ring grazioes. Einschraenkung
-    // ggue. Main-Thread: der Worker fuehrt KEINEN persistenten last-live-Puffer, daher
-    // traegt der Dying-Ring hier die NEUTRALE Familie (DYING_NEUTRAL) statt der echten
-    // letzten Spezies — bei den grossen Gittern, fuer die der Worker zustaendig ist,
-    // ist der Ring ohnehin sub-pixel. Survivor/Newborn (Farbe vorhanden) voll-familiar.
+    // (Form). #101-1: formParams(pxR) degradiert Loch/Ring grazioes.
+    // #111 (Parity zum Main-Thread): der Worker fuehrt jetzt einen persistenten
+    // last-live-Puffer (p.lastLive, gefuellt in render-worker.js stepLife). Damit
+    // traegt der Dying-Ring die ECHTE letzte Spezies-Familie (familyOf(lastLive[i]))
+    // statt pauschal DYING_NEUTRAL — exakt wie App.tsx lastLiveColorRef. NEUTRAL bleibt
+    // nur der Fallback fuer Zellen ohne je gemerkte Familie (familyOf === -1) bzw. wenn
+    // kein last-live-Puffer geliefert wurde (Rueckwaerts-kompatibel, z.B. Alt-Tests).
+    // CVD-SICHERHEIT UNVERAENDERT: der Lebenszyklus wird weiter durch die FORM (Ring
+    // vs. Fuellung/Loch) getragen (WCAG 1.4.1), nie durch Farbe allein — die Farbe
+    // benennt nur die Spezies, nicht den Zustand.
     const age = p.age || null;
+    const lastLive = p.lastLive || null;
     const bg = (p.bgFill || "#0a0e0d");
     const fp = formParams(pxR);
-    const survByFam = [], newbByFam = [];
-    for (let f = 0; f < 6; f++) { survByFam[f] = new P2D(); newbByFam[f] = new P2D(); }
-    const holeP = new P2D(), ringP = new P2D();
-    const sAny = [0, 0, 0, 0, 0, 0], nAny = [0, 0, 0, 0, 0, 0];
-    let anyHole = false, anyD = false;
+    const survByFam = [], newbByFam = [], ringByFam = [];
+    for (let f = 0; f < 6; f++) { survByFam[f] = new P2D(); newbByFam[f] = new P2D(); ringByFam[f] = new P2D(); }
+    const holeP = new P2D(), ringNeutralP = new P2D();
+    const sAny = [0, 0, 0, 0, 0, 0], nAny = [0, 0, 0, 0, 0, 0], rAny = [0, 0, 0, 0, 0, 0];
+    let anyHole = false, anyNeutral = false;
     for (let i = 0; i < N; i++) {
       if (!visible(i)) continue;
       const cc = col[i];
@@ -190,9 +196,16 @@ export function renderHex(ctx, p) {
           addHex(newbByFam[f], i, hr * 0.92); nAny[f] = 1;
           if (fp.holeScale > 0) { addHex(holeP, i, hr * fp.holeScale); anyHole = true; }
         }
-      } else if (gh && gh[i]) { addHex(ringP, i, hr * fp.ringScale); anyD = true; }
+      } else if (gh && gh[i]) {
+        const f = lastLive ? familyOf(lastLive[i]) : -1; // echte letzte Familie (ueber Ghost-Lebensdauer)
+        if (f >= 0) { addHex(ringByFam[f], i, hr * fp.ringScale); rAny[f] = 1; }
+        else { addHex(ringNeutralP, i, hr * fp.ringScale); anyNeutral = true; }
+      }
     }
-    if (anyD) { ctx.lineWidth = Math.max(0.6, fp.ringWidthK / s); ctx.strokeStyle = DYING_NEUTRAL; ctx.stroke(ringP); }
+    // Dying-Ringe (Untergrund) — je Familie eingefaerbt, neutral als Fallback (wie App.tsx).
+    ctx.lineWidth = Math.max(0.6, fp.ringWidthK / s);
+    for (let f = 0; f < 6; f++) if (rAny[f]) { ctx.strokeStyle = SPECIES_FAMILY[f]; ctx.stroke(ringByFam[f]); }
+    if (anyNeutral) { ctx.strokeStyle = DYING_NEUTRAL; ctx.stroke(ringNeutralP); }
     for (let f = 0; f < 6; f++) if (sAny[f]) { ctx.fillStyle = SPECIES_FAMILY[f]; ctx.fill(survByFam[f]); }
     for (let f = 0; f < 6; f++) if (nAny[f]) { ctx.fillStyle = SPECIES_FAMILY[f]; ctx.fill(newbByFam[f]); }
     if (anyHole) { ctx.fillStyle = bg; ctx.fill(holeP); }
