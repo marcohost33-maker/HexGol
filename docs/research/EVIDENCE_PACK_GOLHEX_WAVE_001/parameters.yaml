@@ -1,0 +1,45 @@
+# Parameter grid actually executed. Two modes: CI-bounded (default) and --full (local evidence).
+# The numbers reported in claim_decision.md are from the CI-bounded run committed in results/.
+
+predeclared_thresholds:
+  O1_norm_drift_max:
+    f32: 5.0e-3     # protocol CI smoke gate
+    f64: 1.0e-4     # reference path (tighter)
+  O2_residual_rel_max: 1.0e-4      # returned-solution linear-system residual
+  O3_hermiticity_fro:  1.0e-12     # H must be Hermitian to machine precision
+  ring_spectrum_err:   1.0e-10     # numpy eig vs analytic
+  CN_oracle_err:                   # JS iterative solve vs numpy exact-CN direct solve
+    f64: 5.0e-5
+    f32: 5.0e-3
+  convergence_order_min: 1.8       # fixed-T global order, expect ~2 (CN O(dt^2))
+  # O4 expm scheme error + fixed-step order are DIAGNOSTIC (recorded, not gated).
+
+ci_bounded_grid:
+  J:      [0.05, 0.15]
+  dt:     [0.05, 0.10]
+  V:      [0.0]
+  graphs: [ring_6, ring_16, open_patch_4x4, hex_8x8_periodic]
+  steps:  200
+  dtypes: [f32, f64]
+  init:   [gauss, rand]
+  configs_swept: 64
+
+full_grid:            # node evidence_runner.mjs --full
+  J:      [0.05, 0.10, 0.15, 0.20]
+  dt:     [0.025, 0.05, 0.10, 0.20]
+  V:      [0.0, 0.1]
+  graphs: [ring_6, ring_16, open_patch_4x4, hex_24x24_periodic]
+  steps:  500
+
+ed_oracle_graphs: [ring_6, ring_16, open_patch_4x4, hex_6x6_periodic]  # <= 64 nodes
+ed_checkpoints:   [0, 5, 10, 20, 40]
+
+prng:
+  algorithm: "mulberry32-variant (sim-engine.js rng())"
+  seed:      1234567
+  initial_state: "saved in full in results/ed_export.json (states[0]) — not only the seed"
+
+adversarial:
+  large_dt:        {graph: hex_8x8_periodic, J: 0.20, dt: [1.0, 1.5, 2.0, 3.0]}
+  non_hermitian:   {graph: directed_ring_16, J: 0.20, dt: [0.05, 0.2]}
+  degenerate_spec: {graph: ring_64,          J: 0.20, dt: 0.2}

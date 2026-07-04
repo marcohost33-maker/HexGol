@@ -1,0 +1,44 @@
+{
+  "@context": "https://w3id.org/ro/crate/1.1/context",
+  "@graph": [
+    {
+      "@type": "CreativeWork",
+      "@id": "ro-crate-metadata.json",
+      "conformsTo": { "@id": "https://w3id.org/ro/crate/1.1" },
+      "about": { "@id": "./" }
+    },
+    {
+      "@id": "./",
+      "@type": "Dataset",
+      "name": "EVIDENCE_PACK_GOLHEX_WAVE_001",
+      "description": "V&V evidence pack for the GolHex HQST wave mode (finite-graph tight-binding Crank-Nicolson/Cayley solver). Result tier NUMERICAL_SOLVER_RESULT (CI-bounded grid).",
+      "datePublished": "2026-07-04",
+      "license": { "@id": "https://spdx.org/licenses/MIT.html" },
+      "isBasedOn": "marcohost33-maker/HexGol@62a565f316f74ac6057135ab36046a7710c62745",
+      "hasPart": [
+        { "@id": "evidence_runner.mjs" },
+        { "@id": "ed_oracle.py" },
+        { "@id": "model.yaml" },
+        { "@id": "parameters.yaml" },
+        { "@id": "experiment_card.yaml" },
+        { "@id": "environment.lock" },
+        { "@id": "commands.sh" },
+        { "@id": "claim_decision.md" },
+        { "@id": "negative_results.md" },
+        { "@id": "results/" },
+        { "@id": "checksums.sha256" }
+      ]
+    },
+    { "@id": "evidence_runner.mjs", "@type": ["File", "SoftwareSourceCode"], "name": "Node evidence runner (drives shipped solver)", "programmingLanguage": "JavaScript (Node ESM)" },
+    { "@id": "ed_oracle.py", "@type": ["File", "SoftwareSourceCode"], "name": "Independent numpy/scipy ED + Hermiticity oracle", "programmingLanguage": "Python" },
+    { "@id": "model.yaml", "@type": "File", "name": "Model + scheme + oracle definition" },
+    { "@id": "parameters.yaml", "@type": "File", "name": "Parameter grid + predeclared thresholds + PRNG/seed" },
+    { "@id": "experiment_card.yaml", "@type": "File", "name": "Experiment card / provenance" },
+    { "@id": "environment.lock", "@type": "File", "name": "Recorded runtime environment" },
+    { "@id": "commands.sh", "@type": ["File", "SoftwareSourceCode"], "name": "Reproduce from clean checkout" },
+    { "@id": "claim_decision.md", "@type": "File", "name": "Result tier decision + gate table + overclaim block" },
+    { "@id": "negative_results.md", "@type": "File", "name": "Falsification / bounds of validity" },
+    { "@id": "results/", "@type": "Dataset", "name": "CSV/JSON evidence outputs" },
+    { "@id": "checksums.sha256", "@type": "File", "name": "SHA-256 over results/ + logs/" }
+  ]
+}

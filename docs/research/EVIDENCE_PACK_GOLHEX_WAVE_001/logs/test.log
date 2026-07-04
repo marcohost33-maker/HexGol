@@ -1,0 +1,20 @@
+{
+  "full": false,
+  "node": "v24.17.0",
+  "configs_swept": 64,
+  "worst_norm_drift_f32": 0.00002236959,
+  "worst_norm_drift_f64": 0.00002239146,
+  "worst_residual_rel_f32": 2.035781e-7,
+  "worst_residual_rel_f64": 1.854714e-7,
+  "main_grid_conv_fails": 0
+}
+{
+  "numpy": "2.4.6",
+  "scipy": "1.17.1",
+  "configs": 16,
+  "worst_hermiticity_fro": 0.0,
+  "worst_cn_oracle_err": 1.6869e-06,
+  "worst_expm_ed_err": 0.00045921,
+  "gate_fails": [],
+  "verdict": "PASS"
+}

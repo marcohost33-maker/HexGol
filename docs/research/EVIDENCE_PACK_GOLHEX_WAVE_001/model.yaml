@@ -1,0 +1,34 @@
+# Model definition — GolHex HQST wave mode (finite-graph tight-binding)
+name: golhex_hqst_wave
+kind: finite_graph_tight_binding_schrodinger
+
+state: "psi_i = re_i + i*im_i  (one complex amplitude per graph node)"
+
+hamiltonian: "(H psi)_i = -J * sum_{j in NN(i)} psi_j + V_i * psi_i"
+notes:
+  - "NN(i) = neighbour list NL[i*6 .. i*6+5]; entries < 0 are absent (open boundary / wall)."
+  - "H is Hermitian iff the adjacency is symmetric (verified per graph, O3)."
+  - "rho(H) <= 6J + max|V| (Gershgorin); degree-2 ring rho(H) <= 4J."
+
+time_evolution: "d psi / dt = -i H psi"
+
+integrator:
+  scheme: crank_nicolson_cayley
+  update: "(I + i*a*H) psi_next = (I - i*a*H) psi_current,  a = dt/2"
+  properties:
+    - "Cayley transform of a Hermitian H is unitary -> exact-solve norm is machine-precision conserved."
+    - "(1,1) Pade approximant of exp(-i H dt): local truncation O(dt^3), global O(dt^2)."
+  solver: "fixed-point (Jacobi/Richardson) iteration, MAXIT=60, TOL=2e-6 (increment)."
+  convergence_radius: "a*rho(H) < 1; solveCN returns false when the iteration does not converge."
+
+oracles:
+  O3_hermiticity: "||H - H^dagger||_F rebuilt independently from NL (numpy)."
+  ring_spectrum:  "eig(H) vs analytic -2J cos(2*pi*k/N) + V (ring graphs)."
+  cn_exact:       "U_CN = inv(I + i a H)(I - i a H) direct solve (numpy) vs JS iterative solveCN."
+  ed_expm:        "psi_exact(t) = expm(-i H t) psi0 (scipy) — scheme accuracy."
+  eigenmode_phase:"ring Fourier mode -> exp(-i*2*atan(a*E_k)*n) closed form (JS unit test)."
+
+explicit_non_claims:
+  - "NOT a physical spacetime / CMB / real-quantum-hardware result."
+  - "NOT a topological (Chern/Haldane) result."
+  - "Boundary type (open / torus / hex) is a graph choice, NOT a topological phase."

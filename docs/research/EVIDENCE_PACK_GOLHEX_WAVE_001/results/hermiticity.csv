@@ -1,0 +1,5 @@
+graph,n,J,V,herm_fro,ring_spec_err,hermitian_ok
+ring_6,6,0.15,0,0.000e+00,2.220e-16,True
+ring_16,16,0.15,0,0.000e+00,3.886e-16,True
+open_patch_4x4,16,0.15,0,0.000e+00,nan,True
+hex_6x6_periodic,36,0.15,0,0.000e+00,nan,True

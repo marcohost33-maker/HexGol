@@ -1,0 +1,17 @@
+boundary_type,graph,n,J,V,dt,dtype,hermitian_ok,conv_all,js_norm_drift,expm_max_err
+periodic_ring,ring_6,6,0.15,0,0.05,f32,True,True,6.193e-08,8.329e-06
+periodic_ring,ring_6,6,0.15,0,0.05,f64,True,True,7.120e-08,8.273e-06
+periodic_ring,ring_6,6,0.15,0,0.1,f32,True,True,1.046e-06,6.614e-05
+periodic_ring,ring_6,6,0.15,0,0.1,f64,True,True,1.139e-06,6.619e-05
+periodic_ring,ring_16,16,0.15,0,0.05,f32,True,True,1.464e-07,5.440e-06
+periodic_ring,ring_16,16,0.15,0,0.05,f64,True,True,3.778e-08,5.468e-06
+periodic_ring,ring_16,16,0.15,0,0.1,f32,True,True,5.958e-07,4.375e-05
+periodic_ring,ring_16,16,0.15,0,0.1,f64,True,True,6.045e-07,4.374e-05
+open_patch,open_patch_4x4,16,0.15,0,0.05,f32,True,True,3.112e-07,3.255e-05
+open_patch,open_patch_4x4,16,0.15,0,0.05,f64,True,True,2.916e-07,3.260e-05
+open_patch,open_patch_4x4,16,0.15,0,0.1,f32,True,True,8.737e-08,2.611e-04
+open_patch,open_patch_4x4,16,0.15,0,0.1,f64,True,True,2.220e-15,2.610e-04
+periodic_hex,hex_6x6_periodic,36,0.15,0,0.05,f32,True,True,5.882e-07,5.730e-05
+periodic_hex,hex_6x6_periodic,36,0.15,0,0.05,f64,True,True,6.426e-07,5.733e-05
+periodic_hex,hex_6x6_periodic,36,0.15,0,0.1,f32,True,True,7.329e-08,4.592e-04
+periodic_hex,hex_6x6_periodic,36,0.15,0,0.1,f64,True,True,1.621e-14,4.592e-04
