@@ -1,0 +1,9 @@
+graph,J,V,dtype,n_dt_points,slope_loglog,note
+ring_6,0.15,0,f32,2,2.989,fixed-step-count n: err ~ n*O(dt^3) local trunc -> slope ~3 (NOT global O(dt^2))
+ring_6,0.15,0,f64,2,3.000,fixed-step-count n: err ~ n*O(dt^3) local trunc -> slope ~3 (NOT global O(dt^2))
+ring_16,0.15,0,f32,2,3.008,fixed-step-count n: err ~ n*O(dt^3) local trunc -> slope ~3 (NOT global O(dt^2))
+ring_16,0.15,0,f64,2,3.000,fixed-step-count n: err ~ n*O(dt^3) local trunc -> slope ~3 (NOT global O(dt^2))
+open_patch_4x4,0.15,0,f32,2,3.004,fixed-step-count n: err ~ n*O(dt^3) local trunc -> slope ~3 (NOT global O(dt^2))
+open_patch_4x4,0.15,0,f64,2,3.001,fixed-step-count n: err ~ n*O(dt^3) local trunc -> slope ~3 (NOT global O(dt^2))
+hex_6x6_periodic,0.15,0,f32,2,3.003,fixed-step-count n: err ~ n*O(dt^3) local trunc -> slope ~3 (NOT global O(dt^2))
+hex_6x6_periodic,0.15,0,f64,2,3.002,fixed-step-count n: err ~ n*O(dt^3) local trunc -> slope ~3 (NOT global O(dt^2))

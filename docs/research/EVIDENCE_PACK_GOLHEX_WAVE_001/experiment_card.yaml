@@ -1,0 +1,50 @@
+# Experiment card — EVIDENCE_PACK_GOLHEX_WAVE_001
+id: EVIDENCE_PACK_GOLHEX_WAVE_001
+title: "GolHex HQST wave mode — finite-graph tight-binding solver V&V"
+date: 2026-07-04
+protocol: "marcohost33-maker/HQST docs/research/EVIDENCE_PACK_GOLHEX_WAVE_001_PROTOCOL.md (PR#15)"
+algorithm: ALG-001
+executor: "Codie (Coworkerz specialist-executive) — NOT self-certifying"
+target_tier: NUMERICAL_SOLVER_RESULT
+result_tier: NUMERICAL_SOLVER_RESULT   # PASS on CI-bounded grid; see claim_decision.md
+
+research_question: >
+  Is the GolHex HQST wave mode a numerically valid finite-graph tight-binding /
+  Schrodinger-like solver over the declared parameter region?
+
+solver:
+  repo: marcohost33-maker/HexGol
+  base_commit: 62a565f316f74ac6057135ab36046a7710c62745
+  files: [src/lib/sim-core.js, src/lib/sim-engine.js]
+  scheme: crank_nicolson_cayley
+
+oracles_independent:
+  - "numpy Hermiticity ||H - H^dagger||_F (O3)"
+  - "numpy eig(H) vs analytic ring spectrum"
+  - "numpy exact-CN direct solve vs JS iterative solveCN"
+  - "scipy expm(-i H t) exact diagonalization (O4)"
+  - "closed-form eigenmode CN phase (JS unit test)"
+
+reproduce: docs/research/EVIDENCE_PACK_GOLHEX_WAVE_001/commands.sh
+
+outputs:
+  - results/norm_drift.csv
+  - results/residuals.csv
+  - results/ed_oracle.csv
+  - results/hermiticity.csv
+  - results/boundary_matrix.csv
+  - results/order_in_dt.csv
+  - results/convergence_fixedT.csv
+  - results/convergence_slopes.csv
+  - results/adversarial.csv
+  - results/ed_export.json
+  - logs/runner_summary.json
+  - logs/oracle_summary.json
+  - checksums.sha256
+  - claim_decision.md
+  - negative_results.md
+
+status:
+  self_precheck_L0: PASS
+  equalita_L1: PENDING
+  data_ledger: PENDING

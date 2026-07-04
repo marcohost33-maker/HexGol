@@ -1,0 +1,10 @@
+{
+  "numpy": "2.4.6",
+  "scipy": "1.17.1",
+  "configs": 16,
+  "worst_hermiticity_fro": 0.0,
+  "worst_cn_oracle_err": 1.6869e-06,
+  "worst_expm_ed_err": 0.00045921,
+  "gate_fails": [],
+  "verdict": "PASS"
+}

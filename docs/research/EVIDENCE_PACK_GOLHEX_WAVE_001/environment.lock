@@ -1,0 +1,18 @@
+# EVIDENCE_PACK_GOLHEX_WAVE_001 — recorded environment (verified 2026-07-04)
+# Captured from the runner host; reproduce on any host with >= these versions.
+
+runtime.node        = v24.17.0
+runtime.v8          = 13.6.233.17-node.49
+oracle.python       = 3.14.4
+oracle.numpy        = 2.4.6
+oracle.scipy        = 1.17.1
+build.vite          = ^8.1.0
+test.vitest         = ^4.1.9
+
+repo                = marcohost33-maker/HexGol
+base_commit         = 62a565f316f74ac6057135ab36046a7710c62745
+solver_source       = src/lib/sim-core.js  (applyH + solveCN, Crank-Nicolson / Cayley)
+graph_source        = src/lib/sim-engine.js (buildNeighbors, rng)
+
+# The runner drives the SHIPPED solver directly (no re-implementation).
+# The Python oracle shares NO code with the solver (cross-language / cross-library).

@@ -1,0 +1,5 @@
+graph,J,V,n,T,slope_loglog,expected
+ring_6,0.15,0,6,2.0,2.000,~2 (CN global O(dt^2))
+ring_16,0.15,0,16,2.0,2.000,~2 (CN global O(dt^2))
+open_patch_4x4,0.15,0,16,2.0,1.999,~2 (CN global O(dt^2))
+hex_6x6_periodic,0.15,0,36,2.0,1.999,~2 (CN global O(dt^2))

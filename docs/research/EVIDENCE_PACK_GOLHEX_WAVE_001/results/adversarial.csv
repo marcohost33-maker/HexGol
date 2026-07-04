@@ -1,0 +1,8 @@
+case,graph,n,J,V,dt,aHnorm,conv_all,blow_up,norm_drift_max,residual_rel_max,expectation
+large_dt,hex_8x8_periodic,64,0.2,0,1,0.600,true,false,7.1652e-7,6.9281e-6,conv=false and/or residual large when a*rho(H)>=1
+large_dt,hex_8x8_periodic,64,0.2,0,1.5,0.900,false,false,2.2704e-7,1.1987e-4,conv=false and/or residual large when a*rho(H)>=1
+large_dt,hex_8x8_periodic,64,0.2,0,2,1.200,false,true,3.9831e+3,6.7617e+4,conv=false and/or residual large when a*rho(H)>=1
+large_dt,hex_8x8_periodic,64,0.2,0,3,1.800,false,true,0.0000e+0,3.6042e+14,conv=false and/or residual large when a*rho(H)>=1
+non_hermitian,directed_ring_16,16,0.2,0,0.05,0.030,true,false,3.0350e+0,6.2500e-10,norm drift >> unitary case (H not hermitian)
+non_hermitian,directed_ring_16,16,0.2,0,0.2,0.120,true,false,1.2485e+3,3.2000e-9,norm drift >> unitary case (H not hermitian)
+degenerate_spectrum,ring_64,64,0.2,0,0.2,0.120,true,false,1.5150e-12,1.0049e-7,still unitary; degeneracy must not break solve
