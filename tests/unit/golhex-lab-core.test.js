@@ -3,6 +3,7 @@ import {
   buildHexPrismStack,
   collatzClassOdd,
   compareStates,
+  DEFAULT_WORLD_CELL_CAP,
   explicitDiffusionDtMax,
   hashFloat64Bits,
   hashQuantizedState,
@@ -41,6 +42,13 @@ describe("GolHex Lab — dense axial prism stack", () => {
     expect(hexDiskCellCount(2)).toBe(19);
     expect(hexDiskCellCount(4)).toBe(61);
     expect(buildHexPrismStack({ radius: 4, layers: 3 }).count).toBe(183);
+  });
+
+  it("fails closed before an oversized world allocation", () => {
+    expect(DEFAULT_WORLD_CELL_CAP).toBe(250000);
+    expect(() => buildHexPrismStack({ radius: 300, layers: 1 }))
+      .toThrow(/exceeding maxCells/);
+    expect(buildHexPrismStack({ radius: 4, layers: 3, maxCells: 183 }).count).toBe(183);
   });
 
   it("has six lateral neighbors and, in a middle layer, two vertical neighbors", () => {
