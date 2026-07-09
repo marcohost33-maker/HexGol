@@ -28,6 +28,11 @@ describe("GolHex Lab — exact integer layers", () => {
     expect(collatzClassOdd(13n)).toBe(3);
     expect(() => collatzClassOdd(4n)).toThrow(/positive odd/);
   });
+
+  it("accepts exact large integer strings and rejects unsafe Number inputs", () => {
+    expect(collatzClassOdd("9007199254740993")).toBe(2);
+    expect(() => collatzClassOdd(Number.MAX_SAFE_INTEGER + 2)).toThrow(/safe integer/);
+  });
 });
 
 describe("GolHex Lab — dense axial prism stack", () => {
@@ -79,6 +84,30 @@ describe("GolHex Lab — prism geometry and conservative transport", () => {
     expect(out[center]).toBeLessThan(1);
   });
 
+  it("uses the derived vertical/lateral conductance ratio and remains conservative in 3D", () => {
+    const world = buildHexPrismStack({ radius: 1, layers: 3 });
+    const geometry = hexPrismGeometry({ edgeLength: 1, height: 1 });
+    const field = new Float64Array(world.count);
+    const center = centerIndex(world, 1);
+    field[center] = 1;
+    const before = totalContent(field, geometry.volume);
+    const dtMax = explicitDiffusionDtMax({ world, geometry, diffusivity: 0.1 });
+    const { out } = stepConservativeDiffusion({
+      world, geometry, field, diffusivity: 0.1, dt: dtMax * 0.1,
+    });
+    expect(totalContent(out, geometry.volume)).toBeCloseTo(before, 14);
+
+    const base = center * 8;
+    const lateralValue = out[world.neighbors[base]];
+    const belowValue = out[world.neighbors[base + 6]];
+    const aboveValue = out[world.neighbors[base + 7]];
+    expect(aboveValue).toBeCloseTo(belowValue, 14);
+    expect(aboveValue / lateralValue).toBeCloseTo(
+      geometry.verticalGeometricConductance / geometry.lateralGeometricConductance,
+      13,
+    );
+  });
+
   it("fails closed for an explicit step above the positivity bound", () => {
     const world = buildHexPrismStack({ radius: 1, layers: 1 });
     const geometry = hexPrismGeometry({ edgeLength: 1, height: 1 });
@@ -94,5 +123,12 @@ describe("GolHex Lab — prism geometry and conservative transport", () => {
     expect(compareStates(a, b).maxAbs).toBeGreaterThan(0);
     expect(hashFloat64Bits(a)).toBe(hashFloat64Bits(a.slice()));
     expect(hashQuantizedState(a, 1e-12)).toBe(hashQuantizedState(b, 1e-12));
+  });
+
+  it("fails closed for non-finite comparisons and unsafe quantisation ranges", () => {
+    expect(() => compareStates(new Float64Array([Number.NaN]), new Float64Array([0])))
+      .toThrow(/not finite/);
+    expect(() => hashQuantizedState(new Float64Array([1e12]), 1e-12))
+      .toThrow(/safe-integer range/);
   });
 });
