@@ -7,18 +7,28 @@ const AXIAL_DIRS = Object.freeze([
 ]);
 
 function assertNonNegativeInteger(value, name) {
-  if (!Number.isInteger(value) || value < 0) {
-    throw new RangeError(`${name} must be a non-negative integer`);
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new RangeError(`${name} must be a non-negative safe integer`);
+  }
+}
+
+function coerceExactBigInt(value, name) {
+  if (typeof value === "bigint") return value;
+  if (typeof value === "number") {
+    if (!Number.isSafeInteger(value)) {
+      throw new RangeError(`${name} number input must be a safe integer; pass bigint or an integer string for larger values`);
+    }
+    return BigInt(value);
+  }
+  try {
+    return BigInt(value);
+  } catch {
+    throw new TypeError(`${name} must be coercible to an exact integer BigInt`);
   }
 }
 
 function asPositiveOddBigInt(value) {
-  let n;
-  try {
-    n = typeof value === "bigint" ? value : BigInt(value);
-  } catch {
-    throw new TypeError("n must be coercible to BigInt");
-  }
+  const n = coerceExactBigInt(value, "n");
   if (n <= 0n || (n & 1n) === 0n) {
     throw new RangeError("n must be a positive odd integer");
   }
@@ -27,12 +37,7 @@ function asPositiveOddBigInt(value) {
 
 /** Return the 2-adic valuation v2(n) for a non-zero integer. */
 export function v2BigInt(value) {
-  let n;
-  try {
-    n = typeof value === "bigint" ? value : BigInt(value);
-  } catch {
-    throw new TypeError("value must be coercible to BigInt");
-  }
+  let n = coerceExactBigInt(value, "value");
   if (n === 0n) throw new RangeError("v2(0) is not finite");
   if (n < 0n) n = -n;
   let k = 0;
@@ -52,7 +57,9 @@ export function collatzClassOdd(value) {
 /** Number of cells in an axial hex disk of radius R. */
 export function hexDiskCellCount(radius) {
   assertNonNegativeInteger(radius, "radius");
-  return 1 + 3 * radius * (radius + 1);
+  const count = 1 + 3 * radius * (radius + 1);
+  if (!Number.isSafeInteger(count)) throw new RangeError("hex disk cell count exceeds the safe integer range");
+  return count;
 }
 
 function axialKey(q, r, z) {
@@ -62,15 +69,17 @@ function axialKey(q, r, z) {
 /**
  * Build a dense deterministic stack of axial hex disks.
  * Neighbor slots 0..5 are lateral axial directions; 6 is z-1; 7 is z+1.
+ * The coordinate map is construction/query metadata; hot solver loops use neighbors.
  */
 export function buildHexPrismStack({ radius, layers = 1 } = {}) {
   assertNonNegativeInteger(radius, "radius");
-  if (!Number.isInteger(layers) || layers < 1) {
-    throw new RangeError("layers must be a positive integer");
+  if (!Number.isSafeInteger(layers) || layers < 1) {
+    throw new RangeError("layers must be a positive safe integer");
   }
 
   const perLayer = hexDiskCellCount(radius);
   const count = perLayer * layers;
+  if (!Number.isSafeInteger(count)) throw new RangeError("world cell count exceeds the safe integer range");
   const q = new Int32Array(count);
   const r = new Int32Array(count);
   const z = new Int32Array(count);
@@ -150,6 +159,7 @@ function validateField(field, count, name = "field") {
 /**
  * Positivity-safe explicit time-step ceiling for du/dt = sum_j rate_ij (u_j-u_i).
  * The bound is conservative, not an accuracy guarantee.
+ * Current scope: uniform regular cells and one non-negative scalar diffusivity.
  */
 export function explicitDiffusionDtMax({ world, geometry, diffusivity = 1 } = {}) {
   if (!world || !geometry) throw new TypeError("world and geometry are required");
@@ -175,6 +185,7 @@ export function explicitDiffusionDtMax({ world, geometry, diffusivity = 1 } = {}
 /**
  * One conservative explicit finite-volume diffusion step with no-flux outer boundary.
  * Pairwise fluxes are applied once and with opposite signs, preserving total content.
+ * `source`, when present, is a per-cell rate du/dt rather than an integrated amount.
  */
 export function stepConservativeDiffusion({
   world,
@@ -233,6 +244,7 @@ export function totalContent(field, cellVolume = 1) {
   let sum = 0;
   let correction = 0;
   for (let i = 0; i < field.length; i++) {
+    if (!Number.isFinite(field[i])) throw new RangeError(`field[${i}] is not finite`);
     const y = field[i] - correction;
     const t = sum + y;
     correction = (t - sum) - y;
@@ -249,6 +261,9 @@ export function compareStates(a, b) {
   let l1 = 0;
   let l2sq = 0;
   for (let i = 0; i < a.length; i++) {
+    if (!Number.isFinite(a[i]) || !Number.isFinite(b[i])) {
+      throw new RangeError(`state value at index ${i} is not finite`);
+    }
     const d = Math.abs(a[i] - b[i]);
     if (d > maxAbs) maxAbs = d;
     l1 += d;
@@ -257,35 +272,49 @@ export function compareStates(a, b) {
   return { maxAbs, l1, l2: Math.sqrt(l2sq), rms: Math.sqrt(l2sq / Math.max(1, a.length)) };
 }
 
-/** Backend-local exact bit hash. It is an integrity/replay fingerprint, not a signature. */
+function fnv1aByte(hash, byte) {
+  return ((hash ^ BigInt(byte)) * 0x100000001b3n) & 0xffffffffffffffffn;
+}
+
+function hashFloat64ValueCanonical(hash, value, scratchView) {
+  // Explicit little-endian encoding makes the fingerprint independent of host byte order.
+  scratchView.setFloat64(0, value, true);
+  for (let b = 0; b < 8; b++) hash = fnv1aByte(hash, scratchView.getUint8(b));
+  return hash;
+}
+
+/** Canonical-byte-order exact bit hash. It is an integrity/replay fingerprint, not a signature. */
 export function hashFloat64Bits(field) {
   if (!(field instanceof Float64Array)) throw new TypeError("field must be Float64Array");
-  const bytes = new Uint8Array(field.buffer, field.byteOffset, field.byteLength);
   let hash = 0xcbf29ce484222325n;
-  const prime = 0x100000001b3n;
-  const mask64 = 0xffffffffffffffffn;
-  for (let i = 0; i < bytes.length; i++) {
-    hash ^= BigInt(bytes[i]);
-    hash = (hash * prime) & mask64;
+  const scratchView = new DataView(new ArrayBuffer(8));
+  for (let i = 0; i < field.length; i++) {
+    const value = field[i];
+    if (!Number.isFinite(value)) throw new RangeError(`field[${i}] is not finite`);
+    hash = hashFloat64ValueCanonical(hash, value, scratchView);
   }
   return hash.toString(16).padStart(16, "0");
 }
 
-/** Tolerance-aware fingerprint for semantic regression tests. */
+/**
+ * Tolerance-aware fingerprint for semantic regression tests.
+ * Fails closed when value/quantum cannot be represented as an exact safe integer.
+ */
 export function hashQuantizedState(field, quantum = 1e-12) {
   if (!(field instanceof Float64Array)) throw new TypeError("field must be Float64Array");
   if (!(quantum > 0) || !Number.isFinite(quantum)) throw new RangeError("quantum must be finite and > 0");
   let hash = 0xcbf29ce484222325n;
-  const prime = 0x100000001b3n;
-  const mask64 = 0xffffffffffffffffn;
   for (let i = 0; i < field.length; i++) {
     const value = field[i];
     if (!Number.isFinite(value)) throw new RangeError(`field[${i}] is not finite`);
-    const rounded = BigInt(Math.round(value / quantum));
-    let x = BigInt.asUintN(64, rounded);
+    const scaled = value / quantum;
+    const roundedNumber = Math.round(scaled);
+    if (!Number.isSafeInteger(roundedNumber)) {
+      throw new RangeError(`field[${i}] / quantum exceeds the exact safe-integer range; use a larger quantum`);
+    }
+    let x = BigInt.asUintN(64, BigInt(roundedNumber));
     for (let b = 0; b < 8; b++) {
-      hash ^= x & 0xffn;
-      hash = (hash * prime) & mask64;
+      hash = fnv1aByte(hash, Number(x & 0xffn));
       x >>= 8n;
     }
   }
