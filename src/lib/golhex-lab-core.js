@@ -2,6 +2,7 @@
 // Pure module: no React, DOM, renderer, timers, or platform-specific hooks.
 
 const SQRT3 = Math.sqrt(3);
+export const DEFAULT_WORLD_CELL_CAP = 250000;
 const AXIAL_DIRS = Object.freeze([
   [1, 0], [1, -1], [0, -1], [-1, 0], [-1, 1], [0, 1],
 ]);
@@ -71,15 +72,26 @@ function axialKey(q, r, z) {
  * Neighbor slots 0..5 are lateral axial directions; 6 is z-1; 7 is z+1.
  * The coordinate map is construction/query metadata; hot solver loops use neighbors.
  */
-export function buildHexPrismStack({ radius, layers = 1 } = {}) {
+export function buildHexPrismStack({
+  radius,
+  layers = 1,
+  maxCells = DEFAULT_WORLD_CELL_CAP,
+} = {}) {
   assertNonNegativeInteger(radius, "radius");
   if (!Number.isSafeInteger(layers) || layers < 1) {
     throw new RangeError("layers must be a positive safe integer");
+  }
+  if (!Number.isSafeInteger(maxCells) || maxCells < 1) {
+    throw new RangeError("maxCells must be a positive safe integer");
   }
 
   const perLayer = hexDiskCellCount(radius);
   const count = perLayer * layers;
   if (!Number.isSafeInteger(count)) throw new RangeError("world cell count exceeds the safe integer range");
+  if (count > maxCells) {
+    throw new RangeError(`world requires ${count} cells, exceeding maxCells=${maxCells}`);
+  }
+
   const q = new Int32Array(count);
   const r = new Int32Array(count);
   const z = new Int32Array(count);
