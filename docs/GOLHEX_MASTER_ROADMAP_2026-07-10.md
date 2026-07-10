@@ -57,11 +57,11 @@ Each capability is admitted only after its own evidence gate.
 - real six-neighbour hex topology;
 - multiple simulation modes including a tested HQST/Crank–Nicolson research path;
 - visual, mobile-render and unit CI workflows;
-- current draft PR #122 adds exact Collatz classes and a small conservative scalar-field core.
+- merged baseline (PR #122) adds exact Collatz classes and a small conservative scalar-field core.
 
-### Current PR #122 status
+### Merged #122 baseline status
 
-The PR is a draft and must remain unmerged until its current head has green CI and review. The implementation is an initial foundation, not a validated physical solver.
+PR #122 is merged (green `unit`/`e2e` CI + independent Equalita review: 549/549 unit tests, conservation drift 0.0, all negative-edge inputs throw). The implementation is an initial foundation, **not** a validated physical solver: spatial-discretisation accuracy beyond the two-cell manufactured-solution case is still an open verification gap (see H1).
 
 Implemented scope:
 
@@ -592,11 +592,10 @@ Minimum production controls:
 
 ### NOW — WIP limit 3
 
-1. **PR #122 disposition**
-   - await current CI;
-   - independent review;
-   - correct failures;
-   - merge only after all gates.
+1. **PR #122 follow-up verification** (baseline merged)
+   - close remaining H1 numerical-verification gaps on the merged core;
+   - spatial refinement study beyond the two-cell manufactured solution;
+   - do not claim "numerically verified" until those gates pass.
 
 2. **H1 numerical verification specification**
    - analytic two-cell fixture;
