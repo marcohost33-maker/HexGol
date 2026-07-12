@@ -17,15 +17,18 @@ function coerceExactBigInt(value, name) {
   if (typeof value === "bigint") return value;
   if (typeof value === "number") {
     if (!Number.isSafeInteger(value)) {
-      throw new RangeError(`${name} number input must be a safe integer; pass bigint or an integer string for larger values`);
+      throw new RangeError(`${name} number input must be a safe integer; pass bigint or a base-10 integer string for larger values`);
     }
     return BigInt(value);
   }
-  try {
-    return BigInt(value);
-  } catch {
-    throw new TypeError(`${name} must be coercible to an exact integer BigInt`);
+  if (typeof value === "string") {
+    const normalized = value.trim();
+    if (!/^[+-]?\d+$/.test(normalized)) {
+      throw new TypeError(`${name} string input must be a base-10 integer`);
+    }
+    return BigInt(normalized);
   }
+  throw new TypeError(`${name} must be a bigint, safe integer number, or base-10 integer string`);
 }
 
 function asPositiveOddBigInt(value) {
@@ -145,6 +148,21 @@ export function hexPrismGeometry({ edgeLength, height } = {}) {
   const lateralCenterDistance = SQRT3 * edgeLength;
   const verticalFaceArea = baseArea;
   const verticalCenterDistance = height;
+  const lateralGeometricConductance = lateralFaceArea / lateralCenterDistance;
+  const verticalGeometricConductance = verticalFaceArea / verticalCenterDistance;
+  const derived = [
+    baseArea,
+    volume,
+    lateralFaceArea,
+    lateralCenterDistance,
+    verticalFaceArea,
+    verticalCenterDistance,
+    lateralGeometricConductance,
+    verticalGeometricConductance,
+  ];
+  if (derived.some((value) => !(value > 0) || !Number.isFinite(value))) {
+    throw new RangeError("derived prism geometry must remain finite and > 0");
+  }
   return {
     edgeLength,
     height,
@@ -154,8 +172,8 @@ export function hexPrismGeometry({ edgeLength, height } = {}) {
     lateralCenterDistance,
     verticalFaceArea,
     verticalCenterDistance,
-    lateralGeometricConductance: lateralFaceArea / lateralCenterDistance,
-    verticalGeometricConductance: verticalFaceArea / verticalCenterDistance,
+    lateralGeometricConductance,
+    verticalGeometricConductance,
   };
 }
 
@@ -168,27 +186,77 @@ function validateField(field, count, name = "field") {
   }
 }
 
+function validateWorld(world) {
+  if (!world || !Number.isSafeInteger(world.count) || world.count < 1) {
+    throw new TypeError("world.count must be a positive safe integer");
+  }
+  const expectedNeighborSlots = world.count * 8;
+  if (!Number.isSafeInteger(expectedNeighborSlots)
+      || !(world.neighbors instanceof Int32Array)
+      || world.neighbors.length !== expectedNeighborSlots) {
+    throw new TypeError(`world.neighbors must be an Int32Array of length ${expectedNeighborSlots}`);
+  }
+}
+
+function validateDiffusionGeometry(geometry) {
+  if (!geometry || typeof geometry !== "object") {
+    throw new TypeError("geometry is required");
+  }
+  for (const key of [
+    "volume",
+    "lateralGeometricConductance",
+    "verticalGeometricConductance",
+  ]) {
+    if (!(geometry[key] > 0) || !Number.isFinite(geometry[key])) {
+      throw new RangeError(`geometry.${key} must be finite and > 0`);
+    }
+  }
+}
+
+function assertValidNeighbor(neighbor, cell, count) {
+  if (neighbor < -1 || neighbor >= count) {
+    throw new RangeError(`world.neighbors contains out-of-range index ${neighbor} for cell ${cell}`);
+  }
+  if (neighbor === cell) {
+    throw new RangeError(`world.neighbors contains a self-neighbor for cell ${cell}`);
+  }
+}
+
+function typedArrayViewsOverlap(a, b) {
+  if (a.buffer !== b.buffer) return false;
+  const aEnd = a.byteOffset + a.byteLength;
+  const bEnd = b.byteOffset + b.byteLength;
+  return a.byteOffset < bEnd && b.byteOffset < aEnd;
+}
+
 /**
  * Positivity-safe explicit time-step ceiling for du/dt = sum_j rate_ij (u_j-u_i).
  * The bound is conservative, not an accuracy guarantee.
  * Current scope: uniform regular cells and one non-negative scalar diffusivity.
  */
 export function explicitDiffusionDtMax({ world, geometry, diffusivity = 1 } = {}) {
-  if (!world || !geometry) throw new TypeError("world and geometry are required");
+  validateWorld(world);
+  validateDiffusionGeometry(geometry);
   if (!(diffusivity >= 0) || !Number.isFinite(diffusivity)) {
     throw new RangeError("diffusivity must be finite and >= 0");
   }
-  if (diffusivity === 0) return Infinity;
-
   const lateralRate = diffusivity * geometry.lateralGeometricConductance / geometry.volume;
   const verticalRate = diffusivity * geometry.verticalGeometricConductance / geometry.volume;
+  if (!(lateralRate >= 0) || !Number.isFinite(lateralRate)
+      || !(verticalRate >= 0) || !Number.isFinite(verticalRate)) {
+    throw new RangeError("derived diffusion rates must be finite and >= 0");
+  }
+
   let maxRateSum = 0;
   for (let i = 0; i < world.count; i++) {
     const base = i * 8;
     let sum = 0;
-    for (let d = 0; d < 6; d++) if (world.neighbors[base + d] >= 0) sum += lateralRate;
-    if (world.neighbors[base + 6] >= 0) sum += verticalRate;
-    if (world.neighbors[base + 7] >= 0) sum += verticalRate;
+    for (let d = 0; d < 8; d++) {
+      const neighbor = world.neighbors[base + d];
+      assertValidNeighbor(neighbor, i, world.count);
+      if (neighbor >= 0) sum += d < 6 ? lateralRate : verticalRate;
+    }
+    if (!Number.isFinite(sum)) throw new RangeError(`diffusion rate sum for cell ${i} is not finite`);
     if (sum > maxRateSum) maxRateSum = sum;
   }
   return maxRateSum === 0 ? Infinity : 1 / maxRateSum;
@@ -209,7 +277,8 @@ export function stepConservativeDiffusion({
   out = null,
   enforceStableStep = true,
 } = {}) {
-  if (!world || !geometry) throw new TypeError("world and geometry are required");
+  validateWorld(world);
+  validateDiffusionGeometry(geometry);
   validateField(field, world.count);
   if (!(dt >= 0) || !Number.isFinite(dt)) throw new RangeError("dt must be finite and >= 0");
   if (!(diffusivity >= 0) || !Number.isFinite(diffusivity)) {
@@ -218,7 +287,12 @@ export function stepConservativeDiffusion({
   if (source !== null) validateField(source, world.count, "source");
   if (out === null) out = new Float64Array(world.count);
   validateField(out, world.count, "out");
-  if (out === field) throw new TypeError("out must not alias field");
+  if (typedArrayViewsOverlap(out, field)) {
+    throw new TypeError("out must not overlap field");
+  }
+  if (source !== null && typedArrayViewsOverlap(out, source)) {
+    throw new TypeError("out must not overlap source");
+  }
 
   const dtMax = explicitDiffusionDtMax({ world, geometry, diffusivity });
   if (enforceStableStep && dt > dtMax * (1 + 1e-12)) {
@@ -228,14 +302,22 @@ export function stepConservativeDiffusion({
   out.set(field);
   const lateralFluxFactor = diffusivity * geometry.lateralGeometricConductance * dt / geometry.volume;
   const verticalFluxFactor = diffusivity * geometry.verticalGeometricConductance * dt / geometry.volume;
+  if (!(lateralFluxFactor >= 0) || !Number.isFinite(lateralFluxFactor)
+      || !(verticalFluxFactor >= 0) || !Number.isFinite(verticalFluxFactor)) {
+    throw new RangeError("derived diffusion flux factors must be finite and >= 0");
+  }
 
   for (let i = 0; i < world.count; i++) {
     const base = i * 8;
     for (let d = 0; d < 8; d++) {
       const j = world.neighbors[base + d];
-      if (j <= i) continue; // missing, self impossible, or already processed pair
+      assertValidNeighbor(j, i, world.count);
+      if (j <= i) continue; // missing or already processed pair
       const factor = d < 6 ? lateralFluxFactor : verticalFluxFactor;
       const transfer = factor * (field[j] - field[i]);
+      if (!Number.isFinite(transfer)) {
+        throw new RangeError(`diffusion transfer between cells ${i} and ${j} is not finite`);
+      }
       out[i] += transfer;
       out[j] -= transfer;
     }
@@ -244,6 +326,7 @@ export function stepConservativeDiffusion({
   if (source !== null && dt !== 0) {
     for (let i = 0; i < world.count; i++) out[i] += dt * source[i];
   }
+  validateField(out, world.count, "out result");
   return { out, dtMax };
 }
 
@@ -262,7 +345,9 @@ export function totalContent(field, cellVolume = 1) {
     correction = (t - sum) - y;
     sum = t;
   }
-  return sum * cellVolume;
+  const total = sum * cellVolume;
+  if (!Number.isFinite(total)) throw new RangeError("total content is not finite");
+  return total;
 }
 
 export function compareStates(a, b) {
@@ -280,6 +365,9 @@ export function compareStates(a, b) {
     if (d > maxAbs) maxAbs = d;
     l1 += d;
     l2sq += d * d;
+  }
+  if (!Number.isFinite(l1) || !Number.isFinite(l2sq)) {
+    throw new RangeError("state difference norms are not finite");
   }
   return { maxAbs, l1, l2: Math.sqrt(l2sq), rms: Math.sqrt(l2sq / Math.max(1, a.length)) };
 }

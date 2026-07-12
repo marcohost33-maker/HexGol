@@ -34,6 +34,13 @@ describe("GolHex Lab — exact integer layers", () => {
     expect(collatzClassOdd("9007199254740993")).toBe(2);
     expect(() => collatzClassOdd(Number.MAX_SAFE_INTEGER + 2)).toThrow(/safe integer/);
   });
+
+  it("rejects implicit primitive and object coercion at the exact-integer boundary", () => {
+    expect(v2BigInt("+8")).toBe(3);
+    for (const value of [true, false, null, undefined, "", " ", "1.5", "0x10", {}, []]) {
+      expect(() => v2BigInt(value)).toThrow(/bigint|safe integer|base-10 integer/);
+    }
+  });
 });
 
 describe("GolHex Lab — dense axial prism stack", () => {
@@ -70,6 +77,21 @@ describe("GolHex Lab — prism geometry and conservative transport", () => {
     expect(g.lateralFaceArea).toBe(6);
     expect(g.lateralCenterDistance).toBeCloseTo(2 * Math.sqrt(3), 14);
     expect(g.verticalCenterDistance).toBe(3);
+  });
+
+  it("fails closed when derived or supplied geometry is not finite", () => {
+    expect(() => hexPrismGeometry({ edgeLength: Number.MAX_VALUE, height: 2 }))
+      .toThrow(/derived prism geometry/);
+
+    const world = buildHexPrismStack({ radius: 1, layers: 1 });
+    expect(() => explicitDiffusionDtMax({
+      world,
+      geometry: {
+        volume: Number.NaN,
+        lateralGeometricConductance: 1,
+        verticalGeometricConductance: 1,
+      },
+    })).toThrow(/geometry.volume/);
   });
 
   it("preserves total content and sixfold symmetry for a center impulse", () => {
@@ -125,6 +147,64 @@ describe("GolHex Lab — prism geometry and conservative transport", () => {
       .toThrow(/positivity bound/);
   });
 
+  it("rejects output views that overlap field or source storage", () => {
+    const world = buildHexPrismStack({ radius: 1, layers: 1 });
+    const geometry = hexPrismGeometry({ edgeLength: 1, height: 1 });
+    const field = new Float64Array(world.count);
+    const overlappingFieldOut = new Float64Array(
+      field.buffer,
+      field.byteOffset,
+      field.length,
+    );
+
+    expect(() => stepConservativeDiffusion({
+      world,
+      geometry,
+      field,
+      dt: 0,
+      out: overlappingFieldOut,
+    })).toThrow(/overlap field/);
+
+    const source = new Float64Array(world.count).fill(1);
+    const overlappingSourceOut = new Float64Array(
+      source.buffer,
+      source.byteOffset,
+      source.length,
+    );
+    expect(() => stepConservativeDiffusion({
+      world,
+      geometry,
+      field,
+      source,
+      dt: 0,
+      out: overlappingSourceOut,
+    })).toThrow(/overlap source/);
+  });
+
+  it("rejects malformed neighbour indices before transport", () => {
+    const world = buildHexPrismStack({ radius: 1, layers: 1 });
+    const malformed = { ...world, neighbors: world.neighbors.slice() };
+    malformed.neighbors[0] = world.count;
+    const geometry = hexPrismGeometry({ edgeLength: 1, height: 1 });
+
+    expect(() => explicitDiffusionDtMax({ world: malformed, geometry }))
+      .toThrow(/out-of-range/);
+  });
+
+  it("fails closed when a finite input would create a non-finite transfer", () => {
+    const world = buildHexPrismStack({ radius: 0, layers: 2 });
+    const geometry = hexPrismGeometry({ edgeLength: 1, height: 1 });
+    const field = new Float64Array([Number.MAX_VALUE, -Number.MAX_VALUE]);
+    const dtMax = explicitDiffusionDtMax({ world, geometry });
+
+    expect(() => stepConservativeDiffusion({
+      world,
+      geometry,
+      field,
+      dt: dtMax * 0.5,
+    })).toThrow(/transfer.*not finite/);
+  });
+
   it("reports differences and stable fingerprints", () => {
     const a = new Float64Array([0, 1, 2]);
     const b = new Float64Array([0, 1 + 1e-13, 2]);
@@ -136,6 +216,10 @@ describe("GolHex Lab — prism geometry and conservative transport", () => {
   it("fails closed for non-finite comparisons and unsafe quantisation ranges", () => {
     expect(() => compareStates(new Float64Array([Number.NaN]), new Float64Array([0])))
       .toThrow(/not finite/);
+    expect(() => compareStates(
+      new Float64Array([Number.MAX_VALUE]),
+      new Float64Array([-Number.MAX_VALUE]),
+    )).toThrow(/norms are not finite/);
     expect(() => hashQuantizedState(new Float64Array([1e12]), 1e-12))
       .toThrow(/safe-integer range/);
   });
