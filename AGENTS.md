@@ -36,7 +36,8 @@ priority_when_in_conflict: 1
   (non-running) states** in the visual specs, not from a JS hook. The worker
   (`src/worker/render-worker.js`) posts an internal `telemetry` *message* to the
   main thread — that is a `postMessage` type, not a global test hook.
-- **Version:** 31.0.0 (see `package.json`) — engine + UI live in `src/App.tsx`;
+- **Version:** authoritative in `package.json` (the `version` field) — never
+  hard-code the number here; engine + UI live in `src/App.tsx`;
   pure cores extracted to `src/lib/sim-core.js` (HQST applyH/solveCN) and
   `src/lib/hex-geom.js` (hex cube geometry), both unit-tested.
 - **License:** MIT
@@ -63,10 +64,28 @@ src/
   │   ├── snapshot.js     # pure share/download dispatcher + filename/watermark (Web Share L2)
   │   ├── recorder.js     # pure recorder state machine + codec negotiation + mockable
   │   │                   #   captureStream/MediaRecorder controller (Feature 2 video)
-  │   └── worker-support.js# OffscreenCanvas feature-detection (fail-closed)
+  │   ├── worker-support.js# OffscreenCanvas feature-detection (fail-closed)
+  │   ├── golhex-lab-core.js# H1 "GolHex Lab" core: exact BigInt Collatz layer,
+  │   │                   #   dense axial hex-prism stacks, Hexprism FVM geometry,
+  │   │                   #   conservative scalar diffusion + positivity step ceiling,
+  │   │                   #   fail-closed input validation (PR #122/#124)
+  │   ├── hex-render.js   # hex canvas rendering path
+  │   ├── cell-style.js   # cell colour/style helpers
+  │   ├── presets.js      # rule/scene presets
+  │   ├── popgraph.js     # population-graph overlay
+  │   ├── savestate.js    # save/restore world state
+  │   ├── ui-gestures.js  # pointer/trackpad gesture handling
+  │   ├── ConwayIntro.jsx # square-Conway intro overlay
+  │   └── Splash.jsx      # splash screen
   └── worker/
       └── render-worker.js# AP-1: opt-in off-main-thread sim+render (Stufe 1)
 tests/                    # Vitest unit + Playwright e2e + visual baselines + manual/
+  └── unit/
+      ├── golhex-lab-core.test.js         # H1 lab-core unit + fail-closed edge tests
+      └── golhex-lab-verification.test.js # H1 verification fixtures: constant-field
+                                          #   invariance, discrete maximum principle,
+                                          #   analytic two-cell + manufactured time
+                                          #   convergence (internal, not full validation)
 experimental/             # spikes — not shipped in the main bundle
 docs/
 .github/workflows/

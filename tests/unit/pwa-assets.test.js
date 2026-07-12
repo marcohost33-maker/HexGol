@@ -51,6 +51,34 @@ describe("PWA service-worker registration (B1)", () => {
   });
 });
 
+describe("service worker cache strategy (stale-shell safety, #115)", () => {
+  const sw = readFileSync(resolve(root, "public/sw.js"), "utf8");
+
+  it("network-firsts navigation requests so a stale shell cannot trap old code", () => {
+    expect(sw).toMatch(/request\.mode\s*===\s*"navigate"/);
+    expect(sw).toContain("networkFirstShell");
+    // navigation path must try the network before any cache
+    expect(sw).toMatch(/function networkFirstShell[\s\S]*?fetch\(request\)/);
+  });
+
+  it("does not overwrite the offline shell from a navigation response (no torn shell)", () => {
+    // The new index.html may reference not-yet-cached hashed assets; persisting
+    // it as the shell could strand an offline relaunch. See PR #126 review.
+    const body = sw.slice(sw.indexOf("function networkFirstShell"), sw.indexOf("function cacheFirst"));
+    expect(body).not.toMatch(/cache\.put/);
+    expect(body).toMatch(/caches\.match/); // offline fallback only
+  });
+
+  it("keeps static/hashed assets cache-first with an offline shell fallback", () => {
+    expect(sw).toContain("cacheFirst");
+    expect(sw).toMatch(/caches\.match\("\.\/"\)/);
+  });
+
+  it("bumps the cache version so existing installs re-prime on activate", () => {
+    expect(sw).toMatch(/CACHE_NAME\s*=\s*"golhex-app-shell-v2"/);
+  });
+});
+
 describe("index.html asset paths are base-URL-safe (B2)", () => {
   const html = readFileSync(resolve(root, "index.html"), "utf8");
 
