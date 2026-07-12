@@ -4,7 +4,9 @@ Hexagonal Game of Life **plus a real-valued physics layer** (Schneeflocke,
 Wasser, Collatz, Genetik) and a norm-conserving **quantum tight-binding
 simulation (HQST)** — single React component over a Canvas2D render path.
 
-> **v31.0** - Coworker Research / Coworkerz - 2026-06-04
+> **Coworker Research / Coworkerz** — the current version is authoritative in
+> `package.json` (the `version` field). The `v31` re-convergence note below is
+> retained as dated history, not a current-version claim.
 
 > **Re-Konvergenz 2026-06-04 (v29L.3b + v31 → v31.0):** Die Produktlinie
 > (Drive-`golhex v31`) und die Repo-Linie (v29L.3b mit `sim-core.js`-Extraktion +
