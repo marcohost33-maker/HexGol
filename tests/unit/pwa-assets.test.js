@@ -51,6 +51,26 @@ describe("PWA service-worker registration (B1)", () => {
   });
 });
 
+describe("service worker cache strategy (stale-shell safety, #115)", () => {
+  const sw = readFileSync(resolve(root, "public/sw.js"), "utf8");
+
+  it("network-firsts navigation requests so a stale shell cannot trap old code", () => {
+    expect(sw).toMatch(/request\.mode\s*===\s*"navigate"/);
+    expect(sw).toContain("networkFirstShell");
+    // navigation path must try the network before any cache
+    expect(sw).toMatch(/function networkFirstShell[\s\S]*?fetch\(request\)/);
+  });
+
+  it("keeps static/hashed assets cache-first with an offline shell fallback", () => {
+    expect(sw).toContain("cacheFirst");
+    expect(sw).toMatch(/caches\.match\("\.\/"\)/);
+  });
+
+  it("bumps the cache version so existing installs re-prime on activate", () => {
+    expect(sw).toMatch(/CACHE_NAME\s*=\s*"golhex-app-shell-v2"/);
+  });
+});
+
 describe("index.html asset paths are base-URL-safe (B2)", () => {
   const html = readFileSync(resolve(root, "index.html"), "utf8");
 
