@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildHexPrismStack,
   compareStates,
+  explicitDiffusionDtMax,
   hexPrismGeometry,
   stepConservativeDiffusion,
   totalContent,
@@ -58,6 +59,36 @@ describe("GolHex H1 scalar diffusion verification fixtures", () => {
     });
     expect(compareStates(field, out).maxAbs).toBe(0);
     expect(totalContent(out, geometry.volume)).toBe(before);
+  });
+
+  it("preserves the discrete maximum principle within the positivity bound", () => {
+    const world = buildHexPrismStack({ radius: 3, layers: 2 });
+    const geometry = hexPrismGeometry({ edgeLength: 0.02, height: 0.015 });
+    const diffusivity = 0.003;
+    const dtMax = explicitDiffusionDtMax({ world, geometry, diffusivity });
+    let seed = 0x6d2b79f5;
+
+    for (let sample = 0; sample < 8; sample++) {
+      const field = new Float64Array(world.count);
+      for (let i = 0; i < field.length; i++) {
+        seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+        field[i] = -2 + 4 * (seed / 0x100000000);
+      }
+      const minimum = Math.min(...field);
+      const maximum = Math.max(...field);
+      const before = totalContent(field, geometry.volume);
+      const { out } = stepConservativeDiffusion({
+        world,
+        geometry,
+        field,
+        diffusivity,
+        dt: dtMax * 0.95,
+      });
+
+      expect(Math.min(...out)).toBeGreaterThanOrEqual(minimum - 1e-12);
+      expect(Math.max(...out)).toBeLessThanOrEqual(maximum + 1e-12);
+      expect(totalContent(out, geometry.volume)).toBeCloseTo(before, 12);
+    }
   });
 
   it("shows first-order time convergence against the analytic two-cell solution", () => {
