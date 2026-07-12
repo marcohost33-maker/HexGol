@@ -61,6 +61,14 @@ describe("service worker cache strategy (stale-shell safety, #115)", () => {
     expect(sw).toMatch(/function networkFirstShell[\s\S]*?fetch\(request\)/);
   });
 
+  it("does not overwrite the offline shell from a navigation response (no torn shell)", () => {
+    // The new index.html may reference not-yet-cached hashed assets; persisting
+    // it as the shell could strand an offline relaunch. See PR #126 review.
+    const body = sw.slice(sw.indexOf("function networkFirstShell"), sw.indexOf("function cacheFirst"));
+    expect(body).not.toMatch(/cache\.put/);
+    expect(body).toMatch(/caches\.match/); // offline fallback only
+  });
+
   it("keeps static/hashed assets cache-first with an offline shell fallback", () => {
     expect(sw).toContain("cacheFirst");
     expect(sw).toMatch(/caches\.match\("\.\/"\)/);

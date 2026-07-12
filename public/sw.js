@@ -39,14 +39,16 @@ self.addEventListener("activate", (event) => {
 // else stays cache-first: icons/manifest are static and JS/CSS are content-hashed
 // (a new build is a new URL, so cache-first never serves stale code).
 function networkFirstShell(request) {
+  // Network-first so online clients always get the freshly deployed index.html
+  // (and, through it, the new hashed asset URLs). We deliberately do NOT write
+  // the fetched document back into the shell cache: a fresh index.html can
+  // reference hashed JS/CSS that are not cached yet, so persisting it as the
+  // offline shell could strand an offline relaunch on markup that points at
+  // uncached assets (torn shell). The offline fallback therefore stays the last
+  // consistent shell precached at SW install (it advances when a new sw.js
+  // version installs). Online freshness fixes the stale-shell trap; offline
+  // stays on the last coherent version.
   return fetch(request)
-    .then((response) => {
-      if (response && response.status === 200 && response.type === "basic") {
-        const copy = response.clone();
-        caches.open(CACHE_NAME).then((cache) => cache.put("./", copy));
-      }
-      return response;
-    })
     .catch(() => caches.match(request).then((cached) => cached || caches.match("./")));
 }
 
