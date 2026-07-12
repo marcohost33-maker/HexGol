@@ -61,7 +61,7 @@ Each capability is admitted only after its own evidence gate.
 
 ### Merged #122 baseline status
 
-PR #122 is merged (green `unit`/`e2e` CI + independent Equalita review: 549/549 unit tests, conservation drift 0.0, all negative-edge inputs throw). The implementation is an initial foundation, **not** a validated physical solver: spatial-discretisation accuracy beyond the two-cell manufactured-solution case is still an open verification gap (see H1).
+PR #122 is merged (green `unit`/`e2e` CI + independent Equalita review: 549/549 unit tests, conservation drift 0.0, all negative-edge inputs throw). PR #124 subsequently hardened the lab core (fail-closed exact-integer/geometry/neighbour validation, buffer-overlap aliasing guard) and added a discrete **maximum-principle** fixture. The implementation is an initial foundation, **not** a validated physical solver: spatial-discretisation accuracy beyond the two-cell manufactured-solution case is still an open verification gap (see H1).
 
 Implemented scope:
 
@@ -75,11 +75,23 @@ Implemented scope:
 - state comparison, canonical bit fingerprints and bounded quantised fingerprints;
 - fail-closed world allocation cap.
 
-Missing before numerical verification:
+Implemented internal verification fixtures (merged, `tests/unit/golhex-lab-verification.test.js`):
 
-- analytic and manufactured reference solutions;
-- time and space convergence;
-- additional boundary conditions;
+- reciprocal, unique, non-self neighbour topology;
+- constant-field invariance;
+- analytic two-cell decay with first-order **time** convergence;
+- manufactured time-dependent field with known source (first-order time convergence);
+- discrete **maximum principle** within the positivity bound (PR #124).
+
+These fixtures exercise the solver on stated cases; they do **not** establish
+complete numerical or physical validation (evidence level E2 for those fixtures,
+not a domain-wide "verified" claim — see the evidence ladder below).
+
+Genuinely open before numerical verification (evidence-gated):
+
+- **spatial** convergence / mesh refinement on a fixed physical domain;
+- directional-anisotropy study on the hex-prism stencil;
+- additional boundary conditions (beyond no-flux);
 - heterogeneous material interfaces;
 - unit/dimension schema;
 - independent reference implementation;
@@ -187,16 +199,19 @@ Gate:
 
 ### H1.3 Scalar diffusion verification
 
-- constant-field invariance;
-- two-cell analytic decay;
-- time-step convergence;
-- spatial convergence on fixed physical domains;
-- manufactured solution with known source;
-- mass/content conservation;
-- maximum-principle and positivity tests within declared conditions;
-- Dirichlet, Neumann and Robin boundaries;
-- heterogeneous scalar coefficients with resistance/harmonic face treatment;
-- independent reference solver.
+Status reflects merged evidence in `tests/unit/golhex-lab-verification.test.js`
+(`done` = fixture merged and green; `open` = genuine verification gap).
+
+- constant-field invariance — **done**;
+- two-cell analytic decay — **done**;
+- time-step (temporal) convergence — **done** (first-order);
+- mass/content conservation — **done**;
+- maximum-principle and positivity tests within declared conditions — **done** (PR #124);
+- manufactured solution with known source — **done** (time-dependent field);
+- spatial convergence / mesh refinement on fixed physical domains — **open**;
+- Dirichlet, Neumann and Robin boundaries — **open** (only no-flux/Neumann exterior implemented);
+- heterogeneous scalar coefficients with resistance/harmonic face treatment — **open**;
+- independent reference solver — **open**.
 
 Gate:
 
@@ -598,11 +613,12 @@ Minimum production controls:
    - do not claim "numerically verified" until those gates pass.
 
 2. **H1 numerical verification specification**
-   - analytic two-cell fixture;
-   - constant-field invariant;
-   - manufactured solution design;
-   - boundary-condition API ADR;
-   - convergence report template.
+   - analytic two-cell fixture — **done**;
+   - constant-field invariant — **done**;
+   - manufactured solution design — **done** (time-dependent field);
+   - spatial-refinement / mesh-convergence fixture — **open**;
+   - boundary-condition API ADR — **open**;
+   - convergence report template — **open**.
 
 3. **Programme canon**
    - approve this roadmap;
@@ -611,7 +627,9 @@ Minimum production controls:
 
 ### NEXT
 
-- implement H1 verification fixtures;
+- extend H1 verification to the open gaps (spatial convergence, extra boundaries,
+  heterogeneous interfaces, independent reference solver — the merged fixtures cover
+  topology, invariance, temporal convergence, conservation and the maximum principle);
 - define experiment schema and units;
 - add property/fuzz tests;
 - run mobile/desktop memory benchmarks;
