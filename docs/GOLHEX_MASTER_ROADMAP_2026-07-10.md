@@ -97,6 +97,22 @@ Genuinely open before numerical verification (evidence-gated):
 - independent reference implementation;
 - performance and memory benchmarks on target devices.
 
+### Knowledge transfer — sibling repo `golhex-3d`
+
+`golhex-3d/docs/FVM_operator.md` is an independently verified (code-exec oracle)
+statement of the same conservative hex-prism FVM Laplace operator this lab core
+implements. Cross-check: its per-neighbour coefficients and the stability bound
+`dt <= V / sum_j (A_ij D_ij / d_ij)` match `hexPrismGeometry` /
+`explicitDiffusionDtMax` here, so the two implementations corroborate each other.
+Two of its techniques directly inform the **open** gaps above and are worth
+adopting as HexGol fixtures (reference, not a forced dependency):
+
+- **Directional anisotropy:** a Fourier-symbol check (`symbol/k^2` isotropic to
+  leading order across x / y / z / 45deg-xz / 30deg-xy) — a concrete recipe for
+  the open anisotropy study.
+- **Spatial verification:** the exact-on-quadratics oracle `L(x^2+y^2+z^2) = 6`
+  gives a manufactured *spatial* fixture to complement the existing temporal ones.
+
 ## 4. Findings from the last architecture iterations
 
 ### Retained
