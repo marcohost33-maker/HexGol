@@ -24,6 +24,33 @@ simulation (HQST)** — single React component over a Canvas2D render path.
 > war ein eingefrorenes Inline-Bundle eingecheckt, sodass `npm run build` die
 > `src/`-Aenderungen nicht mehr buendelte.
 
+## Zweck
+
+GolHex ist eine **modulare Kausal-Experiment-Plattform mit echter Hex-Topologie**:
+ein Carter-Bays Hexagonal-Game-of-Life-Kern, erweitert um eine reell-wertige
+Physik-Schicht (Schnee, Wasser, Collatz, Genetik) und einen normerhaltenden
+**HQST-Quanten-Tight-Binding-Solver**. Es ist bewusst **keine** universelle
+Physik-Engine und kein CAD/FEM-Ersatz — jede Fähigkeit wird erst nach eigenem
+Evidenz-Gate zugelassen (siehe `docs/ROADMAP.md`).
+
+Arbeits-/Forschungs-Bausteine tragen im Repo etablierte Kurz-Codes
+(z.B. `FVM-01` Hexprisma-Finite-Volumen, `ALG-00` Kern-Automat, `HQST`-Kern,
+`OPO-01` Operator-Split; belegt in `docs/`) — die maschinenlesbare Repo-Landkarte
+liegt in `00_landkarte/README.md`.
+
+## Non-Goals
+
+- **Kein** universeller Physik-Solver / CAD- / FEM- / Digital-Twin-Ersatz.
+- **Kein** `window.telemetry`/`window.perfStats`-Test-Hook (existiert nicht,
+  verifiziert PR#42 — e2e treibt reale DOM-Controls + `<canvas>`).
+- **Keine** schweren Runtime-Dependencies (Bundle-Grösse ist getrackte Eigenschaft).
+- **Kein** direkter Zell-Dump als Fertigungs-Export — Manufacturing ist eine
+  validierte Konvertier-Pipeline, kein Screenshot (siehe ADR).
+
+> **Archiv-Konvention:** Abgelöste/veraltete Dokumente wandern nach `archiv/`
+> (datiert), nicht gelöscht — Provenienz bleibt erhalten. Offene Punkte laufen
+> als `OFFENE_THEMEN`-Anschluss in `todo/README.md`.
+
 ## What this is
 
 GolHex is a Carter-Bays hex-topology cellular automaton implemented as a
