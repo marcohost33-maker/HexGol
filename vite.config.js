@@ -2,6 +2,7 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { spawnSync } from "node:child_process";
 
 // Single source of truth for the app version: package.json `version`.
 // Injected at build time as __APP_VERSION__ so the Splash/branding reads the
@@ -22,12 +23,34 @@ const base = process.env.VITE_BASE_PATH || (process.env.GITHUB_PAGES === "true" 
 // 20s ceiling. Ceiling only — fast tests still finish fast.
 const coverageRun = process.argv.includes("--coverage") || process.env.COVERAGE === "1";
 
+// Herkunftsmarke. Ohne sie sagt die ausgelieferte App nirgends, aus welchem Stand
+// sie gebaut wurde -- und die Frage "passt live zur Quelle?" ist dann nicht
+// beantwortbar, nicht bloss unbeantwortet. Belegt 2026-07-27: fuer vier Apps der
+// Flotte liess sich das nicht klaeren, weil dist/ ausgenommen ist und die
+// Buendelnamen nirgends sonst vorkommen.
+// Absichtlich OHNE Zeitstempel: ein Zeitstempel macht jeden Build verschieden und
+// zerstoert die Vergleichbarkeit, die hier gerade der Zweck ist.
+function emitVersionJson() {
+  return {
+    name: "hexgol-version-json",
+    generateBundle() {
+      const git = spawnSync("git", ["rev-parse", "HEAD"], { encoding: "utf8", shell: false });
+      const commit = git.status === 0 ? git.stdout.trim() : null;
+      this.emitFile({
+        type: "asset",
+        fileName: "version.json",
+        source: `${JSON.stringify({ version: `v${pkg.version}`, commit }, null, 2)}\n`,
+      });
+    },
+  };
+}
+
 export default defineConfig({
   base,
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),
   },
-  plugins: [react()],
+  plugins: [react(), emitVersionJson()],
   server: {
     port: 5173,
     strictPort: false,
