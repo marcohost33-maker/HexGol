@@ -50,6 +50,9 @@ import {
   builtinDefs, buildBuiltin, serializePreset, deserializePreset,
   loadUserPresets, saveUserPreset, deleteUserPreset, sampleThumbnail,
 } from "./lib/presets.js";
+// Issue #128 (2026-08-11): HexForge-2D — deterministische Silhouetten-Presets
+// (6 planare Formen -> Zellmaske, gate-geprueft, savestate-kompatibel).
+import { hexforgeShapes, buildHexForgeState } from "./lib/hexforge-2d.js";
 // Re-Export der von den Unit-Tests importierten Engine-Funktionen, damit die
 // bestehenden Test-Importpfade (tests/unit/*.test.js -> "../../src/App.tsx")
 // unveraendert weiterlaufen (PR#41-Kontrakt, named exports, export-only).
@@ -453,6 +456,7 @@ export default function GolHex() {
   const [userPresets, setUserPresets] = useState([]); // [{cells,meta}-Huellen]
   const [presetMsg, setPresetMsg] = useState("");
   const builtinPresetsRef = useRef(builtinDefs()); // stabil (reine Defs)
+  const hexforgeDefsRef = useRef(hexforgeShapes()); // Issue #128: 6 Silhouetten (reine Defs)
   // v33 PR-D: Snapshot-Status + dezentes Wasserzeichen-Label (abschaltbar).
   const [snapMsg, setSnapMsg] = useState("");
   const [snapWatermark, setSnapWatermark] = useState(true);
@@ -2584,6 +2588,18 @@ export default function GolHex() {
       setGalleryOpen(false);
     } catch (e) { setPresetMsg(`Laden fehlgeschlagen: ${e && e.message}`); }
   };
+  // Issue #128: HexForge-Silhouette fuer die AKTUELLE Gittergroesse rastern und
+  // ueber den Standard-Ladepfad einspielen. Gates (Konnektivitaet/Loecher/Budget)
+  // laufen im Adapter fail-closed; Fehler werden ehrlich gemeldet, nicht geschluckt.
+  const loadHexForgePreset = (id) => {
+    try {
+      const def = hexforgeDefsRef.current.find((d) => d.id === id);
+      const { cells, meta, stats } = buildHexForgeState(id, { rows: R, cols: C, sizeIdx });
+      applyLoadedState(cells, meta);
+      setPresetMsg(`Geladen: "${def ? def.name : id}" (${stats.cellCount} Zellen, Hash ${meta.hexforge.hash}).`);
+      setGalleryOpen(false);
+    } catch (e) { setPresetMsg(`HexForge fehlgeschlagen: ${e && e.message}`); }
+  };
   // Eigenes Preset laden (savestate-Huelle -> deserializePreset -> Standard-Ladepfad).
   const loadUserPreset = (name) => {
     try {
@@ -2659,6 +2675,28 @@ export default function GolHex() {
                   data-testid={`preset-builtin-${d.id}`} title={d.origin} aria-label={`Preset ${d.name} laden`}
                   style={{ display: "flex", flexDirection: "column", gap: 2, padding: 6, borderRadius: 10, border: `1px solid ${T.border}`, background: T.bg2, cursor: "pointer", fontFamily: MONO }}>
                   {presetThumb(state, d.id)}
+                  <span style={{ fontSize: 10, fontWeight: 700, color: T.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{d.name}</span>
+                </button>
+              );
+            })}
+          </div>
+          {/* Issue #128: HexForge-2D-Silhouetten (deterministische Zellmasken).
+              Thumbnails werden auf dem festen S-Gitter gesampelt (billig + stabil);
+              das LADEN rastert fuer die aktuelle Gittergroesse. */}
+          <div style={{ fontSize: 10.5, color: T.sub, fontFamily: MONO, marginBottom: 6 }}>HEXFORGE 2D (SILHOUETTEN)</div>
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1fr) minmax(0,1fr)", gap: 8, marginBottom: 10 }}>
+            {hexforgeDefsRef.current.map((d) => {
+              const state = (() => {
+                try {
+                  const s = buildHexForgeState(d.id, { rows: 40, cols: 50 });
+                  return { cells: s.cells, meta: { width: 50, height: 40 } };
+                } catch { return null; }
+              })();
+              return (
+                <button key={d.id} onClick={() => loadHexForgePreset(d.id)}
+                  data-testid={`preset-hexforge-${d.id}`} title={d.origin} aria-label={`HexForge-Form ${d.name} laden`}
+                  style={{ display: "flex", flexDirection: "column", gap: 2, padding: 6, borderRadius: 10, border: `1px solid ${T.border}`, background: T.bg2, cursor: "pointer", fontFamily: MONO }}>
+                  {presetThumb(state, `hf-${d.id}`)}
                   <span style={{ fontSize: 10, fontWeight: 700, color: T.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{d.name}</span>
                 </button>
               );
