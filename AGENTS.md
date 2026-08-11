@@ -156,7 +156,6 @@ docs/
   ├── unit-tests.yml         # primary CI — Vitest (required check: unit) — PR only
   ├── visual-regression.yml  # Playwright visual baselines (required check: e2e) — PR only
   ├── mobile-render.yml      # 2 mobile render/perf specs (reusable) — PR only
-  ├── ci-reusable-pilot.yml  # B3-Pilot coworkerz-ci — PR only; DUBLETTE von unit-tests
   ├── update-snapshots.yml   # snapshot refresh helper
   ├── encoding-guard.yml     # UTF-8 / line-ending guard
   └── zizmor.yml             # workflow security audit (SHA-pinned)
