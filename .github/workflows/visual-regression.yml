@@ -1,11 +1,16 @@
 name: visual-regression
 
 on:
-  push:
-    branches: [ main ]
+  # Kein push:main mehr (2026-08-11) -- Begruendung siehe deploy-pages.yml Kopf:
+  # der verify-Job dort faehrt dieselbe Suite im selben Container, aber fail-closed
+  # vor dem Deploy. Als Pflicht-Check `e2e` weiterhin am PR.
   pull_request:
     branches: [ main ]
   workflow_dispatch:
+
+concurrency:
+  group: visual-regression-${{ github.ref }}
+  cancel-in-progress: true
 
 # Visual regression runs Playwright against the production build, taking
 # canvas screenshots driven through real DOM controls + the <canvas> (no

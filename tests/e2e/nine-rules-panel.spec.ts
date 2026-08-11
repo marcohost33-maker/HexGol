@@ -45,12 +45,19 @@ test.describe("9-Regel-Semantikprofil", () => {
     await page.waitForTimeout(200);
     await expect(page.getByTestId("ninerules-panel")).toBeVisible();
 
-    // Die sieben fuer eine Population sinnvollen Regeln sind da ...
-    for (const id of ["R1", "R2", "R3", "R4", "R7", "R8", "R9"]) {
+    // Die sechs fuer eine Population sinnvollen Regeln sind da ...
+    for (const id of ["R1", "R2", "R3", "R7", "R8", "R9"]) {
       await expect(page.getByTestId(`ninerule-${id}`)).toBeVisible();
     }
-    // ... und die beiden ortsgebundenen fehlen. Das ist der Kern des Tests.
-    for (const id of ["R5", "R6"]) {
+    // ... und die drei ohne Gegenstand fehlen. Das ist der Kern des Tests.
+    // R5/R6 sind ortsgebunden: eine Population hat keinen Ort. R4 kam am
+    // 2026-08-11 dazu (Befund B3) -- es verglich Populations- mit Aenderungszahl,
+    // zwei Groessen desselben Frames, und urteilte empirisch falsch herum: ein
+    // ERSTARRTER Automat "unterschied" (9 != 0), ein sterbender nicht (0 == 0).
+    // Der Ringpuffer traegt keinen Vergleichsraum, der Unterscheidung belegen
+    // koennte. Diese Liste ist die UI-Seite von NICHT_ANWENDBAR im Adapter --
+    // aendert sich die dort, muss sie sich hier mitaendern.
+    for (const id of ["R4", "R5", "R6"]) {
       await expect(page.getByTestId(`ninerule-${id}`)).toHaveCount(0);
     }
 
