@@ -1,10 +1,19 @@
 name: Encoding Guard
 
 on:
+  # `branches: [main]` beim Push ergaenzt 2026-08-11. Vorher hatte der push-Trigger
+  # KEINEN Branch-Filter: jeder Push auf einen Feature-Branch loeste ihn aus, und der
+  # zugehoerige Pull-Request dann ein zweites Mal. Belegt am PR #138 -- die Pruefung
+  # "Reject invalid UTF-8 in .github" stand dort zweimal mit verschiedenen Run-IDs.
   push:
+    branches: [main]
     paths: [".github/**"]
   pull_request:
     paths: [".github/**"]
+
+concurrency:
+  group: encoding-guard-${{ github.ref }}
+  cancel-in-progress: true
 
 # Least privilege; the job only needs to read the checked-out tree.
 permissions: {}

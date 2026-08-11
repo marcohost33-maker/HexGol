@@ -15,6 +15,12 @@ on:
   schedule:
     - cron: "13 6 * * 1"   # Mondays 06:13 UTC
 
+concurrency:
+  # Der Schedule-Lauf soll NICHT abgebrochen werden koennen (er ist der einzige
+  # regelmaessige Security-Blick); deshalb haengt die Gruppe am ref UND am Event.
+  group: zizmor-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
+
 permissions: {}
 
 jobs:
