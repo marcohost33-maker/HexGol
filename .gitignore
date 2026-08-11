@@ -19,3 +19,7 @@ tests/e2e/**/*-diff.png
 .idea
 .vscode
 *.log
+
+# Lokaler Agenten-Zustand (Claude Code / Agent-Memory) -- maschinenlokal,
+# gehoert nicht ins App-Repo. Versehentlich mitcommittet am 2026-08-11.
+.claude/
