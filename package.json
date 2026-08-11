@@ -1,6 +1,6 @@
 {
   "name": "hexgol",
-  "version": "33.4.0",
+  "version": "33.5.0",
   "private": true,
   "type": "module",
   "description": "GolHex - Hexagonal Game of Life with real-valued physics + unitary HQST quantum mode",
