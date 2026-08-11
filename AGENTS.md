@@ -82,6 +82,9 @@ src/
   │   ├── hex-render.js   # hex canvas rendering path
   │   ├── cell-style.js   # cell colour/style helpers
   │   ├── presets.js      # rule/scene presets
+  │   ├── hexforge-2d.js  # Issue #128: deterministic 2D silhouette->cell-mask
+  │   │                   #   adapter (6 parametric shapes, gates fail-closed,
+  │   │                   #   golden hashes in tests/unit/hexforge-2d.test.js)
   │   ├── popgraph.js     # population-graph overlay
   │   ├── savestate.js    # save/restore world state
   │   ├── ui-gestures.js  # pointer/trackpad gesture handling

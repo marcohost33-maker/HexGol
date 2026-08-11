@@ -112,6 +112,10 @@ export function serializeSave({ cells, meta }) {
       torusOn: m.torusOn, boundaryMode: m.boundaryMode,
       colorMode: m.colorMode, simMode: m.simMode, rvalRule: m.rvalRule,
       seed: m.seed, gen: m.gen | 0, zoom: m.zoom,
+      // HexForge-2D-Herkunft (Issue #128): expliziter Silhouetten-Spec + Hash.
+      // Optional/abwaertskompatibel: fehlt bei normalen Spielstaenden (undefined
+      // faellt beim JSON-Export weg); deserializeSave reicht meta unveraendert durch.
+      hexforge: m.hexforge,
     },
     cellsB64: bytesToBase64(bytes),
   };
