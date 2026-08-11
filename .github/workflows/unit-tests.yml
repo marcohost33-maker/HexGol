@@ -3,8 +3,13 @@ name: unit-tests
 on:
   # Kein push:main mehr (2026-08-11): auf main lief dieser Workflow an einem bereits
   # gemergten Commit und konnte nichts mehr verhindern. Das Gate ist vollstaendig der
-  # PR -- als Pflicht-Check `unit`. Nach dem Merge baut Cloudflare Pages aus main;
-  # geprueft wird die Auslieferung ueber /version.json gegen `git rev-parse HEAD`
+  # PR -- als Pflicht-Check `unit`. Nach dem Merge deployt NICHTS von selbst: das
+  # Pages-Projekt `golhex` hat keinen Git-Provider (`wrangler pages project list`
+  # -> Spalte "Git Provider: No"), der Deploy wird VON HAND angestossen. Hier stand
+  # bis 2026-08-11 "Nach dem Merge baut Cloudflare Pages aus main" -- das war falsch
+  # und genau der Grund, warum ein Deploy-Rueckstand still bleiben konnte: wer den
+  # Satz las, wartete auf eine Automatik, die es nie gab.
+  # Geprueft wird die Auslieferung ueber /version.json gegen `git rev-parse HEAD`
   # (siehe AGENTS.md, Deploy-Abschnitt), nicht ueber einen gruenen Job.
   pull_request:
     branches: [ main ]

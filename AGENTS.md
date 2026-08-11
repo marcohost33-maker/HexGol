@@ -53,6 +53,57 @@ priority_when_in_conflict: 1
   einen Monat alt war. Zwei Live-URLs für dieselbe App sind die Fehlerquelle, nicht
   die Redundanz. Wer „ist es live?" prüft, prüft **golhex.pages.dev** und
   vergleicht `/version.json` (`commit`) gegen `git rev-parse HEAD`.
+  **Der Deploy läuft NICHT automatisch.** Das Pages-Projekt `golhex` hat keinen
+  Git-Provider (`wrangler pages project list` → Spalte `Git Provider: No`); ein
+  Merge auf `main` ändert an der Auslieferung nichts.
+
+  **Der bequeme und sichere Weg ist der Doppelklick auf
+  `Vero-Bats\golhex-cloudflare-deploy.bat`** — er holt `main`, setzt
+  `DEPLOY_BUILD=1` und bricht bei jedem Fehlschlag ab. Wer von Hand ausliefert,
+  muss **alle drei** Bedingungen selbst herstellen; jede einzelne kann sonst eine
+  falsche Auslieferung erzeugen, die der `version.json`-Vergleich **nicht** auffängt:
+
+  1. **`DEPLOY_BUILD=1`** — sonst bleibt der Herkunfts-Wächter in `vite.config.js`
+     stumm, und `version.json` behauptet einen sauberen Commit, obwohl das Bündel
+     uncommittete Änderungen enthält.
+  2. **`HEAD == origin/main`** — der Wächter prüft nur auf uncommittete Änderungen,
+     **nicht auf den Branch**. Aus einem sauberen Feature-Branch heraus geht sonst
+     ungemergter Code als `main`-Deployment live, und der Vergleich
+     „live gegen `git rev-parse HEAD`" besteht trotzdem — er vergleicht ja denselben
+     Checkout mit sich selbst.
+  3. **Abbruch bei Build-Fehler** — Build und Upload müssen verkettet sein. Der
+     Wächter wirft beim Laden der Vite-Konfiguration, also **bevor** `dist/` geleert
+     wird; ohne Verkettung lädt der nächste Befehl das alte Bündel hoch und macht
+     aus fail-closed ein fail-open.
+
+  ```bat
+  REM  Windows (cmd) — && bricht die Kette bei jedem Fehlschlag ab
+  git fetch origin && git rev-parse HEAD > "%TEMP%\h.txt" && git rev-parse origin/main > "%TEMP%\m.txt" || exit /b 1
+  fc "%TEMP%\h.txt" "%TEMP%\m.txt" >nul || ( echo HEAD ungleich origin/main -- Abbruch & exit /b 1 )
+  set DEPLOY_BUILD=1
+  npm run build && npx wrangler pages deploy dist --project-name=golhex --branch=main
+  ```
+  ```powershell
+  # PowerShell
+  git fetch origin
+  if ((git rev-parse HEAD) -ne (git rev-parse origin/main)) { throw "HEAD ungleich origin/main -- nicht ausliefern" }
+  $env:DEPLOY_BUILD = "1"
+  npm run build
+  if ($LASTEXITCODE -ne 0) { throw "Build fehlgeschlagen -- kein Upload" }
+  npx wrangler pages deploy dist --project-name=golhex --branch=main
+  ```
+  ```bash
+  # bash/zsh
+  git fetch origin
+  [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] || { echo "HEAD ungleich origin/main"; exit 1; }
+  DEPLOY_BUILD=1 npm run build && npx wrangler pages deploy dist --project-name=golhex --branch=main
+  ```
+
+  Am bequemsten ist der Doppelklick auf `Vero-Bats\golhex-cloudflare-deploy.bat` —
+  er setzt die Variable bereits. Das gilt für **alle 13** Cloudflare-Pages-Projekte
+  des Portfolios: keines ist git-angebunden (enumeriert am 2026-08-11). Solange das
+  so ist, ist „gemergt" **kein** Beleg für „ausgeliefert"; nur `/version.json` ist
+  einer — und der Beleg taugt nur, wenn der Wächter beim Bauen scharf war.
 
 ## Repository layout
 
