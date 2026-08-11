@@ -53,6 +53,14 @@ priority_when_in_conflict: 1
   einen Monat alt war. Zwei Live-URLs für dieselbe App sind die Fehlerquelle, nicht
   die Redundanz. Wer „ist es live?" prüft, prüft **golhex.pages.dev** und
   vergleicht `/version.json` (`commit`) gegen `git rev-parse HEAD`.
+  **Der Deploy läuft NICHT automatisch.** Das Pages-Projekt `golhex` hat keinen
+  Git-Provider (`wrangler pages project list` → Spalte `Git Provider: No`); ein
+  Merge auf `main` ändert an der Auslieferung nichts. Anstoss von Hand:
+  `npm run build` und dann `npx wrangler pages deploy dist --project-name=golhex
+  --branch=main` (oder der Doppelklick `Vero-Bats\golhex-cloudflare-deploy.bat`).
+  Das gilt für **alle 13** Cloudflare-Pages-Projekte des Portfolios — keines ist
+  git-angebunden (enumeriert am 2026-08-11). Solange das so ist, ist „gemergt"
+  **kein** Beleg für „ausgeliefert"; nur `/version.json` ist einer.
 
 ## Repository layout
 
