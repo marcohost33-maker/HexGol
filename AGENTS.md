@@ -128,9 +128,11 @@ npm run test:e2e:update   # refresh Playwright snapshots (use deliberately)
    to be green. No direct pushes; PRs only. (`enforce_admins: true` — the rule
    applies to User1 as well; a direct push is rejected by the protection hook.
    `required_reviews: 0`, so a green PR can be self-merged.)
-   **Gates live on the PR.** Since 2026-08-11 the check workflows no longer run on
-   `push: main` — there they judged an already-merged commit and could prevent
-   nothing. All gating happens on the pull request; a merge runs **no** CI jobs.
+   **Gates live on the PR.** Since 2026-08-11 the **test and deploy** workflows no
+   longer run on `push: main` — there they judged an already-merged commit and could
+   prevent nothing. All gating happens on the pull request. A merge therefore runs no
+   test job; `encoding-guard` and `zizmor` still fire on `push: main` when the merge
+   touches `.github/**`, which is intended (they guard the workflow files themselves).
 2. **Backup-First on destructive ops.** Before any `git push --force`, branch
    delete, or ref-PATCH: capture pre-SHA, run the op, verify post-SHA.
 3. **Visual baselines are intentional.** Do not blanket-run
