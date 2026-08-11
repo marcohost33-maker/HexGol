@@ -12,8 +12,8 @@
     "test:coverage": "vitest run --coverage",
     "test:mutation": "node tests/unit/mutation-probe.mjs",
     "test:watch": "vitest",
-    "test:e2e": "playwright test",
-    "test:e2e:update": "playwright test --update-snapshots"
+    "test:e2e": "npm run build && playwright test",
+    "test:e2e:update": "npm run build && playwright test --update-snapshots"
   },
   "dependencies": {
     "react": "^19.2.7",

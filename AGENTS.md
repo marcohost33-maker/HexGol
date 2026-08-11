@@ -118,7 +118,7 @@ npm run preview      # serve dist/ on http://localhost:4173
 
 npm test             # unit tests (Vitest, run-once)
 npm run test:watch   # vitest watch mode
-npm run test:e2e     # Playwright + visual baselines
+npm run test:e2e     # builds first, then Playwright + visual baselines
 npm run test:e2e:update   # refresh Playwright snapshots (use deliberately)
 ```
 
@@ -196,7 +196,11 @@ npm run test:e2e:update   # refresh Playwright snapshots (use deliberately)
 - Do add/adjust Vitest unit tests with any change to rule logic (`src/App.tsx` / `src/lib/`).
 - Do update Playwright baselines only for intended visual changes, and note it.
 - Do keep `README.md` rule/controls documentation in sync.
-- Do run `npm test` and `npm run test:e2e` locally before pushing.
+- Do run `npm test` and `npm run test:e2e` locally before pushing. **Never call
+  `npx playwright test` directly** for a verdict: Playwright serves `dist/` via
+  `npm run preview` but does not build it, so a bare call silently tests the
+  *previous* build. Proven 2026-08-11: a mutated source passed `5 passed` without a
+  rebuild and correctly failed `2 failed` after one. `npm run test:e2e` builds first.
 
 ## §5 When stuck
 
