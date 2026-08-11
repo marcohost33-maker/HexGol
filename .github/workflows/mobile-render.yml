@@ -5,10 +5,13 @@
 name: mobile-render
 
 on:
+  # Kein push:main mehr (2026-08-11) -- Begruendung siehe deploy-pages.yml Kopf.
   pull_request:
     branches: [main]
-  push:
-    branches: [main]
+
+concurrency:
+  group: mobile-render-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read

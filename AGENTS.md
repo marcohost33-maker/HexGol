@@ -89,8 +89,11 @@ tests/                    # Vitest unit + Playwright e2e + visual baselines + ma
 experimental/             # spikes — not shipped in the main bundle
 docs/
 .github/workflows/
-  ├── unit-tests.yml         # primary CI — Vitest (required check: unit)
-  ├── visual-regression.yml  # Playwright visual baselines (required check: e2e)
+  ├── unit-tests.yml         # primary CI — Vitest (required check: unit) — PR only
+  ├── visual-regression.yml  # Playwright visual baselines (required check: e2e) — PR only
+  ├── mobile-render.yml      # 2 mobile render/perf specs (reusable) — PR only
+  ├── ci-reusable-pilot.yml  # B3-Pilot coworkerz-ci — PR only; DUBLETTE von unit-tests
+  ├── deploy-pages.yml       # main → verify (unit+e2e, fail-closed) → deploy
   ├── update-snapshots.yml   # snapshot refresh helper
   ├── encoding-guard.yml     # UTF-8 / line-ending guard
   └── zizmor.yml             # workflow security audit (SHA-pinned)
@@ -113,7 +116,14 @@ npm run test:e2e:update   # refresh Playwright snapshots (use deliberately)
 ## §1 Working agreements
 
 1. **Branch protection active.** `main` requires the CI checks `unit` and `e2e`
-   to be green. No direct pushes; PRs only.
+   to be green. No direct pushes; PRs only. (`enforce_admins: true` — the rule
+   applies to User1 as well; a direct push is rejected by the protection hook.
+   `required_reviews: 0`, so a green PR can be self-merged.)
+   **Gates live on the PR, the deploy is fail-closed.** Since 2026-08-11 the four
+   check workflows no longer run on `push: main` — there they judged an
+   already-merged commit and could prevent nothing. `deploy-pages.yml` now runs
+   `verify` (unit + e2e, same pinned Playwright container) *before* `deploy`, so
+   nothing reaches Pages without a green run. 2 jobs per merge instead of 6.
 2. **Backup-First on destructive ops.** Before any `git push --force`, branch
    delete, or ref-PATCH: capture pre-SHA, run the op, verify post-SHA.
 3. **Visual baselines are intentional.** Do not blanket-run

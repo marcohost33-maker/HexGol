@@ -3,10 +3,19 @@
 name: ci-reusable-pilot
 
 on:
-  push:
-    branches: [main]
+  # Kein push:main mehr (2026-08-11) -- Begruendung siehe deploy-pages.yml Kopf.
+  # OFFENER BEFUND fuer User1: Dieser Pilot faehrt `npm test` + `npm run build` --
+  # exakt das, was unit-tests.yml (Pflicht-Check `unit`) ohnehin faehrt. Seit dem
+  # B3-Pilot vom 2026-06-04 wird jeder PR damit doppelt geprueft. Bewusst NICHT
+  # eigenmaechtig abgeschaltet: die Adoption der zentralen coworkerz-ci ist eine
+  # Portfolio-Entscheidung, keine Repo-Entscheidung. Wenn der Pilot ausgewertet
+  # ist, faellt entweder er oder unit-tests.yml weg -- beide braucht es nicht.
   pull_request:
     branches: [main]
+
+concurrency:
+  group: ci-reusable-pilot-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
