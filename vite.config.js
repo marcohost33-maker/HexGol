@@ -30,16 +30,43 @@ const coverageRun = process.argv.includes("--coverage") || process.env.COVERAGE 
 // Buendelnamen nirgends sonst vorkommen.
 // Absichtlich OHNE Zeitstempel: ein Zeitstempel macht jeden Build verschieden und
 // zerstoert die Vergleichbarkeit, die hier gerade der Zweck ist.
+// Einmal ermitteln, zweifach verwendet: vollstaendig in version.json (maschinen-
+// lesbar, fuer den Abgleich live-gegen-Quelle) und verkuerzt als __APP_COMMIT__ in
+// der sichtbaren Statuszeile. Eine Datei allein genuegt nicht -- wer die App vor
+// sich hat, soll den Stand SEHEN, ohne eine URL von Hand zusammenzusetzen.
+// Belegt 2026-08-11: die Versionsnummer stand ueber vier Commits unveraendert auf
+// 33.4.0, quer durch ein ganzes Feature; an ihr war der ausgelieferte Stand
+// grundsaetzlich nicht ablesbar.
+const commitSha = (() => {
+  // GITHUB_SHA zuerst: in Actions ist es gesetzt und autoritativ. `git rev-parse`
+  // ist dort der unzuverlaessigere Weg -- der verify-Job laeuft im Playwright-
+  // Container als --user 1001:1001, und Gits "dubious ownership"-Schutz laesst den
+  // Aufruf dann fehlschlagen. Das Ergebnis waere kein Fehler, sondern still `null`:
+  // eine Herkunftsmarke, die aussieht wie eine Antwort und keine ist.
+  if (process.env.GITHUB_SHA) return process.env.GITHUB_SHA;
+  const git = spawnSync("git", ["rev-parse", "HEAD"], { encoding: "utf8", shell: false });
+  return git.status === 0 ? git.stdout.trim() : null;
+})();
+
+// Fail-closed. Der Auslieferungs-Build ist genau der, bei dem die Herkunft zaehlt --
+// ein stilles `"commit": null` dort macht die Marke wertlos, ohne dass es jemand
+// merkt. Lieber ein roter Build als eine Datei, die Auskunft vortaeuscht.
+// Lokale Builds und Tests bleiben unberuehrt (nur der Pages-Build ist betroffen).
+if (process.env.GITHUB_PAGES === "true" && !commitSha) {
+  throw new Error(
+    "Pages-Build ohne ermittelbaren Commit: weder GITHUB_SHA noch `git rev-parse HEAD` " +
+    "lieferten einen Wert. Die Herkunftsmarke waere leer -- Abbruch statt stiller Luecke.",
+  );
+}
+
 function emitVersionJson() {
   return {
     name: "hexgol-version-json",
     generateBundle() {
-      const git = spawnSync("git", ["rev-parse", "HEAD"], { encoding: "utf8", shell: false });
-      const commit = git.status === 0 ? git.stdout.trim() : null;
       this.emitFile({
         type: "asset",
         fileName: "version.json",
-        source: `${JSON.stringify({ version: `v${pkg.version}`, commit }, null, 2)}\n`,
+        source: `${JSON.stringify({ version: `v${pkg.version}`, commit: commitSha }, null, 2)}\n`,
       });
     },
   };
@@ -49,6 +76,8 @@ export default defineConfig({
   base,
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),
+    // Kurz-SHA reicht fuer den Blick; version.json traegt den vollen Wert.
+    __APP_COMMIT__: JSON.stringify(commitSha ? commitSha.slice(0, 7) : null),
   },
   plugins: [react(), emitVersionJson()],
   server: {

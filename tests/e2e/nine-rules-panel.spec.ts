@@ -109,4 +109,47 @@ test.describe("9-Regel-Semantikprofil", () => {
     // Und die Simulation laeuft weiterhin fehlerfrei: das Raster beobachtet nur.
     expect(errors, "keine Konsolen-/Page-Fehler").toEqual([]);
   });
+
+  // Der Grund fuer diesen Test ist ein Bedien-Befund, kein Code-Befund (2026-08-11):
+  // das Raster war live und funktionierte, wurde aber nicht gefunden -- drei Klicks
+  // tief, und nach jedem Laden zurueck auf "axiome". Ein Feature, das sich bei jedem
+  // Besuch selbst wieder versteckt, ist praktisch nicht vorhanden.
+  test("Profil-Wahl ueberdauert den Reload und ist zugeklappt erkennbar", async ({ page }) => {
+    await page.goto("/");
+    await page.waitForTimeout(800);
+
+    const toggle = await oeffneSemantikPanel(page);
+    await toggle.click();
+    await page.getByTestId("semantik-neunregeln").click();
+    await page.waitForTimeout(200);
+    await expect(page.getByTestId("ninerules-panel")).toBeVisible();
+
+    // Zugeklappt muss sichtbar bleiben, DASS etwas anderes als der Default laeuft.
+    await toggle.click();
+    await page.waitForTimeout(200);
+    await expect(page.getByTestId("ninerules-panel")).toHaveCount(0);
+    await expect(page.getByTestId("semantik-aktiv-marke")).toBeVisible();
+
+    // Und nach einem echten Reload steht die Wahl noch.
+    await page.reload();
+    await page.waitForTimeout(800);
+    const toggleNachReload = await oeffneSemantikPanel(page);
+    await expect(page.getByTestId("semantik-aktiv-marke")).toBeVisible();
+    await toggleNachReload.click();
+    await page.waitForTimeout(200);
+    await expect(page.getByTestId("semantik-neunregeln")).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByTestId("ninerule-R1")).toBeVisible();
+  });
+
+  // Herkunftsmarke: die Versionsnummer allein sagt nicht, welcher Stand laeuft --
+  // sie stand ueber vier Commits unveraendert auf 33.4.0, quer durch ein ganzes
+  // Feature. Der Kurz-SHA daneben beantwortet die Frage ohne Werkzeug.
+  test("Statuszeile traegt Version und Herkunft", async ({ page }) => {
+    await page.goto("/");
+    await page.waitForTimeout(800);
+    const herkunft = page.getByTestId("herkunft");
+    await expect(herkunft).toBeVisible();
+    // v<version> — und im Build mit git zusaetzlich der Kurz-SHA.
+    await expect(herkunft).toHaveText(/^v\d+\.\d+\.\d+( · [0-9a-f]{7})?$/);
+  });
 });

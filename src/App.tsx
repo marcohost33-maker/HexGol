@@ -63,6 +63,17 @@ declare const __APP_VERSION__: string;
 export const APP_VERSION: string =
   typeof __APP_VERSION__ !== "undefined" ? __APP_VERSION__ : "dev";
 
+// Herkunftsmarke, sichtbar in der Statuszeile. Die Versionsnummer allein sagt NICHT,
+// welcher Stand ausgeliefert ist: sie stand ueber vier Commits unveraendert auf
+// 33.4.0, quer durch ein ganzes Feature (belegt 2026-08-11 -- ein Deploy war live,
+// aber an der Anzeige nicht von seinem Vorgaenger zu unterscheiden). Der Kurz-SHA
+// beantwortet die Frage "sehe ich gerade den neuen Stand?" ohne Werkzeug.
+// null (statt eines Platzhalters), wenn ohne Vite/git gebaut -- eine geratene
+// Herkunft waere schlimmer als gar keine.
+declare const __APP_COMMIT__: string | null;
+export const APP_COMMIT: string | null =
+  typeof __APP_COMMIT__ !== "undefined" ? __APP_COMMIT__ : null;
+
 // --- HQST-Parameter + Divergenz-Schranke (v33 PR-E / Mathe-Audit P1.4) -------
 // Tight-Binding-Parameter der HQST-Quantenwelle (siehe stepHQST-Aufruf in step()).
 // J = Hopping, V = On-Site-Potential, dt = Zeitschritt. Hier ZENTRAL benannt,
@@ -530,8 +541,18 @@ export default function GolHex() {
   // ist das optionale Pruefraster aus dem 007acc-Transfer -- es BEOBACHTET nur und
   // veraendert die Simulation nicht. Diese Trennung ist wichtig: ein Pruefraster, das
   // seinen Gegenstand mitverandert, misst sich selbst.
-  const [semantikProfil, setSemantikProfil] = useState("axiome");
-  const [showNineRules, setShowNineRules] = useState(false);
+  // Beides ueberdauert den Reload. Grund (belegt 2026-08-11): das 9-Regel-Raster
+  // liegt drei Klicks tief -- Tab "Regeln", im Panel nach unten, aufklappen -- und
+  // stand danach wieder auf "axiome". Wer einmal "9 REGELN" gewaehlt hat, meint es;
+  // ihn bei jedem Laden zurueckzusetzen macht das Feature praktisch unauffindbar.
+  // Muster wie golhex_cvd_v1: nur lesen wenn vorhanden, Erstbesuch-Default unveraendert
+  // (axiome/geschlossen), damit das Raster Opt-in bleibt.
+  const [semantikProfil, setSemantikProfil] = useState(() => {
+    try { return localStorage.getItem("golhex_semantik_v1") === "neunregeln" ? "neunregeln" : "axiome"; } catch { return "axiome"; }
+  });
+  const [showNineRules, setShowNineRules] = useState(() => {
+    try { return localStorage.getItem("golhex_semantik_offen_v1") === "1"; } catch { return false; }
+  });
   const [ax, setAx] = useState({ a1: false, a2: false, a3: false, a4: false });
   const [a5, setA5] = useState("off");
   const [watzOnly, setWatzOnly] = useState(false);
@@ -694,6 +715,15 @@ export default function GolHex() {
   const solverDivergedRef = useRef(false);
   const rvalRef = useRef(rvalRule); useEffect(() => { rvalRef.current = rvalRule; }, [rvalRule]);
   // F10: CVD-Modus -> Render-Pfad (cvdRef) + Persistenz + Vollredraw beim Umschalten.
+  // Semantikprofil-Wahl sichern. Reines Anzeige-Praeferenz-Schreiben, kein
+  // Redraw noetig -- das Raster beobachtet nur und greift nicht in die Simulation ein.
+  useEffect(() => {
+    try { localStorage.setItem("golhex_semantik_v1", semantikProfil); } catch { /* private mode */ }
+  }, [semantikProfil]);
+  useEffect(() => {
+    try { localStorage.setItem("golhex_semantik_offen_v1", showNineRules ? "1" : "0"); } catch { /* private mode */ }
+  }, [showNineRules]);
+
   const cvdRef = useRef(cvdMode);
   useEffect(() => {
     cvdRef.current = cvdMode;
@@ -3631,6 +3661,11 @@ export default function GolHex() {
         style={{ width: "100%", textAlign: "left", padding: "9px 10px", borderRadius: 10, border: `1px solid ${T.border}`, background: T.panel, color: T.text, fontFamily: MONO, fontSize: 12, fontWeight: 700, cursor: "pointer", marginBottom: 8 }}
       >
         {showNineRules ? "v" : ">"} SEMANTIKPROFIL (5 Axiome / 9 Regeln)
+        {/* Zugeklappt sonst nicht erkennbar, dass ueberhaupt etwas anderes als der
+            Default laeuft -- das Raster wertet weiter aus, nur sieht man es nicht. */}
+        {!showNineRules && semantikProfil === "neunregeln" && (
+          <span data-testid="semantik-aktiv-marke" style={{ color: T.accent, marginLeft: 8 }}>· 9 REGELN aktiv</span>
+        )}
       </button>
       {showNineRules && (
         <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 14 }}>
@@ -4386,6 +4421,14 @@ export default function GolHex() {
         <span>{running ? <><b style={{ color: T.accent }}>{stats.sps.toFixed(0)}</b> Gen/s</> : <span style={{ opacity: 0.55 }}>⏸ pausiert</span>}</span>
         <span style={{ background: T.bg2, border: `1px solid ${T.accent}`, color: T.accent, borderRadius: 8, padding: "1px 7px", fontSize: 11 }}>{ruleChip}</span>
         <span style={{ background: T.bg2, border: `1px solid ${T.border}`, color: T.sub, borderRadius: 8, padding: "1px 7px", fontSize: 11 }}>{frameChip}</span>
+        {/* Herkunftsmarke ganz rechts: welcher Stand laeuft hier gerade? Bewusst
+            unaufdringlich (halbe Deckkraft) -- es ist eine Antwort auf Nachfrage,
+            keine Botschaft. `title` traegt den Hinweis auf version.json fuer den,
+            der es maschinell abgleichen will. */}
+        <span data-testid="herkunft" title={`GolHex v${APP_VERSION}${APP_COMMIT ? ` · Commit ${APP_COMMIT}` : ""} — voller Stand in version.json`}
+          style={{ marginLeft: "auto", paddingLeft: 10, opacity: 0.5, fontSize: 11 }}>
+          v{APP_VERSION}{APP_COMMIT ? ` · ${APP_COMMIT}` : ""}
+        </span>
       </div>
 
       {/* v33 PR-D: Snapshot-Rueckmeldung (kurz) + Wasserzeichen-Schalter (abschaltbar,
