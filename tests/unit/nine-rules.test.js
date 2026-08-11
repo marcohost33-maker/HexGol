@@ -12,7 +12,7 @@
 import { describe, it, expect } from "vitest";
 import {
   evaluateNineRules, andAll, hexDistance, isValidDirection, istDefinitiv,
-  STATUS, SCOPE, RULES, D6, SPEC_VERSION,
+  STATUS, SCOPE, RULES, D6, SPEC_VERSION, R2_MODUS, R4_MODUS,
 } from "../../src/lib/nine-rules.js";
 
 // Hilfen: kompakte Zustaende bauen.
@@ -20,10 +20,14 @@ const S = (u, q = 0, r = 0, extra = {}) => ({ u, q: { q, r }, ...extra });
 const statusOf = (report, id) => report.rules.find((x) => x.id === id).status;
 
 describe("Pflicht-Gegenbeispiele T1-T6 aus der Spezifikation", () => {
-  it("T1 Pendel/Zyklus: Aendern ist nicht Werden (R8 PASS, R2 FAIL)", () => {
+  it("T1 Pendel/Zyklus: Aendern ist nicht Werden (R8 PASS, R2 FAIL im Profil MONOTONE)", () => {
     // Ein Pendel wechselt staendig den Zustand, entwickelt sich aber nicht.
+    // Die Spec haengt diesen Fall ausdruecklich an "sofern a keine monotone Entwicklung
+    // zeigt" -- also an das Profil MONOTONE.
     const trace = [S(0), S(1), S(0), S(1)].map((s, i) => ({ ...s, a: i % 2 }));
-    const rep = evaluateNineRules(trace, { progressVariable: (s) => s.a });
+    const rep = evaluateNineRules(trace, {
+      progressVariable: (s) => s.a, r2Modus: R2_MODUS.MONOTONE,
+    });
     expect(statusOf(rep, "R8")).toBe(STATUS.PASS);
     expect(statusOf(rep, "R2")).toBe(STATUS.FAIL);
     // Der Gegenbeweis muss die Stelle benennen, nicht nur "falsch" sagen.
@@ -71,19 +75,25 @@ describe("Pflicht-Gegenbeispiele T1-T6 aus der Spezifikation", () => {
   });
 });
 
-describe("Fail-closed: fehlende Konfiguration ergibt N/A, niemals PASS", () => {
-  // Das ist die wichtigste Sicherheitseigenschaft des Modells. Eine nicht
-  // konfigurierte Regel darf nicht wie eine erfuellte aussehen.
+describe("Fail-closed: fehlende Konfiguration ergibt nie PASS", () => {
+  // Die wichtigste Sicherheitseigenschaft. Spec v2.1 (§20.4) verlangt zusaetzlich, dass
+  // ein FEHLENDER PFLICHTPARAMETER (CONFIG_ERROR) von echter NICHTANWENDBARKEIT (N/A)
+  // unterschieden wird -- sonst verschwindet ein Bedienfehler in einer Kategorie, die
+  // wie ein normales Resultat aussieht.
   const trace = [S(1), S(2)];
 
   it.each([
     ["R2", "progressVariable"],
     ["R4", "population"],
+  ])("%s meldet CONFIG_ERROR ohne %s (Bedienfehler, nicht Nichtanwendbarkeit)", (id) => {
+    expect(statusOf(evaluateNineRules(trace, {}), id)).toBe(STATUS.CONFIG_ERROR);
+  });
+
+  it.each([
     ["R7", "terminalPredicate"],
     ["R9", "lifeModel"],
   ])("%s ist N/A ohne %s", (id) => {
-    const rep = evaluateNineRules(trace, {});
-    expect(statusOf(rep, id)).toBe(STATUS.NA);
+    expect(statusOf(evaluateNineRules(trace, {}), id)).toBe(STATUS.NA);
   });
 
   it("R5 ist N/A, wenn der Zustand gar keine Orientierung fuehrt", () => {
@@ -94,6 +104,73 @@ describe("Fail-closed: fehlende Konfiguration ergibt N/A, niemals PASS", () => {
     const rep = evaluateNineRules(trace, {});
     const konfigAbhaengig = rep.rules.filter((r) => r.deps.length > 0 && r.id !== "R3" && r.id !== "R6");
     for (const r of konfigAbhaengig) expect(r.status).not.toBe(STATUS.PASS);
+  });
+
+  it("ein Konfigurationsfehler schlaegt auf das Gesamtergebnis durch", () => {
+    // Solange die Pruefung falsch aufgebaut ist, ist ihr Ergebnis nicht deutbar.
+    expect(andAll([STATUS.PASS, STATUS.CONFIG_ERROR])).toBe(STATUS.CONFIG_ERROR);
+  });
+});
+
+describe("R2-Profile: Entwicklung darf Rueckschritte haben (Spec v2.1 §20.1)", () => {
+  // Die erste Fassung erzwang strikte Monotonie und war damit fuer reale
+  // Entwicklungsprozesse zu streng. Derselbe Trace muss je nach Profil anders urteilen --
+  // sonst waeren die Profile blosse Dekoration.
+  const mitDelle = [0, 3, 2, 5].map((a, i) => ({ ...S(i), a })); // netto +5, ein Rueckschritt
+
+  it("MONOTONE bestraft den Rueckschritt", () => {
+    const rep = evaluateNineRules(mitDelle, {
+      progressVariable: (s) => s.a, r2Modus: R2_MODUS.MONOTONE,
+    });
+    expect(statusOf(rep, "R2")).toBe(STATUS.FAIL);
+  });
+
+  it("ORDERED (Default) erlaubt ihn bei Netto-Fortschritt", () => {
+    const rep = evaluateNineRules(mitDelle, { progressVariable: (s) => s.a });
+    expect(statusOf(rep, "R2")).toBe(STATUS.PASS_VORLAEUFIG);
+  });
+
+  it("ORDERED kippt, wenn der Rueckschritt die Toleranz sprengt", () => {
+    const rep = evaluateNineRules(mitDelle, {
+      progressVariable: (s) => s.a, r2ReversalToleranz: 0.5,
+    });
+    expect(statusOf(rep, "R2")).toBe(STATUS.FAIL);
+  });
+
+  it("MINIMAL genuegt ein einziger gerichteter Schritt -- und ist dann definitiv", () => {
+    const rep = evaluateNineRules(mitDelle, {
+      progressVariable: (s) => s.a, r2Modus: R2_MODUS.MINIMAL,
+    });
+    expect(statusOf(rep, "R2")).toBe(STATUS.PASS);
+    expect(istDefinitiv(statusOf(rep, "R2"))).toBe(true);
+  });
+});
+
+describe("R4-Profile: unterschieden WERDEN ist nicht unterscheiden (Spec v2.1 §20.2)", () => {
+  const trace = [S(1)];
+  const pop = () => [1, 2, 2];
+
+  it("STRUCTURAL findet den Unterschied von aussen", () => {
+    const rep = evaluateNineRules(trace, { population: pop, r4Modus: R4_MODUS.STRUCTURAL });
+    expect(statusOf(rep, "R4")).toBe(STATUS.PASS);
+  });
+
+  it("ACTIVE (Default) verlangt einen Discriminator DES SYSTEMS", () => {
+    // Ohne ihn faellt der Evaluator NICHT still auf STRUCTURAL zurueck -- das waere
+    // eine andere Aussage, die gleich aussieht.
+    const rep = evaluateNineRules(trace, { population: pop });
+    expect(statusOf(rep, "R4")).toBe(STATUS.CONFIG_ERROR);
+  });
+
+  it("ACTIVE ist PASS, wenn das System selbst unterscheidet", () => {
+    const rep = evaluateNineRules(trace, { population: pop, discriminator: (a, b) => a !== b });
+    expect(statusOf(rep, "R4")).toBe(STATUS.PASS);
+  });
+
+  it("ACTIVE ist FAIL, wenn das System blind ist -- obwohl die Werte verschieden sind", () => {
+    // Der Stein, der unterschieden werden kann, aber nicht unterscheidet.
+    const rep = evaluateNineRules(trace, { population: pop, discriminator: () => false });
+    expect(statusOf(rep, "R4")).toBe(STATUS.FAIL);
   });
 });
 
@@ -136,13 +213,17 @@ describe("Temporale Regeln auf endlichen Traces (Safety vs. Co-Safety)", () => {
     expect(statusOf(evaluateNineRules(konstant, cfg, { traceComplete: true }), "R2")).toBe(STATUS.FAIL);
   });
 
-  it("R2 Monotoniebruch ist SOFORT definitiv FAIL, auch auf laufendem Trace", () => {
-    // Anders als das fehlende F ist ein gebrochenes G durch keine Fortsetzung
-    // mehr zu retten -- deshalb endgueltig.
+  it("R2/MONOTONE: Monotoniebruch ist SOFORT definitiv FAIL, auch auf laufendem Trace", () => {
+    // Im Profil MONOTONE ist G(a_next >= a) SAFETY: ein gebrochenes G ist durch keine
+    // Fortsetzung mehr zu retten -- deshalb endgueltig. Im Default ORDERED gilt das
+    // NICHT, dort zaehlt der Netto-Fortschritt und ein Rueckschritt ist erlaubt.
     const fallend = [{ ...S(1), a: 5 }, { ...S(1), a: 3 }];
-    const st = statusOf(evaluateNineRules(fallend, { progressVariable: (s) => s.a }), "R2");
+    const cfg = { progressVariable: (s) => s.a };
+    const st = statusOf(evaluateNineRules(fallend, { ...cfg, r2Modus: R2_MODUS.MONOTONE }), "R2");
     expect(st).toBe(STATUS.FAIL);
     expect(istDefinitiv(st)).toBe(true);
+    // Gegenprobe: derselbe Trace ist unter ORDERED nur vorlaeufig gescheitert.
+    expect(statusOf(evaluateNineRules(fallend, cfg), "R2")).toBe(STATUS.FAIL_VORLAEUFIG);
   });
 
   it("R2 mit nur einem Zustand ist N/A -- ein G ueber nichts ist vakuum-wahr", () => {
@@ -159,36 +240,88 @@ describe("Temporale Regeln auf endlichen Traces (Safety vs. Co-Safety)", () => {
 });
 
 describe("Monotonie der Verdikte -- der Koenigs-Test", () => {
-  // Ein einmal DEFINITIVES Urteil darf durch keine Trace-Verlaengerung kippen.
-  // Vorlaeufige duerfen sich bewegen. Diese Eigenschaft faengt nahezu jeden
-  // Semantikfehler in temporaler Auswertung.
-  it("definitive Verdikte bleiben stabil, wenn der Trace waechst", () => {
-    const cfg = {
-      progressVariable: (s) => s.a,
-      terminalPredicate: (s) => s.z === "end",
-      population: (s) => [s.u, s.u + 1],
-    };
-    // Ein Trace, der unterwegs terminal wird UND die Monotonie bricht.
-    const voll = [
-      { ...S(0), a: 0 },
-      { ...S(1, 1, 0), a: 1, z: "end" },
-      { ...S(2, 2, 0), a: 0 },
-      { ...S(3, 3, 0), a: 5 },
-    ];
+  // KORRIGIERT nach unabhaengiger Pruefung: Die erste Fassung behauptete Stabilitaet
+  // fuer ALLE Regeln. Das ist falsch und wurde widerlegt -- bei 6 von 9 kippte ein
+  // "definitives" PASS. Der Fehler lag in der Zusicherung, nicht im Urteil:
+  // Nur TRACE-Regeln urteilen ueber den Verlauf; STATE/TRANSITION urteilen ueber den
+  // Zeitpunkt und duerfen sich mit ihm aendern.
+  const cfg = {
+    progressVariable: (s) => s.a,
+    terminalPredicate: (s) => s.z === "end",
+    population: (s) => [s.u, s.u + 1],
+    discriminator: (a, b) => a !== b,
+  };
+  const voll = [
+    { ...S(0), a: 0 },
+    { ...S(1, 1, 0), a: 1, z: "end" },
+    { ...S(2, 2, 0), a: 0 },
+    { ...S(3, 3, 0), a: 5 },
+  ];
+
+  it("TRACE-Verdikte, die definitiv wurden, bleiben es bei jeder Verlaengerung", () => {
     const definitivBei = new Map();
+    let geprueft = 0;
     for (let n = 1; n <= voll.length; n++) {
-      const rep = evaluateNineRules(voll.slice(0, n), cfg);
-      for (const r of rep.rules) {
+      for (const r of evaluateNineRules(voll.slice(0, n), cfg).rules) {
+        if (r.scope !== SCOPE.TRACE) continue;
         if (definitivBei.has(r.id)) {
-          // war schon definitiv -> muss identisch bleiben
           expect(r.status).toBe(definitivBei.get(r.id));
-        } else if (istDefinitiv(r.status)) {
+          geprueft++;
+        } else if (istDefinitiv(r.status, r.scope)) {
           definitivBei.set(r.id, r.status);
         }
       }
     }
-    // Der Test waere wertlos, wenn nie ein definitives Verdikt entstanden waere.
+    // Ohne diese beiden Zusicherungen waere der Test gruen, auch wenn er nichts sah.
     expect(definitivBei.size).toBeGreaterThan(0);
+    expect(geprueft).toBeGreaterThan(0);
+  });
+
+  it("STATE/TRANSITION-Verdikte sind NICHT als trace-stabil markiert", () => {
+    // R7 wird bei t=1 terminal -> definitiv. R6 sagt nur etwas ueber den letzten Schritt.
+    const rep = evaluateNineRules(voll, cfg);
+    const r7 = rep.rules.find((r) => r.id === "R7");
+    const r6 = rep.rules.find((r) => r.id === "R6");
+    expect(r7.status).toBe(STATUS.PASS);
+    expect(r7.stabilUeberTrace).toBe(true);
+    expect(r6.stabilUeberTrace).toBe(false);
+  });
+
+  it("der Geltungsbereich im Report ueberzeichnet nicht", () => {
+    const rep = evaluateNineRules(voll, cfg);
+    const letzter = voll.length - 1;
+    expect(rep.rules.find((r) => r.id === "R7").traceRange).toEqual([0, letzter]);          // TRACE
+    expect(rep.rules.find((r) => r.id === "R6").traceRange).toEqual([letzter - 1, letzter]); // TRANSITION
+    expect(rep.rules.find((r) => r.id === "R5").traceRange).toEqual([letzter, letzter]);     // STATE
+  });
+});
+
+describe("Robustheit gegen Muell-Eingaben und werfende Konfiguration", () => {
+  it("NaN-Koordinaten erzeugen kein Urteil, sondern einen Konfigurationsfehler", () => {
+    const tr = [S(1, 0, 0), { u: 2, q: { q: NaN, r: 0 } }];
+    expect(statusOf(evaluateNineRules(tr, {}), "R6")).toBe(STATUS.CONFIG_ERROR);
+  });
+
+  it("unveraendertes NaN gilt NICHT als Aenderung", () => {
+    const tr = [{ u: NaN, q: { q: 0, r: 0 } }, { u: NaN, q: { q: 0, r: 0 } }];
+    expect(statusOf(evaluateNineRules(tr, {}), "R8")).toBe(STATUS.FAIL);
+  });
+
+  it("eine werfende Konfigurations-Funktion reisst nicht die anderen Regeln mit", () => {
+    const rep = evaluateNineRules([S(1), S(2, 1, 0)], {
+      population: () => { throw new Error("kaputt"); },
+    });
+    expect(statusOf(rep, "R4")).toBe(STATUS.CONFIG_ERROR);
+    expect(rep.rules.find((r) => r.id === "R4").evidence).toMatch(/kaputt/);
+    // Die uebrigen acht haben trotzdem geurteilt.
+    expect(statusOf(rep, "R6")).toBe(STATUS.PASS);
+    expect(rep.rules).toHaveLength(9);
+  });
+
+  it("ein null-Eintrag im Trace kippt den Lauf nicht", () => {
+    const rep = evaluateNineRules([S(1), null], {});
+    expect(rep.rules).toHaveLength(9);
+    expect(rep.overall).not.toBe(STATUS.PASS);
   });
 });
 
@@ -266,9 +399,14 @@ describe("Vertrag des Reports", () => {
     }
   });
 
-  it("die neun Regeln decken alle drei Geltungsbereiche ab", () => {
+  it("jede Regel traegt einen gueltigen Geltungsbereich, und die tragenden sind belegt", () => {
     const scopes = new Set(RULES.map((r) => r.scope));
-    expect(scopes).toEqual(new Set([SCOPE.STATE, SCOPE.TRANSITION, SCOPE.TRACE]));
+    // Jeder verwendete Scope muss deklariert sein -- kein freihändiger String.
+    for (const s of scopes) expect(Object.values(SCOPE)).toContain(s);
+    // Die drei zeitlichen Grundtypen muessen vorkommen; CLASSIFIER kam mit Spec v2.1
+    // dazu (R4 "unterscheidet" ist eine Systemleistung, kein Zustandsmerkmal).
+    for (const s of [SCOPE.STATE, SCOPE.TRANSITION, SCOPE.TRACE]) expect(scopes).toContain(s);
+    expect(scopes).toContain(SCOPE.CLASSIFIER);
   });
 
   it("Replay ist deterministisch: gleicher Trace -> identischer Report", () => {
@@ -304,19 +442,43 @@ describe("R1 erkennt ungueltige Zustaende", () => {
   it("fehlende Position ist FAIL, nicht PASS", () => {
     expect(statusOf(evaluateNineRules([{ u: 1 }]), "R1")).toBe(STATUS.FAIL);
   });
+  it("prueft BEIDE Hex-Koordinaten, nicht nur eine", () => {
+    // Fremd-Mutant aus der unabhaengigen Pruefung: ein Guard, der nur q pruefte,
+    // ueberlebte die alte Suite. Beide Achsen muessen einzeln abgesichert sein.
+    expect(statusOf(evaluateNineRules([{ u: 1, q: { q: 0 } }]), "R1")).toBe(STATUS.FAIL);
+    expect(statusOf(evaluateNineRules([{ u: 1, q: { r: 0 } }]), "R1")).toBe(STATUS.FAIL);
+    expect(statusOf(evaluateNineRules([{ u: 1, q: { q: NaN, r: 0 } }]), "R1")).toBe(STATUS.FAIL);
+  });
 });
 
-describe("R4 Vergleichsraum", () => {
+describe("Uebergangsregeln vergleichen den LETZTEN Schritt, nicht Anfang gegen Ende", () => {
+  // Fremd-Mutanten aus der unabhaengigen Pruefung: R6/R8 liessen sich still von
+  // "letzter Uebergang" auf "trace[0] gegen last" umdefinieren, ohne dass die Suite
+  // es merkte. Folge waere: ein Objekt, das an seinen Ausgangspunkt zurueckkehrt,
+  // gaelte als nie bewegt.
+  it("R6: Rueckkehr zum Ausgangspunkt gilt trotzdem als Bewegung im letzten Schritt", () => {
+    const rundreise = [S(1, 0, 0), S(1, 1, 0), S(1, 0, 0)];
+    expect(statusOf(evaluateNineRules(rundreise, {}), "R6")).toBe(STATUS.PASS);
+  });
+  it("R8: Rueckkehr zum Ausgangswert gilt trotzdem als Aenderung im letzten Schritt", () => {
+    const zurueck = [S(5), S(9), S(5)];
+    expect(statusOf(evaluateNineRules(zurueck, {}), "R8")).toBe(STATUS.PASS);
+  });
+  it("R6: Stillstand im letzten Schritt ist FAIL, auch wenn frueher Bewegung war", () => {
+    const angehalten = [S(1, 0, 0), S(1, 5, 0), S(1, 5, 0)];
+    expect(statusOf(evaluateNineRules(angehalten, {}), "R6")).toBe(STATUS.FAIL);
+  });
+});
+
+describe("R4 Vergleichsraum (Profil STRUCTURAL)", () => {
+  const strukturell = (pop) => ({ population: () => pop, r4Modus: R4_MODUS.STRUCTURAL });
   it("PASS bei Unterschied", () => {
-    const rep = evaluateNineRules([S(1)], { population: () => [1, 1, 2] });
-    expect(statusOf(rep, "R4")).toBe(STATUS.PASS);
+    expect(statusOf(evaluateNineRules([S(1)], strukturell([1, 1, 2])), "R4")).toBe(STATUS.PASS);
   });
   it("FAIL bei lauter Gleichen", () => {
-    const rep = evaluateNineRules([S(1)], { population: () => [4, 4, 4] });
-    expect(statusOf(rep, "R4")).toBe(STATUS.FAIL);
+    expect(statusOf(evaluateNineRules([S(1)], strukturell([4, 4, 4])), "R4")).toBe(STATUS.FAIL);
   });
-  it("UNOBSERVED bei zu kleinem Vergleichsraum", () => {
-    const rep = evaluateNineRules([S(1)], { population: () => [4] });
-    expect(statusOf(rep, "R4")).toBe(STATUS.UNOBSERVED);
+  it("UNOBSERVED bei zu kleinem Vergleichsraum -- greift vor der Modus-Wahl", () => {
+    expect(statusOf(evaluateNineRules([S(1)], strukturell([4])), "R4")).toBe(STATUS.UNOBSERVED);
   });
 });

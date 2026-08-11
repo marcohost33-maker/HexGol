@@ -59,8 +59,18 @@ export const STATUS = Object.freeze({
   UNOBSERVED: "UNOBSERVED",           // unentschieden, bewusst kein vorlaeufiges Urteil
   FAIL_VORLAEUFIG: "FAIL_VORLAEUFIG", // bisher nicht eingetreten; koennte noch eintreten
   FAIL: "FAIL",                       // definitiv: keine Fortsetzung kann es retten
-  NA: "N/A",                          // KEIN Wahrheitswert -- Regel ist nicht anwendbar
+  NA: "N/A",                          // KEIN Wahrheitswert -- Regel ist hier nicht anwendbar
+  CONFIG_ERROR: "CONFIG_ERROR",       // Pflichtparameter FEHLT -- das ist ein Bedienfehler
 });
+
+// Warum CONFIG_ERROR von N/A getrennt ist (Spec v2.1, §20.4):
+// "Diese Regel ist auf ein mathematisches Objekt nicht anwendbar" und "du hast vergessen,
+// die Progressvariable zu konfigurieren" sind grundverschiedene Sachverhalte. Der erste
+// ist ein legitimes Ergebnis, der zweite ein Fehler, der behoben gehoert. Wirft man
+// beides in N/A, verschwinden Konfigurationsfehler lautlos in einer Kategorie, die wie
+// ein normales Resultat aussieht -- und niemand merkt, dass die Pruefung nie lief.
+// Nach aussen (UI) darf CONFIG_ERROR als Konfigurationshinweis erscheinen, aber niemals
+// als Regel-Urteil.
 
 // Ordnung fuer die Aggregation (Kleene-stark, AND = Minimum).
 // FAIL < FAIL_VORLAEUFIG < UNOBSERVED < PASS_VORLAEUFIG < PASS
@@ -72,15 +82,50 @@ const RANG = Object.freeze({
   [STATUS.PASS]: 4,
 });
 
-/** true, wenn das Verdikt endgueltig ist und durch keine Fortsetzung kippen darf. */
-export function istDefinitiv(status) {
-  return status === STATUS.PASS || status === STATUS.FAIL;
+/**
+ * true, wenn das Verdikt fuer SEINEN Geltungsbereich endgueltig ist.
+ *
+ * KORREKTUR 2026-08-11 nach unabhaengiger Pruefung: Die erste Fassung sicherte global zu,
+ * ein PASS koenne "durch keine Fortsetzung zerstoert werden". Das ist nur fuer TRACE-Regeln
+ * wahr. Ein STATE-Urteil ("die Orientierung ist gueltig") gilt fuer DIESEN Zustand, ein
+ * TRANSITION-Urteil ("die Position hat sich geaendert") fuer DIESEN Uebergang -- beide
+ * duerfen im naechsten Schritt anders ausfallen, ohne dass etwas kaputt ist. Die Pruefung
+ * fand genau das: bei 6 von 9 Regeln kippte ein "definitives" PASS bei Trace-Verlaengerung.
+ *
+ * Der Fehler lag nicht im Urteil, sondern in der Zusicherung darueber. Wer Endgueltigkeit
+ * ohne Geltungsbereich behauptet, behauptet zu viel.
+ *
+ * @param {string} status
+ * @param {string} [scope] Geltungsbereich der Regel. Ohne ihn wird nur die
+ *   Status-Eigenschaft geprueft -- fuer die Trace-Monotonie IMMER den Scope mitgeben.
+ */
+export function istDefinitiv(status, scope) {
+  const endgueltigerWert = status === STATUS.PASS || status === STATUS.FAIL;
+  if (!endgueltigerWert) return false;
+  if (scope === undefined) return true;
+  // Nur ueber einen Verlauf gefaellte Urteile sind ueber den Verlauf hinweg stabil.
+  return scope === SCOPE.TRACE;
 }
 
 export const SCOPE = Object.freeze({
   STATE: "STATE",
   TRANSITION: "TRANSITION",
   TRACE: "TRACE",
+  RELATION: "RELATION",     // gilt zwischen Entitaeten, nicht ueber die Zeit (Spec v2.1 §20.3)
+  CLASSIFIER: "CLASSIFIER", // verlangt eine Unterscheidungs-LEISTUNG des Systems
+});
+
+// Betriebsmodi einzelner Regeln (Spec v2.1 §20.1/§20.2). Der Modus ist Teil der
+// Konfiguration, nicht der Regel -- dieselbe Regel bedeutet je nach Modus etwas anderes,
+// und genau das muss sichtbar sein statt implizit.
+export const R2_MODUS = Object.freeze({
+  MINIMAL: "MINIMAL",   // es existiert ueberhaupt ein gerichteter Entwicklungsschritt
+  ORDERED: "ORDERED",   // Netto-Fortschritt ueber ein Fenster, Rueckschritte erlaubt
+  MONOTONE: "MONOTONE", // strikt monoton -- das schaerfste Profil, NICHT der Default
+});
+export const R4_MODUS = Object.freeze({
+  STRUCTURAL: "STRUCTURAL", // ein externer Vergleich findet einen Unterschied
+  ACTIVE: "ACTIVE",         // das SYSTEM selbst unterscheidet (Default im 9-Regel-Profil)
 });
 
 // --- Vierwertige Konjunktion -------------------------------------------------
@@ -100,6 +145,9 @@ export function andAll(statuses) {
   // die Aussage "diese Regel ist hier nicht anwendbar". Genau so trennen es auch
   // die etablierten Testframeworks (pytest skip, TAP # SKIP, JUnit disabled):
   // Anwendbarkeit ist eine Ausfuehrungs-Eigenschaft, kein Logikwert.
+  // Ein Konfigurationsfehler ist kein Urteil, sondern ein Defekt am Aufbau der Pruefung.
+  // Er schlaegt deshalb alles: solange er besteht, ist das Gesamtergebnis nicht deutbar.
+  if (statuses.includes(STATUS.CONFIG_ERROR)) return STATUS.CONFIG_ERROR;
   const bewertbar = statuses.filter((s) => s !== STATUS.NA);
   if (bewertbar.length === 0) return STATUS.NA; // nichts geprueft ist NICHT "alles gut"
 
@@ -140,11 +188,21 @@ export function isValidDirection(d) {
 function res(status, evidence, extra = {}) {
   return { status, evidence, ...extra };
 }
+// Number.isFinite schliesst NaN UND Infinity aus. Beides muss raus: die Pruefung fand
+// ein definitives FAIL aus NaN-Koordinaten (NaN > 0 ist false, also "unbewegt") und ein
+// PASS aus NaN-Werten (NaN !== NaN, also "geaendert"). Muell-Eingaben duerfen kein
+// Urteil erzeugen, sondern muessen als Konfigurations-/Datenfehler sichtbar werden.
 const isNum = (x) => typeof x === "number" && Number.isFinite(x);
 
 function validState(s) {
   return !!s && typeof s === "object" && s.u !== undefined && !!s.q
     && isNum(s.q.q) && isNum(s.q.r);
+}
+
+/** Werte-Gleichheit, die NaN wie sich selbst behandelt (SameValueZero statt ===). */
+function gleich(a, b) {
+  if (typeof a === "number" && typeof b === "number") return Object.is(a, b) || a === b;
+  return a === b;
 }
 
 // --- Die neun RuleSpecs ------------------------------------------------------
@@ -166,16 +224,23 @@ export const RULES = Object.freeze([
   },
   {
     id: "R2", label: "Wird", scope: SCOPE.TRACE, deps: ["progressVariable"],
-    claim: "Gerichtete Entwicklung, nicht blosse Variation. Braucht eine explizit "
-      + "konfigurierte geordnete Groesse -- ohne sie ist die Regel N/A, nicht PASS.",
+    claim: "Gerichtete Entwicklung, nicht blosse Variation. Der Modus bestimmt die Strenge: "
+      + "MINIMAL (ein gerichteter Schritt genuegt) | ORDERED (Netto-Fortschritt, Rueckschritte "
+      + "toleriert) | MONOTONE (strikt, schaerfstes Profil).",
     evaluate(ctx) {
+      // KORREKTUR nach Spec v2.1 (§20.1): Die erste Fassung erzwang strikte Monotonie.
+      // Das ist fuer reale Entwicklungsprozesse zu streng -- Entwicklung kennt Pausen,
+      // Rueckschritte und Oszillationen. Ein Kind, das eine Woche nicht waechst, "wird"
+      // trotzdem. Strikte Monotonie ist deshalb nur noch das optionale Profil MONOTONE.
       if (!ctx.config.progressVariable) {
-        return res(STATUS.NA, "keine progressVariable konfiguriert");
+        // Bedienfehler, nicht Nichtanwendbarkeit: die Regel ist aktiv, aber unkonfiguriert.
+        return res(STATUS.CONFIG_ERROR, "R2 ist aktiv, aber keine progressVariable konfiguriert");
       }
+      const modus = ctx.config.r2Modus || R2_MODUS.ORDERED;
       const get = ctx.config.progressVariable;
       const vals = ctx.trace.map(get);
       if (vals.some((v) => !isNum(v))) {
-        return res(STATUS.NA, "progressVariable liefert keine Zahl fuer jeden Zustand");
+        return res(STATUS.CONFIG_ERROR, "progressVariable liefert keine Zahl fuer jeden Zustand");
       }
       // Anwendbarkeits-Guard VOR der Logik: Ein G ueber einer leeren Uebergangsmenge
       // ist vakuum-wahr. Ein Trace mit einem einzigen Zustand wuerde also "monoton"
@@ -184,28 +249,63 @@ export const RULES = Object.freeze([
       if (vals.length < 2) {
         return res(STATUS.NA, "weniger als zwei Zustaende -- kein Uebergang beobachtbar");
       }
-      // G(a_next >= a) ist SAFETY: eine einzige Abnahme widerlegt sie endgueltig,
-      // keine Fortsetzung repariert das. Deshalb definitives FAIL.
-      for (let i = 1; i < vals.length; i++) {
-        if (vals[i] < vals[i - 1]) {
-          return res(STATUS.FAIL, `Monotonie verletzt bei t=${i}: ${vals[i]} < ${vals[i - 1]}`,
-            { counterexample: { t: i, prev: vals[i - 1], next: vals[i] } });
+      const stieg = vals.some((v, i) => i > 0 && v > vals[i - 1]);
+
+      if (modus === R2_MODUS.MONOTONE) {
+        // Schaerfstes Profil: G(a_next >= a) ist SAFETY -- eine einzige Abnahme
+        // widerlegt sie endgueltig, keine Fortsetzung repariert das.
+        for (let i = 1; i < vals.length; i++) {
+          if (vals[i] < vals[i - 1]) {
+            return res(STATUS.FAIL, `MONOTONE: Monotonie verletzt bei t=${i}: ${vals[i]} < ${vals[i - 1]}`,
+              { counterexample: { t: i, prev: vals[i - 1], next: vals[i] } });
+          }
         }
-      }
-      const grew = vals.some((v, i) => i > 0 && v > vals[i - 1]);
-      if (grew) {
-        // Beide Teile bisher erfuellt -- aber NICHT definitiv. Der G-Teil bleibt fuer
-        // immer widerlegbar, solange der Trace weiterlaeuft. Ein definitives PASS
-        // waere hier logisch unerreichbar; wer es druckt, behauptet zu viel.
+        if (stieg) {
+          return ctx.traceComplete
+            ? res(STATUS.PASS, "MONOTONE: abgeschlossen, durchgehend monoton und echt gewachsen")
+            : res(STATUS.PASS_VORLAEUFIG, "MONOTONE: bisher monoton und gewachsen; der G-Teil bleibt widerlegbar");
+        }
         return ctx.traceComplete
-          ? res(STATUS.PASS, "Trace abgeschlossen: durchgehend monoton und echt gewachsen")
-          : res(STATUS.PASS_VORLAEUFIG, "bisher monoton und echt gewachsen; der G-Teil bleibt widerlegbar");
+          ? res(STATUS.FAIL, "MONOTONE: abgeschlossen, nie echt gewachsen")
+          : res(STATUS.FAIL_VORLAEUFIG, "MONOTONE: bisher konstant; ein Anstieg ist noch moeglich");
       }
-      // F(a_next > a) noch nicht eingetreten. Das ist CO-SAFETY: nie endgueltig
-      // widerlegbar, solange der Trace laeuft.
+
+      if (modus === R2_MODUS.MINIMAL) {
+        // Es genuegt EIN gerichteter Entwicklungsschritt irgendwo im Trace. Rueckschritte
+        // sind unerheblich -- gefragt ist, ob Entwicklung ueberhaupt stattfindet.
+        // Co-Safety: einmal gesehen, nie mehr widerlegbar.
+        if (stieg) return res(STATUS.PASS, "MINIMAL: mindestens ein gerichteter Entwicklungsschritt belegt");
+        return ctx.traceComplete
+          ? res(STATUS.FAIL, "MINIMAL: abgeschlossen, kein einziger Entwicklungsschritt")
+          : res(STATUS.FAIL_VORLAEUFIG, "MINIMAL: bisher kein Entwicklungsschritt; noch moeglich");
+      }
+
+      // ORDERED (Default): Netto-Fortschritt ueber das Bewertungsfenster, Rueckschritte
+      // bis zur konfigurierten Toleranz erlaubt. Das bildet reale Entwicklung ab.
+      const fenster = ctx.config.r2Fenster || vals.length;
+      const delta = ctx.config.r2Delta ?? 0;
+      const reversalToleranz = ctx.config.r2ReversalToleranz ?? Infinity;
+      const ab = Math.max(0, vals.length - fenster);
+      const netto = vals[vals.length - 1] - vals[ab];
+
+      let groessterRueckschritt = 0;
+      for (let i = ab + 1; i < vals.length; i++) {
+        const rueck = vals[i - 1] - vals[i];
+        if (rueck > groessterRueckschritt) groessterRueckschritt = rueck;
+      }
+      if (groessterRueckschritt > reversalToleranz) {
+        return res(STATUS.FAIL,
+          `ORDERED: Rueckschritt ${groessterRueckschritt} ueberschreitet die Toleranz ${reversalToleranz}`,
+          { counterexample: { groessterRueckschritt, reversalToleranz } });
+      }
+      if (netto > delta) {
+        return ctx.traceComplete
+          ? res(STATUS.PASS, `ORDERED: abgeschlossen, Netto-Fortschritt ${netto} > ${delta}`)
+          : res(STATUS.PASS_VORLAEUFIG, `ORDERED: Netto-Fortschritt ${netto} > ${delta}; noch umkehrbar`);
+      }
       return ctx.traceComplete
-        ? res(STATUS.FAIL, "Trace abgeschlossen, nie echt gewachsen (nur konstant)")
-        : res(STATUS.FAIL_VORLAEUFIG, "bisher konstant; ein Anstieg ist noch moeglich");
+        ? res(STATUS.FAIL, `ORDERED: abgeschlossen, Netto-Fortschritt ${netto} <= ${delta}`)
+        : res(STATUS.FAIL_VORLAEUFIG, `ORDERED: Netto-Fortschritt ${netto} <= ${delta}; noch erreichbar`);
     },
   },
   {
@@ -222,26 +322,52 @@ export const RULES = Object.freeze([
     },
   },
   {
-    id: "R4", label: "Unterscheidet", scope: SCOPE.STATE, deps: ["comparator"],
-    claim: "Im gewaehlten Vergleichsraum existiert ein Unterschied. Der Vergleichsraum "
-      + "ist Teil der Spec, keine versteckte Universalannahme.",
+    id: "R4", label: "Unterscheidet", scope: SCOPE.CLASSIFIER, deps: ["population"],
+    claim: "STRUCTURAL: ein externer Vergleich findet einen Unterschied. ACTIVE (Default): "
+      + "das SYSTEM SELBST unterscheidet. Die Verbform 'es unterscheidet' meint eine "
+      + "Leistung des Systems, nicht blosse Verschiedenheit zweier Werte.",
     evaluate(ctx) {
+      // KORREKTUR nach Spec v2.1 (§20.2): D(x,y) > eps zeigt nur, dass ein AUSSENSTEHENDER
+      // zwei Werte auseinanderhalten kann. Das ist die ontologische Minimallesart. Die
+      // aktive Lesart verlangt einen Discriminator des modellierten Systems -- ein Stein
+      // ist von einem anderen unterscheidbar, aber er unterscheidet nicht.
+      const modus = ctx.config.r4Modus || R4_MODUS.ACTIVE;
       const pop = ctx.config.population ? ctx.config.population(ctx.last) : null;
       if (!Array.isArray(pop)) {
-        return res(STATUS.NA, "keine population() konfiguriert -- Vergleichsraum unbestimmt");
+        return res(STATUS.CONFIG_ERROR, "keine population() konfiguriert -- Vergleichsraum unbestimmt");
       }
       if (pop.length < 2) {
         return res(STATUS.UNOBSERVED, `Vergleichsraum hat nur ${pop.length} Element(e)`);
       }
+
+      if (modus === R4_MODUS.ACTIVE) {
+        const disc = ctx.config.discriminator;
+        if (typeof disc !== "function") {
+          // Kein stilles Zurueckfallen auf STRUCTURAL: das waere eine andere Aussage,
+          // die aber gleich aussieht. Genau solche stillen Modus-Wechsel erzeugen
+          // Ergebnisse, denen man ihre Bedeutung nicht mehr ansieht.
+          return res(STATUS.CONFIG_ERROR,
+            "Modus ACTIVE verlangt einen discriminator(a,b) des Systems; STRUCTURAL waere eine andere Aussage");
+        }
+        for (let i = 0; i < pop.length; i++) {
+          for (let j = i + 1; j < pop.length; j++) {
+            if (disc(pop[i], pop[j]) === true) {
+              return res(STATUS.PASS, `ACTIVE: System unterscheidet Element ${i} von ${j}`);
+            }
+          }
+        }
+        return res(STATUS.FAIL, `ACTIVE: System unterscheidet keines der ${pop.length} Elemente`);
+      }
+
       const eq = ctx.config.comparator || ((a, b) => a === b);
       for (let i = 0; i < pop.length; i++) {
         for (let j = i + 1; j < pop.length; j++) {
           if (!eq(pop[i], pop[j])) {
-            return res(STATUS.PASS, `Unterschied zwischen Element ${i} und ${j}`);
+            return res(STATUS.PASS, `STRUCTURAL: Unterschied zwischen Element ${i} und ${j}`);
           }
         }
       }
-      return res(STATUS.FAIL, `alle ${pop.length} Elemente sind ununterscheidbar`);
+      return res(STATUS.FAIL, `STRUCTURAL: alle ${pop.length} Elemente sind ununterscheidbar`);
     },
   },
   {
@@ -265,7 +391,13 @@ export const RULES = Object.freeze([
       // nicht ANWENDBAR (N/A) statt verletzt. Ein FAIL waere hier erfunden.
       if (ctx.trace.length < 2) return res(STATUS.NA, "kein Uebergang vorhanden (weniger als zwei Zustaende)");
       const a = ctx.trace[ctx.trace.length - 2], b = ctx.last;
-      if (!a.q || !b.q) return res(STATUS.NA, "keine Position im Zustand gefuehrt");
+      if (!a?.q || !b?.q) return res(STATUS.NA, "keine Position im Zustand gefuehrt");
+      // Muell-Koordinaten duerfen KEIN Urteil erzeugen: mit NaN liefert hexDistance NaN,
+      // und NaN > 0 ist false -- das ergab frueher ein definitives FAIL "unbewegt" aus
+      // reinem Datenmuell, das anschliessend die ganze Aggregation dominierte.
+      if (![a.q.q, a.q.r, b.q.q, b.q.r].every(isNum)) {
+        return res(STATUS.CONFIG_ERROR, "Positionskoordinaten sind nicht endlich (NaN/Infinity)");
+      }
       const d = hexDistance(a.q, b.q);
       return d > 0
         ? res(STATUS.PASS, `Hex-Distanz ${d} > 0`)
@@ -302,7 +434,9 @@ export const RULES = Object.freeze([
       // Schwaches Next, siehe R6: kein Nachfolger heisst nicht anwendbar, nicht verletzt.
       if (ctx.trace.length < 2) return res(STATUS.NA, "kein Uebergang vorhanden (weniger als zwei Zustaende)");
       const a = ctx.trace[ctx.trace.length - 2], b = ctx.last;
-      const eq = ctx.config.valueEquals || ((x, y) => x === y);
+      // Default ist SameValueZero, nicht ===. Mit === meldete NaN -> NaN eine Aenderung,
+      // weil NaN !== NaN gilt: ein PASS aus einem unveraenderten Zustand.
+      const eq = ctx.config.valueEquals || gleich;
       return !eq(a.u, b.u)
         ? res(STATUS.PASS, `intrinsischer Zustand geaendert: ${a.u} -> ${b.u}`)
         : res(STATUS.FAIL, `intrinsischer Zustand unveraendert (${b.u})`);
@@ -349,19 +483,39 @@ export function evaluateNineRules(trace, config = {}, opts = {}) {
     traceComplete,
   };
 
+  const letzter = Math.max(0, trace.length - 1);
   const rules = RULES.filter((r) => enabled.includes(r.id)).map((r) => {
-    const out = r.evaluate(ctx);
+    let out;
+    // Fehler-Isolation je Regel: eine werfende Konfigurations-Funktion (oder ein
+    // kaputter Zustand) riss frueher ALLE neun Regeln mit. Ein einzelner Defekt darf
+    // die uebrigen acht Urteile nicht ungueltig machen -- er wird zum Befund dieser
+    // einen Regel.
+    try {
+      out = r.evaluate(ctx);
+    } catch (e) {
+      out = res(STATUS.CONFIG_ERROR, `Auswertung warf: ${e && e.message ? e.message : String(e)}`);
+    }
+    // Geltungsbereich EHRLICH ausweisen. Vorher stand ueberall [0, len-1] -- auch bei
+    // Uebergangsregeln, die nur die letzten ZWEI Zustaende ansehen. Das ueberzeichnete
+    // die Reichweite des Urteils in jedem Report.
+    const range =
+      r.scope === SCOPE.TRACE ? [0, letzter]
+        : r.scope === SCOPE.TRANSITION ? [Math.max(0, letzter - 1), letzter]
+          : [letzter, letzter];
     return {
       id: r.id, label: r.label, scope: r.scope, deps: r.deps,
       status: out.status, evidence: out.evidence,
       counterexample: out.counterexample ?? null,
       claimTier: out.claimTier ?? "MODEL",
-      traceRange: [0, Math.max(0, trace.length - 1)],
+      traceRange: range,
+      // Endgueltig NUR im eigenen Geltungsbereich -- siehe istDefinitiv().
+      stabilUeberTrace: istDefinitiv(out.status, r.scope),
       specVersion: SPEC_VERSION,
     };
   });
 
-  const counts = { PASS: 0, FAIL: 0, UNOBSERVED: 0, "N/A": 0 };
+  // Alle Status muessen vorkommen, sonst zaehlt der Report an neuen Werten vorbei.
+  const counts = Object.fromEntries(Object.values(STATUS).map((s) => [s, 0]));
   for (const r of rules) counts[r.status] += 1;
 
   return {

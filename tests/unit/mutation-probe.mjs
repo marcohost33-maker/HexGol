@@ -35,10 +35,22 @@ const MUTANTEN = [
     schuetzt: "Co-Safety ist nie endgueltig widerlegbar",
   },
   {
-    name: "M8 R2: behauptet definitives PASS auf laufendem Trace",
-    von: "        return ctx.traceComplete\n          ? res(STATUS.PASS, \"Trace abgeschlossen: durchgehend monoton und echt gewachsen\")\n          : res(STATUS.PASS_VORLAEUFIG, \"bisher monoton und echt gewachsen; der G-Teil bleibt widerlegbar\");",
-    nach: "        return res(STATUS.PASS, \"monoton und gewachsen\");",
+    name: "M8 R2/ORDERED: behauptet definitives PASS auf laufendem Trace",
+    von: "        return ctx.traceComplete\n          ? res(STATUS.PASS, `ORDERED: abgeschlossen, Netto-Fortschritt ${netto} > ${delta}`)\n          : res(STATUS.PASS_VORLAEUFIG, `ORDERED: Netto-Fortschritt ${netto} > ${delta}; noch umkehrbar`);",
+    nach: "        return res(STATUS.PASS, \"ORDERED: Fortschritt\");",
     schuetzt: "Safety ist nie endgueltig bestaetigbar -- der urspruengliche Fehler",
+  },
+  {
+    name: "M11 R2: Modus wird ignoriert, immer MONOTONE",
+    von: "      const modus = ctx.config.r2Modus || R2_MODUS.ORDERED;",
+    nach: "      const modus = R2_MODUS.MONOTONE;",
+    schuetzt: "Entwicklung darf Rueckschritte haben (Spec v2.1)",
+  },
+  {
+    name: "M12 R4: faellt bei fehlendem Discriminator still auf STRUCTURAL zurueck",
+    von: "          return res(STATUS.CONFIG_ERROR,\n            \"Modus ACTIVE verlangt einen discriminator(a,b) des Systems; STRUCTURAL waere eine andere Aussage\");",
+    nach: "          return res(STATUS.PASS, \"faellt still auf STRUCTURAL zurueck\");",
+    schuetzt: "kein stiller Modus-Wechsel -- unterschieden werden ist nicht unterscheiden",
   },
   {
     name: "M9 R2: Vakuum-Guard entfernt (G ueber leerer Menge)",
@@ -48,8 +60,8 @@ const MUTANTEN = [
   },
   {
     name: "M10 Uebergangsregel meldet FAIL statt N/A ohne Nachfolger",
-    von: "      if (ctx.trace.length < 2) return res(STATUS.NA, \"kein Uebergang vorhanden (weniger als zwei Zustaende)\");\n      const a = ctx.trace[ctx.trace.length - 2], b = ctx.last;\n      const eq = ctx.config.valueEquals || ((x, y) => x === y);",
-    nach: "      if (ctx.trace.length < 2) return res(STATUS.FAIL, \"kein Uebergang\");\n      const a = ctx.trace[ctx.trace.length - 2], b = ctx.last;\n      const eq = ctx.config.valueEquals || ((x, y) => x === y);",
+    von: "      if (ctx.trace.length < 2) return res(STATUS.NA, \"kein Uebergang vorhanden (weniger als zwei Zustaende)\");\n      const a = ctx.trace[ctx.trace.length - 2], b = ctx.last;\n      // Default ist SameValueZero, nicht ===.",
+    nach: "      if (ctx.trace.length < 2) return res(STATUS.FAIL, \"kein Uebergang\");\n      const a = ctx.trace[ctx.trace.length - 2], b = ctx.last;\n      // Default ist SameValueZero, nicht ===.",
     schuetzt: "schwaches Next: nicht anwendbar ist nicht verletzt",
   },
   {
@@ -60,9 +72,49 @@ const MUTANTEN = [
   },
   {
     name: "M4 fail-closed aufgehoben: fehlende Konfiguration ergibt PASS",
-    von: "        return res(STATUS.NA, \"keine progressVariable konfiguriert\");",
-    nach: "        return res(STATUS.PASS, \"keine progressVariable konfiguriert\");",
+    von: "        return res(STATUS.CONFIG_ERROR, \"R2 ist aktiv, aber keine progressVariable konfiguriert\");",
+    nach: "        return res(STATUS.PASS, \"R2 ist aktiv, aber keine progressVariable konfiguriert\");",
     schuetzt: "nicht konfiguriert darf nie wie erfuellt aussehen",
+  },
+  {
+    name: "M13 Konfigurationsfehler schlaegt nicht mehr auf die Aggregation durch",
+    von: "  if (statuses.includes(STATUS.CONFIG_ERROR)) return STATUS.CONFIG_ERROR;",
+    nach: "  if (false) return STATUS.CONFIG_ERROR;",
+    schuetzt: "ein falsch aufgebauter Lauf darf nicht deutbar aussehen",
+  },
+  // --- Ab hier: FREMDE Mutanten aus der unabhaengigen Pruefung vom 2026-08-11. ---
+  // Sie ueberlebten die erste Fassung der Suite und belegten, dass ein Mutation-Score
+  // von 100 % gegen die EIGENE Liste nur misst, was der Autor bedacht hat. Eine
+  // fremdbestimmte Liste ist der einzige ehrliche Test der eigenen Testguete.
+  {
+    name: "F1 validState prueft die r-Koordinate nicht mehr",
+    von: "    && isNum(s.q.q) && isNum(s.q.r);",
+    nach: "    && isNum(s.q.q);",
+    schuetzt: "beide Hex-Achsen einzeln abgesichert",
+  },
+  {
+    name: "F2 traceRange behauptet fuer alle Regeln den ganzen Trace",
+    von: "      r.scope === SCOPE.TRACE ? [0, letzter]\n        : r.scope === SCOPE.TRANSITION ? [Math.max(0, letzter - 1), letzter]\n          : [letzter, letzter];",
+    nach: "      [0, letzter];",
+    schuetzt: "der Report ueberzeichnet die Reichweite eines Urteils nicht",
+  },
+  {
+    name: "F3 R8 vergleicht trace[0] statt des Vorgaengers",
+    von: "      const a = ctx.trace[ctx.trace.length - 2], b = ctx.last;\n      // Default ist SameValueZero, nicht ===.",
+    nach: "      const a = ctx.trace[0], b = ctx.last;\n      // Default ist SameValueZero, nicht ===.",
+    schuetzt: "Uebergangsregel meint den LETZTEN Schritt",
+  },
+  {
+    name: "F4 R6 vergleicht trace[0] statt des Vorgaengers",
+    von: "      const a = ctx.trace[ctx.trace.length - 2], b = ctx.last;\n      if (!a?.q || !b?.q)",
+    nach: "      const a = ctx.trace[0], b = ctx.last;\n      if (!a?.q || !b?.q)",
+    schuetzt: "Rueckkehr zum Ausgangspunkt ist trotzdem Bewegung",
+  },
+  {
+    name: "F5 NaN-Guard in R6 entfernt",
+    von: "      if (![a.q.q, a.q.r, b.q.q, b.q.r].every(isNum)) {",
+    nach: "      if (false) {",
+    schuetzt: "Muell-Koordinaten erzeugen kein definitives Urteil",
   },
   {
     name: "M5 Hex-Distanz: falsche Formel",
