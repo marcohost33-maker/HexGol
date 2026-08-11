@@ -55,12 +55,27 @@ priority_when_in_conflict: 1
   vergleicht `/version.json` (`commit`) gegen `git rev-parse HEAD`.
   **Der Deploy läuft NICHT automatisch.** Das Pages-Projekt `golhex` hat keinen
   Git-Provider (`wrangler pages project list` → Spalte `Git Provider: No`); ein
-  Merge auf `main` ändert an der Auslieferung nichts. Anstoss von Hand:
-  `npm run build` und dann `npx wrangler pages deploy dist --project-name=golhex
-  --branch=main` (oder der Doppelklick `Vero-Bats\golhex-cloudflare-deploy.bat`).
-  Das gilt für **alle 13** Cloudflare-Pages-Projekte des Portfolios — keines ist
-  git-angebunden (enumeriert am 2026-08-11). Solange das so ist, ist „gemergt"
-  **kein** Beleg für „ausgeliefert"; nur `/version.json` ist einer.
+  Merge auf `main` ändert an der Auslieferung nichts. Anstoss von Hand — **immer
+  mit `DEPLOY_BUILD=1`**, sonst bleibt der Herkunfts-Wächter in `vite.config.js`
+  stumm und `version.json` kann einen sauberen Commit behaupten, während das
+  Bündel uncommittete Änderungen enthält:
+
+  ```bat
+  REM  Windows (cmd) — derselbe Weg, den Vero-Bats\golhex-cloudflare-deploy.bat geht
+  set DEPLOY_BUILD=1
+  npm run build
+  npx wrangler pages deploy dist --project-name=golhex --branch=main
+  ```
+  ```bash
+  # PowerShell:  $env:DEPLOY_BUILD = "1";  npm run build
+  # bash/zsh:    DEPLOY_BUILD=1 npm run build
+  ```
+
+  Am bequemsten ist der Doppelklick auf `Vero-Bats\golhex-cloudflare-deploy.bat` —
+  er setzt die Variable bereits. Das gilt für **alle 13** Cloudflare-Pages-Projekte
+  des Portfolios: keines ist git-angebunden (enumeriert am 2026-08-11). Solange das
+  so ist, ist „gemergt" **kein** Beleg für „ausgeliefert"; nur `/version.json` ist
+  einer — und der Beleg taugt nur, wenn der Wächter beim Bauen scharf war.
 
 ## Repository layout
 
