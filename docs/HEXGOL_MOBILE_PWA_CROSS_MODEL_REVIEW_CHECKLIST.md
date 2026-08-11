@@ -25,16 +25,18 @@ unavailable. This is a review *aid*, not an authority: CI checks (`unit`, `e2e`,
 - **No direct push to `main`** and **no PR merge** by the reviewer.
 - **No automatic visual-baseline changes** (`test:e2e:update` is a deliberate human act).
 - Every finding must **cite** a file, line, CI check, PR, or issue.
-- **No "mobile-live" claim** without (a) a successful `deploy-pages` run for the
-  reviewed head **and** (b) real-device evidence.
+- **No "mobile-live" claim** without (a) `https://golhex.pages.dev/version.json`
+  showing the reviewed commit **and** (b) real-device evidence.
 
 ## Review scope + checklist
 
 ### 1. Manifest, scope, base path
 - [ ] `manifest.webmanifest` is scope-safe: `start_url: "."`, `scope: "."`, relative icon `src` (no root-absolute `/…`). *(cf. `tests/unit/pwa-assets.test.js`)*
 - [ ] `index.html` references manifest + icons via `%BASE_URL%…` (never `href="/…"`).
-- [ ] `vite.config.js` `base` = `/HexGol/` under `GITHUB_PAGES=true`, `/` otherwise.
-- [ ] Live check: `curl -sI https://marcohost33-maker.github.io/HexGol/manifest.webmanifest` → `200`.
+- [ ] `vite.config.js` `base` = `/` for the Cloudflare build (the app is served from
+      the domain root). `GITHUB_PAGES=true` → `/HexGol/` exists only as a legacy path
+      and is **not** used by any live deployment since 2026-08-11.
+- [ ] Live check: `curl -sI https://golhex.pages.dev/manifest.webmanifest` → `200`.
 
 ### 2. Service-worker lifecycle + cache strategy
 - [ ] SW registered **PROD-only** and API-guarded (`import.meta.env.PROD` + `"serviceWorker" in navigator`) with a base-safe `scope` (`src/main.jsx`).
@@ -43,11 +45,20 @@ unavailable. This is a review *aid*, not an authority: CI checks (`unit`, `e2e`,
 - [ ] Cross-origin requests are **not** cached (no opaque third-party font responses).
 - [ ] `activate` deletes superseded `golhex-*` caches; `install` pre-caches only the shell.
 
-### 3. GitHub Pages workflow
-- [ ] `deploy-pages.yml` actions are **commit-SHA-pinned**; `permissions` limited to `contents:read, pages:write, id-token:write`; `persist-credentials: false` on checkout.
-- [ ] Build runs with `GITHUB_PAGES=true`; artifact = `./dist`.
-- [ ] Pages is enabled with **GitHub Actions** as source (`gh api repos/<owner>/HexGol/pages -q .build_type` → `workflow`).
-- [ ] A `deploy-pages` run **succeeded** for the reviewed `main` head.
+### 3. Deployment (Cloudflare Pages — the only live channel)
+> Rewritten 2026-08-11. GitHub Pages was a **second** live URL that silently drifted
+> from the real app; it is disabled and `deploy-pages.yml` is gone. Checking the wrong
+> deployment was the actual incident this section now prevents. Canonical channel per
+> `KANON_APPS.yaml` → `ENGINE-HEXGOL.web_deploy`.
+
+- [ ] Build produces `dist/` via `npm run build` **without** `GITHUB_PAGES` (base `/`).
+- [ ] `dist/version.json` carries a non-null `commit` — the build fails closed if no
+      commit is resolvable (`vite.config.js`), so an empty provenance mark cannot ship.
+- [ ] **Live matches source:** `curl -s https://golhex.pages.dev/version.json` → `commit`
+      equals `git rev-parse HEAD` of the reviewed `main`. This replaces the old
+      "a deploy workflow succeeded" check: a green job proves a run, not a deployment.
+- [ ] No second live URL exists (GitHub Pages stays disabled:
+      `gh api repos/<owner>/HexGol/pages` → `404`).
 
 ### 4. Mobile install checklist (device gate — human)
 - [ ] **Android** (Chrome): install, offline reload, update activation after a new deploy.

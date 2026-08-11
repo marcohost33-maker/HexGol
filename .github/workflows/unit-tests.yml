@@ -2,9 +2,10 @@ name: unit-tests
 
 on:
   # Kein push:main mehr (2026-08-11): auf main lief dieser Workflow an einem bereits
-  # gemergten Commit und konnte nichts mehr verhindern. Das Gate ist der PR; die
-  # Nachkontrolle auf main macht jetzt der verify-Job in deploy-pages.yml, wo sie
-  # den Deploy tatsaechlich blockiert. Als Pflicht-Check `unit` weiterhin am PR.
+  # gemergten Commit und konnte nichts mehr verhindern. Das Gate ist vollstaendig der
+  # PR -- als Pflicht-Check `unit`. Nach dem Merge baut Cloudflare Pages aus main;
+  # geprueft wird die Auslieferung ueber /version.json gegen `git rev-parse HEAD`
+  # (siehe AGENTS.md, Deploy-Abschnitt), nicht ueber einen gruenen Job.
   pull_request:
     branches: [ main ]
   workflow_dispatch:
