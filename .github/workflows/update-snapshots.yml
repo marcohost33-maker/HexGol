@@ -18,13 +18,25 @@ on:
         required: true
         default: "main"
 
-permissions:
-  contents: write
+# Schreibrecht NUR im Job, der wirklich zurueckschreibt -- nicht auf Workflow-Ebene,
+# wo es jeder kuenftige Job erbte. Dieser Job fuehrt Repo-Code aus
+# (`playwright test --update-snapshots`), waehrend ein schreibfaehiges Token im
+# Kontext liegt; die Rechte gehoeren deshalb so eng wie moeglich gefasst
+# (zizmor `excessive-permissions`, Aegis-Audit 2026-08-11, P2).
+permissions: {}
+
+# KEIN cancel-in-progress: der Lauf committet Snapshots zurueck. Ein Abbruch mitten
+# im Schreiben waere schlimmer als ein Doppellauf -- deshalb nur serialisieren.
+concurrency:
+  group: update-snapshots-${{ github.event.inputs.branch }}
+  cancel-in-progress: false
 
 jobs:
   refresh:
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    permissions:
+      contents: write
     container:
       # tag v1.60.0-noble pinned by digest (resolved 2026-06-22)
       image: mcr.microsoft.com/playwright:v1.60.0-noble@sha256:9bd26ad900bb5e0f4dee75839e957a89ae89c2b7ab1e76050e559790e946b948

@@ -1,0 +1,20 @@
+# Cloudflare-Pages-Header. Ausgeliefert wird ueber golhex.pages.dev; Cloudflare
+# setzt von sich aus nur `x-content-type-options` und `referrer-policy` (gemessen
+# 2026-08-11 per `curl -I`). Alles Weitere ist eine Repo-Entscheidung -- und die
+# App registriert einen Service Worker und haelt Zustand lokal, also lohnt sie sich.
+# Kosten: eine Datei, keine Laufzeit, keine CI-Minuten (Aegis-Audit 2026-08-11, P2).
+
+/*
+  # Kein fremder Rahmen: die App ist eine Vollbild-Leinwand mit Zeichen-Gesten --
+  # in einem fremden iframe waeren Klicks fuer den Nutzer nicht mehr zuzuordnen.
+  X-Frame-Options: DENY
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; worker-src 'self' blob:; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'; frame-ancestors 'none'
+  # 'unsafe-inline' fuer script-src ist noetig, solange Vite den Bootstrap inline
+  # legt; 'self' allein wuerde die App brechen. Bewusst benannt statt verschwiegen.
+  # blob: bei worker-src/img-src traegt den Render-Worker und die Snapshot-Ausgabe.
+  Strict-Transport-Security: max-age=31536000; includeSubDomains
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  # Die App braucht keine dieser Faehigkeiten -- ausser der Kamera nichts, und auch
+  # die nicht: Snapshots entstehen aus dem Canvas, nicht aus einem Geraet.
+  Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=()

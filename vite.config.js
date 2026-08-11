@@ -37,6 +37,17 @@ const coverageRun = process.argv.includes("--coverage") || process.env.COVERAGE 
 // Belegt 2026-08-11: die Versionsnummer stand ueber vier Commits unveraendert auf
 // 33.4.0, quer durch ein ganzes Feature; an ihr war der ausgelieferte Stand
 // grundsaetzlich nicht ablesbar.
+// Sagt der Arbeitsbaum die Wahrheit? `git rev-parse HEAD` liefert den Commit, NICHT
+// den Zustand des Baums. Ein Auslieferungs-Build mit uncommitteten Aenderungen
+// erzeugt sonst eine version.json, die einen sauberen Commit behauptet, waehrend das
+// Buendel etwas anderes enthaelt -- die Marke wuerde ausgerechnet bei der Frage
+// luegen, fuer die sie gebaut wurde (Aegis-Audit 2026-08-11, P1).
+const baumIstSchmutzig = (() => {
+  const st = spawnSync("git", ["status", "--porcelain"], { encoding: "utf8", shell: false });
+  if (st.status !== 0) return null;                    // git nicht verfuegbar -> unbekannt
+  return st.stdout.split("\n").some((z) => z.trim() && !z.includes(".claude/"));
+})();
+
 const commitSha = (() => {
   // Die CI-Variable zuerst, `git` nur als Fallback: `git rev-parse` ist in
   // Build-Containern der unzuverlaessigere Weg (Gits "dubious ownership"-Schutz
@@ -56,12 +67,30 @@ const commitSha = (() => {
 // merkt. Lieber ein roter Build als eine Datei, die Auskunft vortaeuscht.
 // Greift fuer BEIDE Auslieferungswege; lokale Builds und Tests bleiben unberuehrt.
 // CF_PAGES ist in jeder Cloudflare-Pages-Build-Umgebung gesetzt.
-const istAuslieferung = process.env.CF_PAGES === "1" || process.env.GITHUB_PAGES === "true";
+// DEPLOY_BUILD=1 setzt die Doppelklick-Bat: der Weg, ueber den heute TATSAECHLICH
+// ausgeliefert wird (`wrangler pages deploy` vom Rechner). Ohne ihn griff der Guard
+// ausgerechnet dort nie -- CF_PAGES setzt nur Cloudflares eigene Build-Umgebung,
+// GITHUB_PAGES ist seit dem Abschalten toter Code (Aegis-Audit 2026-08-11, P1).
+const istAuslieferung =
+  process.env.DEPLOY_BUILD === "1" ||
+  process.env.CF_PAGES === "1" ||
+  process.env.GITHUB_PAGES === "true";
+
 if (istAuslieferung && !commitSha) {
   throw new Error(
     "Auslieferungs-Build ohne ermittelbaren Commit: weder CF_PAGES_COMMIT_SHA noch " +
     "GITHUB_SHA noch `git rev-parse HEAD` lieferten einen Wert. Die Herkunftsmarke " +
     "waere leer -- Abbruch statt stiller Luecke.",
+  );
+}
+// Nur wenn die Herkunft aus dem lokalen git stammt: eine CI-Variable beschreibt einen
+// frischen Checkout, da gibt es keinen schmutzigen Baum.
+const ausLokalemGit = !process.env.CF_PAGES_COMMIT_SHA && !process.env.GITHUB_SHA;
+if (istAuslieferung && ausLokalemGit && baumIstSchmutzig) {
+  throw new Error(
+    "Auslieferungs-Build aus einem schmutzigen Arbeitsbaum: version.json wuerde " +
+    `Commit ${String(commitSha).slice(0, 7)} behaupten, das Buendel enthaelt aber ` +
+    "uncommittete Aenderungen. Erst committen (oder stashen), dann ausliefern.",
   );
 }
 

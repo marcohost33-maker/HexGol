@@ -13,6 +13,12 @@ concurrency:
   group: visual-regression-${{ github.ref }}
   cancel-in-progress: true
 
+# Als einziger Workflow hatte dieser keinen Top-Level-Block und erbte die
+# Repo-Defaults (heute `read`, also folgenlos). Ein spaeter ergaenzter Job haette
+# sie stillschweigend geerbt -- deshalb explizit leer, wie in unit-tests.yml.
+# Der e2e-Job setzt sein `contents: read` selbst (Aegis-Audit 2026-08-11, P2).
+permissions: {}
+
 # Visual regression runs Playwright against the production build, taking
 # canvas screenshots driven through real DOM controls + the <canvas> (no
 # window/__TEST__ bridge — see AGENTS.md "e2e contract"). Snapshots are
