@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 // Sim-Engine (pure, worker-importfaehig) - aus dieser Datei extrahiert (AP-1).
 import {
   S3, PI2, PI3, C0, CR, CRO, CO, CYO, CY, CYG, CG, CBG, CB, CBV, CV, CRV,
@@ -16,6 +16,8 @@ import {
 import Splash from "./lib/Splash.jsx"; // v33 Branding: einmaliger Intro-/Splash-Screen (additiv)
 import ConwayIntro, { introSeen } from "./lib/ConwayIntro.jsx"; // Bildungs-Intro (einmalig, nach Splash; ⓘ re-open)
 import { renderRaster } from "./lib/raster-render.js"; // geteilter Raster-Pfad (Worker + Main)
+import { bewerteGolHex } from "./lib/golhex-nine-rules-adapter.js"; // 9-Regel-Semantikprofil (optional, neben den Axiomen)
+import { STATUS } from "./lib/nine-rules.js";
 import { supportsOffscreenWorker } from "./lib/worker-support.js"; // Feature-Detection (fail-closed)
 import { shouldStartPan, decideCloseAction, usesRasterPath, wheelSelectionEffect, WHEEL_ERASE, clampWheelCenter } from "./lib/ui-gestures.js"; // pure UI-Entscheider (Pan-Hit-Test + Schliess-Dispatch + HEX-Render-Gate + Farbrad-Wahl + Rad-Clamp)
 import {
@@ -523,6 +525,13 @@ export default function GolHex() {
   const [stats, setStats] = useState({ pop: 0, cnt: [0,0,0,0,0,0,0,0,0,0,0,0,0], density: 0, births: 0, deaths: 0, sps: 0, hist: [] });
   const [zoomLbl, setZoomLbl] = useState(1);
   const [showAxioms, setShowAxioms] = useState(false);
+  // Semantikprofil: welches Regelwerk wird auf den laufenden Zustand angewandt.
+  // "axiome" ist der Bestand (Watzlawick, greift in die Simulation ein), "neunregeln"
+  // ist das optionale Pruefraster aus dem 007acc-Transfer -- es BEOBACHTET nur und
+  // veraendert die Simulation nicht. Diese Trennung ist wichtig: ein Pruefraster, das
+  // seinen Gegenstand mitverandert, misst sich selbst.
+  const [semantikProfil, setSemantikProfil] = useState("axiome");
+  const [showNineRules, setShowNineRules] = useState(false);
   const [ax, setAx] = useState({ a1: false, a2: false, a3: false, a4: false });
   const [a5, setA5] = useState("off");
   const [watzOnly, setWatzOnly] = useState(false);
@@ -637,6 +646,19 @@ export default function GolHex() {
   const popSparkRef = useRef(null);   // <canvas> der Sparkline
   const popDrawTsRef = useRef(0);      // Drossel: letzter Redraw-Zeitstempel (~6 Hz)
   const [popGraphTick, setPopGraphTick] = useState(0); // triggert gedrosselten Redraw
+
+  // 9-Regel-Auswertung. Haengt bewusst am DROSSELNDEN popGraphTick und nicht an jedem
+  // Simulationsschritt -- der Ringpuffer wird ohnehin nur dort fortgeschrieben, und
+  // eine Auswertung pro Frame waere reine Rechenlast ohne sichtbaren Gewinn.
+  // Laeuft nur, wenn das Panel offen UND das Profil gewaehlt ist: ein geschlossenes
+  // Panel darf nichts kosten.
+  const nineRulesReport = useMemo(() => {
+    if (!showNineRules || semantikProfil !== "neunregeln") return { rules: [], specVersion: "" };
+    return bewerteGolHex(popGraphRef.current, gen, { laeuft: running });
+    // popGraphTick ist die Aenderungs-Quelle des Ref-Inhalts; ohne ihn wuerde React
+    // die Neuberechnung nie ausloesen, weil ein Ref keine Render-Abhaengigkeit ist.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showNineRules, semantikProfil, popGraphTick, gen, running]);
   // LiouScope-Recorder: vollstaendige Zeitreihe der Observablen (nicht nur das
   // 120-Punkt-Anzeigefenster). Jede Zeile = ein Schritt; Spalten regelabhaengig.
   const recRef = useRef({ on: false, rows: [], cols: [] });
@@ -3598,6 +3620,76 @@ export default function GolHex() {
               ))}
             </div>
           </div>
+        </div>
+      )}
+
+      {/* 9-REGEL-SEMANTIKPROFIL (optional, beobachtet nur -- greift NICHT in die Simulation ein) */}
+      <button
+        onClick={() => setShowNineRules((v) => !v)}
+        data-testid="ninerules-toggle"
+        aria-expanded={showNineRules}
+        style={{ width: "100%", textAlign: "left", padding: "9px 10px", borderRadius: 10, border: `1px solid ${T.border}`, background: T.panel, color: T.text, fontFamily: MONO, fontSize: 12, fontWeight: 700, cursor: "pointer", marginBottom: 8 }}
+      >
+        {showNineRules ? "v" : ">"} SEMANTIKPROFIL (5 Axiome / 9 Regeln)
+      </button>
+      {showNineRules && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 14 }}>
+          <div style={{ display: "flex", gap: 6 }}>
+            {[["axiome", "5 AXIOME"], ["neunregeln", "9 REGELN"]].map(([k, lab]) => (
+              <button
+                key={k}
+                onClick={() => setSemantikProfil(k)}
+                data-testid={`semantik-${k}`}
+                aria-pressed={semantikProfil === k}
+                style={{
+                  flex: 1, padding: "7px 4px", borderRadius: 8, fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: MONO,
+                  border: semantikProfil === k ? `1px solid ${T.accent}` : "1px solid rgba(92,240,204,0.14)",
+                  background: semantikProfil === k ? "rgba(92,240,204,0.12)" : T.bg, color: semantikProfil === k ? T.accent : T.sub,
+                }}
+              >{lab}</button>
+            ))}
+          </div>
+
+          {semantikProfil === "axiome" ? (
+            <div style={{ padding: "8px 10px", borderRadius: 9, border: "1px solid rgba(92,240,204,0.14)", background: T.bg2, fontSize: 10.5, color: T.sub, fontFamily: MONO, lineHeight: 1.5 }}>
+              Die Watzlawick-Axiome oben sind aktiv und <b>greifen in die Simulation ein</b>.
+              Das 9-Regel-Raster beobachtet dagegen nur.
+            </div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 5 }} data-testid="ninerules-panel">
+              <div style={{ padding: "7px 10px", borderRadius: 9, background: "rgba(92,240,204,0.06)", border: "1px solid rgba(92,240,204,0.14)", fontSize: 10, color: T.sub, fontFamily: MONO, lineHeight: 1.45 }}>
+                Prueft den <b>Populationsverlauf</b> — nicht einzelne Zellen. Beobachtet nur,
+                veraendert nichts. <b>Richtung</b> und <b>Bewegung</b> fehlen bewusst: eine
+                Population hat keinen Ort.
+              </div>
+              {nineRulesReport.rules.map((r) => {
+                const farbe =
+                  r.status === STATUS.PASS ? T.accent
+                    : r.status === STATUS.FAIL ? "#ff8f8f"
+                      : r.status === STATUS.PASS_VORLAEUFIG ? "#9fe6c8"
+                        : r.status === STATUS.FAIL_VORLAEUFIG ? "#e8b98a"
+                          : r.status === STATUS.CONFIG_ERROR ? "#ffb0b0" : T.sub;
+                const kurz =
+                  r.status === STATUS.PASS_VORLAEUFIG ? "bisher ja"
+                    : r.status === STATUS.FAIL_VORLAEUFIG ? "bisher nein"
+                      : r.status === STATUS.UNOBSERVED ? "offen"
+                        : r.status === STATUS.NA ? "n. a." : r.status.toLowerCase();
+                return (
+                  <div key={r.id} data-testid={`ninerule-${r.id}`} style={{ padding: "7px 10px", borderRadius: 9, border: `1px solid ${r.status === STATUS.PASS || r.status === STATUS.FAIL ? "rgba(92,240,204,0.28)" : "rgba(92,240,204,0.12)"}`, background: T.bg2 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, fontFamily: MONO }}>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: T.text }}>{r.id} {r.label}</span>
+                      <span style={{ fontSize: 10.5, fontWeight: 700, color: farbe, whiteSpace: "nowrap" }} data-testid={`ninerule-status-${r.id}`}>{kurz}</span>
+                    </div>
+                    <div style={{ fontSize: 9.5, color: T.sub, marginTop: 2, lineHeight: 1.4, opacity: 0.85, fontFamily: MONO }}>{r.evidence}</div>
+                  </div>
+                );
+              })}
+              <div style={{ fontSize: 9.5, color: T.sub, opacity: 0.7, fontFamily: MONO, padding: "2px 2px 0", lineHeight: 1.45 }}>
+                <b>bisher ja/nein</b> heisst: noch nicht endgueltig — der Verlauf kann es
+                aendern. Nur <b>pass/fail</b> sind endgueltig. Spec {nineRulesReport.specVersion}.
+              </div>
+            </div>
+          )}
         </div>
       )}
 
