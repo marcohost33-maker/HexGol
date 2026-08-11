@@ -194,9 +194,25 @@ function res(status, evidence, extra = {}) {
 // Urteil erzeugen, sondern muessen als Konfigurations-/Datenfehler sichtbar werden.
 const isNum = (x) => typeof x === "number" && Number.isFinite(x);
 
+// KORREKTUR 2026-08-11 (Befund B1 der unabhaengigen Pruefung): Diese Funktion verlangte
+// eine Position -- und machte R1 damit fuer JEDE ortlose Entitaet zu einem definitiven
+// FAIL. Da FAIL die Aggregation dominiert, war `overall` eine Konstante: 40'000 von
+// 40'000 geprueften Zustaenden ergaben FAIL. Im ausgelieferten UI sah der Nutzer ein
+// dauerhaftes, als endgueltig deklariertes Fehlurteil ueber seine Simulation.
+//
+// Der Fehler war ein Widerspruch in der eigenen Konstruktion: Fuer R5/R6 wurde sauber
+// entschieden, dass eine Population keinen Ort hat und die Regeln deshalb entfallen --
+// und dann verlangte die Gueltigkeitspruefung von R1 genau diesen Ort.
+//
+// R1 ("Es ist") fragt nach GUELTIGER INSTANZIIERUNG, nicht nach Verortung. Ein Zustand
+// ist gueltig, wenn er einen intrinsischen Wert traegt. Wenn er eine Position FUEHRT,
+// muss sie brauchbar sein -- fehlt sie ganz, ist das kein Defekt, sondern eine Aussage
+// ueber die Art der Entitaet. Die Positionspruefung gehoert zu R6, wo sie bereits steht.
 function validState(s) {
-  return !!s && typeof s === "object" && s.u !== undefined && !!s.q
-    && isNum(s.q.q) && isNum(s.q.r);
+  if (!s || typeof s !== "object") return false;
+  if (s.u === undefined) return false;
+  if (s.q === undefined || s.q === null) return true; // ortlose Entitaet -- zulaessig
+  return typeof s.q === "object" && isNum(s.q.q) && isNum(s.q.r);
 }
 
 /** Werte-Gleichheit, die NaN wie sich selbst behandelt (SameValueZero statt ===). */
@@ -294,8 +310,13 @@ export const RULES = Object.freeze([
         if (rueck > groessterRueckschritt) groessterRueckschritt = rueck;
       }
       if (groessterRueckschritt > reversalToleranz) {
-        return res(STATUS.FAIL,
-          `ORDERED: Rueckschritt ${groessterRueckschritt} ueberschreitet die Toleranz ${reversalToleranz}`,
+        // KORREKTUR 2026-08-11 (Befund K3): Wird ein GLEITENDES Fenster benutzt, faellt
+        // der Rueckschritt spaeter aus dem Fenster heraus und das "definitive" FAIL
+        // verschwand. Nur ohne Fenster (also ueber den ganzen Trace) ist es endgueltig.
+        const ueberGanzenTrace = ab === 0;
+        return res(ueberGanzenTrace ? STATUS.FAIL : STATUS.FAIL_VORLAEUFIG,
+          `ORDERED: Rueckschritt ${groessterRueckschritt} ueberschreitet die Toleranz ${reversalToleranz}`
+            + (ueberGanzenTrace ? "" : " (im gleitenden Fenster -- kann herausfallen)"),
           { counterexample: { groessterRueckschritt, reversalToleranz } });
       }
       if (netto > delta) {
@@ -315,9 +336,13 @@ export const RULES = Object.freeze([
       // Am initialen Frame gibt es keine Vergangenheit. Das ist kein Defekt,
       // sondern schlicht noch nicht beobachtet -- Vergangenheit vortaeuschen waere
       // der schwerere Fehler.
+      // Einmal vorhandene Vergangenheit verschwindet nicht wieder -> definitives PASS.
       if (ctx.trace.length > 1) return res(STATUS.PASS, `Historie mit ${ctx.trace.length - 1} Vorgaenger(n)`);
+      // KORREKTUR 2026-08-11 (Befund K3): Hier stand ein definitives FAIL, das bei der
+      // naechsten Generation zu PASS wurde -- ein "endgueltiges" Urteil, das kippte.
+      // Fehlende Vergangenheit am Startframe ist nie endgueltig: der Trace waechst.
       return ctx.config.requirePriorHistory
-        ? res(STATUS.FAIL, "Spec fordert vorhandene Vergangenheit, Trace hat nur den Startframe")
+        ? res(STATUS.FAIL_VORLAEUFIG, "Spec fordert Vergangenheit; bisher nur der Startframe")
         : res(STATUS.UNOBSERVED, "initialer Frame -- noch keine Vergangenheit beobachtet");
     },
   },
@@ -453,8 +478,22 @@ export const RULES = Object.freeze([
       if (!lm || typeof lm.predicate !== "function") {
         return res(STATUS.NA, "kein lifeModel konfiguriert");
       }
+      // KORREKTUR 2026-08-11 (Befund B2): Ohne Evidenz gab es hier ein DEFINITIVES
+      // "not alive" -- aus einem leeren Trace, ohne einen einzigen Zustand. Das ist
+      // dieselbe Klasse wie ein PASS aus fehlender Konfiguration, nur mit umgekehrtem
+      // Vorzeichen: "keine Daten" sah aus wie "widerlegt".
+      if (ctx.trace.length < 2) {
+        return res(STATUS.UNOBSERVED, "zu wenig Verlauf fuer ein Lebensurteil",
+          { claimTier: "MODEL/PROXY" });
+      }
       const alive = lm.predicate(ctx.last, ctx.trace);
-      return res(alive ? STATUS.PASS : STATUS.FAIL,
+      // Und: ein LifeModel wertet ueber ein FENSTER des Verlaufs. Sein Urteil kann
+      // durch Fortsetzung kippen (Befund K3: PASS -> FAIL beobachtet) und ist deshalb
+      // NIE definitiv, solange der Trace laeuft.
+      const st = ctx.traceComplete
+        ? (alive ? STATUS.PASS : STATUS.FAIL)
+        : (alive ? STATUS.PASS_VORLAEUFIG : STATUS.FAIL_VORLAEUFIG);
+      return res(st,
         `LifeModel '${lm.name || "unbenannt"}' v${lm.version || "?"}: ${alive ? "alive" : "not alive"}`,
         { claimTier: "MODEL/PROXY", lifeModel: { name: lm.name, version: lm.version } });
     },
