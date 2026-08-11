@@ -141,6 +141,31 @@ test.describe("9-Regel-Semantikprofil", () => {
     await expect(page.getByTestId("ninerule-R1")).toBeVisible();
   });
 
+  // Der Direktzugriff ist die Antwort auf den eigentlichen Befund: das Raster lag
+  // unterhalb des sichtbaren Panel-Bereichs. Wer oben in der Regelquelle-Zone steht,
+  // scrollt nicht auf Verdacht weiter -- also muss der Weg dorthin von dort aus
+  // sichtbar sein. Ein Klick, EIN Ergebnis: Profil gewaehlt, Panel offen, Regeln da.
+  test("Direktzugriff-Knopf oben fuehrt zum Raster", async ({ page }) => {
+    await page.goto("/");
+    await page.waitForTimeout(800);
+
+    // Der Knopf muss im Tab erreichbar sein, OHNE das Panel vorher zu oeffnen.
+    await oeffneSemantikPanel(page);
+    const sprung = page.getByTestId("semantik-sprung");
+    await expect(sprung).toBeVisible();
+
+    await sprung.click();
+    await page.waitForTimeout(400);
+
+    await expect(page.getByTestId("ninerules-panel")).toBeVisible();
+    await expect(page.getByTestId("semantik-neunregeln")).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByTestId("ninerule-R1")).toBeVisible();
+    // Und die drei ohne Gegenstand bleiben auch auf diesem Weg weg.
+    for (const id of ["R4", "R5", "R6"]) {
+      await expect(page.getByTestId(`ninerule-${id}`)).toHaveCount(0);
+    }
+  });
+
   // Herkunftsmarke: die Versionsnummer allein sagt nicht, welcher Stand laeuft --
   // sie stand ueber vier Commits unveraendert auf 33.4.0, quer durch ein ganzes
   // Feature. Der Kurz-SHA daneben beantwortet die Frage ohne Werkzeug.
