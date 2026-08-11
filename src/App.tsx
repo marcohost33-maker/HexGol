@@ -553,6 +553,8 @@ export default function GolHex() {
   const [showNineRules, setShowNineRules] = useState(() => {
     try { return localStorage.getItem("golhex_semantik_offen_v1") === "1"; } catch { return false; }
   });
+  // Sprungziel fuer den Direktzugriff-Knopf oben in der Regelquelle-Zone.
+  const semantikRef = useRef(null);
   const [ax, setAx] = useState({ a1: false, a2: false, a3: false, a4: false });
   const [a5, setA5] = useState("off");
   const [watzOnly, setWatzOnly] = useState(false);
@@ -3363,6 +3365,29 @@ export default function GolHex() {
       )}
       </>)}
 
+      {/* Direktzugriff auf das 9-Regel-Semantikprofil. Es liegt weiter unten im
+          Panel, ausserhalb des sichtbaren Bereichs -- wer hier oben steht, scrollt
+          nicht blind weiter und findet es nie (belegt 2026-08-11: live, funktionierend
+          und trotzdem nicht auffindbar). Der Knopf waehlt das Profil, klappt es auf
+          und scrollt hin; ein Klick, der die Ansicht nicht bewegt, fuehlt sich
+          folgenlos an. Bewusst NICHT in die REGELQUELLE-Gruppe einsortiert: die
+          Regelquelle veraendert die Simulation, das Semantikprofil beobachtet sie nur. */}
+      <button
+        data-testid="semantik-sprung"
+        onClick={() => {
+          setSemantikProfil("neunregeln");
+          setShowNineRules(true);
+          requestAnimationFrame(() =>
+            semantikRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }),
+          );
+        }}
+        style={{ width: "100%", textAlign: "left", padding: "8px 10px", borderRadius: 9,
+          border: `1px solid ${T.accent}`, background: "rgba(92,240,204,0.10)", color: T.accent,
+          fontFamily: MONO, fontSize: 11.5, fontWeight: 700, cursor: "pointer", marginBottom: 8 }}
+      >
+        &gt; 9 REGELN: Semantikprofil des Verlaufs
+      </button>
+
       <button onClick={() => setShowLegend((v) => !v)} style={{ width: "100%", textAlign: "left", padding: "8px 10px", borderRadius: 9, border: `1px solid ${T.border}`, background: T.bg2, color: T.text, fontFamily: MONO, fontSize: 11.5, fontWeight: 700, cursor: "pointer", marginBottom: showLegend ? 6 : 8 }}>
         {showLegend ? "v" : ">"} Legende: alle Regeln &amp; Farbenlehre
       </button>
@@ -3655,6 +3680,7 @@ export default function GolHex() {
 
       {/* 9-REGEL-SEMANTIKPROFIL (optional, beobachtet nur -- greift NICHT in die Simulation ein) */}
       <button
+        ref={semantikRef}
         onClick={() => setShowNineRules((v) => !v)}
         data-testid="ninerules-toggle"
         aria-expanded={showNineRules}
