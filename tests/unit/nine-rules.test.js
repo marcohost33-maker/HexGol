@@ -63,9 +63,15 @@ describe("Pflicht-Gegenbeispiele T1-T6 aus der Spezifikation", () => {
       // Verlangt Selbsterhaltung DURCH Aktivitaet, nicht blosses Gleichbleiben.
       predicate: (_last, tr) => tr.some((s, i) => i > 0 && s.u !== tr[i - 1].u),
     };
-    const rep = evaluateNineRules(trace, { lifeModel: autopoiesis });
+    // Der Trace ist abgeschlossen -- nur dann darf ein Lebensurteil endgueltig sein.
+    // Auf einem laufenden Trace waere FAIL_VORLAEUFIG korrekt (Befund K3: ein
+    // LifeModel wertet ueber ein Fenster, sein Urteil kann durch Fortsetzung kippen).
+    const rep = evaluateNineRules(trace, { lifeModel: autopoiesis }, { traceComplete: true });
     expect(statusOf(rep, "R9")).toBe(STATUS.FAIL);
     expect(rep.rules.find((x) => x.id === "R9").claimTier).toBe("MODEL/PROXY");
+    // Gegenprobe: solange der Trace laeuft, ist dasselbe Urteil nur vorlaeufig.
+    expect(statusOf(evaluateNineRules(trace, { lifeModel: autopoiesis }), "R9"))
+      .toBe(STATUS.FAIL_VORLAEUFIG);
   });
 
   it("T6 initialer Frame: Vergangenheit nicht vortaeuschen (R1 PASS, R3 UNOBSERVED)", () => {
@@ -438,16 +444,30 @@ describe("Vertrag des Reports", () => {
   });
 });
 
-describe("R1 erkennt ungueltige Zustaende", () => {
-  it("fehlende Position ist FAIL, nicht PASS", () => {
-    expect(statusOf(evaluateNineRules([{ u: 1 }]), "R1")).toBe(STATUS.FAIL);
+describe("R1 fragt nach gueltiger Instanziierung, nicht nach Verortung", () => {
+  // KORRIGIERTE ERWARTUNG (Befund B1). Hier stand: "fehlende Position ist FAIL".
+  // Das machte R1 fuer jede ORTLOSE Entitaet zu einem definitiven FAIL -- und da FAIL
+  // die Aggregation dominiert, war das Gesamturteil des GolHex-Adapters eine Konstante
+  // (40'000/40'000 FAIL). Der Widerspruch lag in der eigenen Konstruktion: fuer R5/R6
+  // wurde entschieden, dass eine Population keinen Ort hat, und dann verlangte R1 ihn.
+  //
+  // Das ist KEIN "Test an den Bau anpassen": geaendert wurde die SEMANTIK von R1 mit
+  // Begruendung, und die Erwartungen unten pruefen sie schaerfer als vorher -- eine
+  // GEFUEHRTE, aber kaputte Position bleibt FAIL.
+  it("ein Zustand ohne Position ist gueltig -- Ortlosigkeit ist kein Defekt", () => {
+    expect(statusOf(evaluateNineRules([{ u: 1 }]), "R1")).toBe(STATUS.PASS);
   });
-  it("prueft BEIDE Hex-Koordinaten, nicht nur eine", () => {
+  it("fehlender intrinsischer Wert bleibt FAIL", () => {
+    expect(statusOf(evaluateNineRules([{ q: { q: 0, r: 0 } }]), "R1")).toBe(STATUS.FAIL);
+    expect(statusOf(evaluateNineRules([{}]), "R1")).toBe(STATUS.FAIL);
+  });
+  it("wer eine Position FUEHRT, muss eine brauchbare fuehren -- beide Achsen", () => {
     // Fremd-Mutant aus der unabhaengigen Pruefung: ein Guard, der nur q pruefte,
     // ueberlebte die alte Suite. Beide Achsen muessen einzeln abgesichert sein.
     expect(statusOf(evaluateNineRules([{ u: 1, q: { q: 0 } }]), "R1")).toBe(STATUS.FAIL);
     expect(statusOf(evaluateNineRules([{ u: 1, q: { r: 0 } }]), "R1")).toBe(STATUS.FAIL);
     expect(statusOf(evaluateNineRules([{ u: 1, q: { q: NaN, r: 0 } }]), "R1")).toBe(STATUS.FAIL);
+    expect(statusOf(evaluateNineRules([{ u: 1, q: { q: 0, r: Infinity } }]), "R1")).toBe(STATUS.FAIL);
   });
 });
 

@@ -88,9 +88,27 @@ const MUTANTEN = [
   // fremdbestimmte Liste ist der einzige ehrliche Test der eigenen Testguete.
   {
     name: "F1 validState prueft die r-Koordinate nicht mehr",
-    von: "    && isNum(s.q.q) && isNum(s.q.r);",
-    nach: "    && isNum(s.q.q);",
+    von: "  return typeof s.q === \"object\" && isNum(s.q.q) && isNum(s.q.r);",
+    nach: "  return typeof s.q === \"object\" && isNum(s.q.q);",
     schuetzt: "beide Hex-Achsen einzeln abgesichert",
+  },
+  {
+    name: "F6 R1 verlangt wieder einen Ort (der Live-Defekt B1)",
+    von: "  if (s.q === undefined || s.q === null) return true; // ortlose Entitaet -- zulaessig",
+    nach: "  if (s.q === undefined || s.q === null) return false;",
+    schuetzt: "ortlose Entitaeten sind gueltig -- sonst ist das Gesamturteil eine Konstante",
+  },
+  {
+    name: "F7 R9 urteilt wieder definitiv aus dem Fenster",
+    von: "      const st = ctx.traceComplete\n        ? (alive ? STATUS.PASS : STATUS.FAIL)\n        : (alive ? STATUS.PASS_VORLAEUFIG : STATUS.FAIL_VORLAEUFIG);",
+    nach: "      const st = alive ? STATUS.PASS : STATUS.FAIL;",
+    schuetzt: "ein Fensterurteil ist nie endgueltig",
+  },
+  {
+    name: "F8 R9 urteilt wieder ohne Evidenz",
+    von: "      if (ctx.trace.length < 2) {\n        return res(STATUS.UNOBSERVED, \"zu wenig Verlauf fuer ein Lebensurteil\",\n          { claimTier: \"MODEL/PROXY\" });\n      }",
+    nach: "      if (false) { }",
+    schuetzt: "kein definitives Urteil aus leerem Trace",
   },
   {
     name: "F2 traceRange behauptet fuer alle Regeln den ganzen Trace",
@@ -138,7 +156,11 @@ const MUTANTEN = [
 
 function suiteLaeuftDurch() {
   try {
-    execSync("npx vitest run tests/unit/nine-rules.test.js", { stdio: "pipe", timeout: 300000 });
+    // BEIDE Suiten: Die Sonde lief zuerst nur gegen nine-rules.test.js -- und ein
+    // Mutant ueberlebte, weil der schuetzende Test im ADAPTER-Test stand. Eine Sonde,
+    // die nur einen Teil ihres Gegenstands prueft, meldet zu hohe Scores.
+    execSync("npx vitest run tests/unit/nine-rules.test.js tests/unit/golhex-nine-rules-adapter.test.js",
+      { stdio: "pipe", timeout: 300000 });
     return true;   // gruen
   } catch {
     return false;  // rot

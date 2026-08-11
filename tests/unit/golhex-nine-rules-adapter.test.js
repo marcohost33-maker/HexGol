@@ -109,11 +109,71 @@ describe("LifeModel CA-Life traegt seine Grenze mit", () => {
   });
 });
 
+describe("Das Gesamturteil muss VARIIEREN koennen", () => {
+  // Der Test, der Befund B1 gefangen haette. Die erste Fassung meldete fuer JEDEN
+  // Zustand `overall: FAIL` -- 40'000 von 40'000 geprueften Traces -- weil R1 eine
+  // Position verlangte, die der Adapter bewusst nicht liefert. Im UI sah der Nutzer
+  // ein dauerhaftes, als endgueltig deklariertes Fehlurteil.
+  //
+  // Die alte Assertion `expect(overall).not.toBe(PASS)` konnte das nicht sehen: sie
+  // ist fuer eine Konstante FAIL immer erfuellt. Eine Pruefung, die eine Konstante
+  // durchlaesst, misst nichts -- genau die Klasse, die dieses Projekt bekaempft.
+  it("ueber viele Verlaeufe entstehen MEHRERE verschiedene Gesamturteile", () => {
+    const gesehen = new Set();
+    for (let n = 0; n <= 10; n++) {
+      for (const laeuft of [true, false]) {
+        const pop = Array.from({ length: n }, (_, i) => (i * 7) % 13);
+        const act = Array.from({ length: n }, (_, i) => (i * 3) % 5);
+        gesehen.add(bewerteGolHex(buf(pop, act), n, { laeuft }).overall);
+      }
+    }
+    expect(gesehen.size).toBeGreaterThan(1);
+  });
+
+  it("eine lebendige Simulation wird NICHT als endgueltig gescheitert gemeldet", () => {
+    const rep = bewerteGolHex(buf([4, 7, 9, 12], [2, 3, 4, 5]), 3, { laeuft: true });
+    expect(rep.overall).not.toBe(STATUS.FAIL);
+    expect(statusOf(rep, "R1")).toBe(STATUS.PASS); // ortlose Entitaet ist gueltig
+  });
+
+  it("kein Urteil ohne Evidenz: leerer Puffer erzeugt kein definitives FAIL", () => {
+    const rep = bewerteGolHex(buf([]), 0);
+    expect(rep.overall).not.toBe(STATUS.FAIL);
+    expect(statusOf(rep, "R9")).toBe(STATUS.UNOBSERVED);
+  });
+});
+
+describe("Praefix-Monotonie: definitive TRACE-Urteile duerfen nie kippen", () => {
+  // Als TEST ueber alle Regeln und alle Praefixe, nicht als Zusicherung im Kommentar.
+  // Genau so wurden K3 (R3/R9/R2 kippten trotz stabilUeberTrace) gefunden.
+  it("ueber jeden Praefix jedes Verlaufs bleibt ein definitives Urteil bestehen", () => {
+    const verlaeufe = [
+      { pop: [3, 5, 2, 8, 0, 4], act: [1, 2, 0, 3, 0, 1] },
+      { pop: [9, 9, 9, 9], act: [0, 0, 0, 0] },
+      { pop: [1, 2, 3, 4, 5], act: [1, 1, 1, 1, 1] },
+      { pop: [10, 6, 3, 1, 0], act: [4, 3, 2, 1, 0] },
+    ];
+    let beobachtet = 0;
+    for (const v of verlaeufe) {
+      const fest = new Map();
+      for (let n = 1; n <= v.pop.length; n++) {
+        const rep = bewerteGolHex(buf(v.pop.slice(0, n), v.act.slice(0, n)), n - 1, { laeuft: true });
+        for (const r of rep.rules) {
+          if (!r.stabilUeberTrace) continue;
+          if (fest.has(r.id)) { expect(r.status).toBe(fest.get(r.id)); beobachtet++; }
+          else fest.set(r.id, r.status);
+        }
+      }
+    }
+    // Ohne diese Zusicherung waere der Test gruen, auch wenn er nie etwas sah.
+    expect(beobachtet).toBeGreaterThan(0);
+  });
+});
+
 describe("Robustheit", () => {
   it("leerer Puffer kippt die Auswertung nicht", () => {
     const rep = bewerteGolHex(buf([]), 0);
-    expect(rep.rules).toHaveLength(7);
-    expect(rep.overall).not.toBe(STATUS.PASS);
+    expect(rep.rules).toHaveLength(6);
   });
 
   it("keine Regel meldet einen Konfigurationsfehler -- der Adapter ist vollstaendig", () => {

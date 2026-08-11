@@ -29,10 +29,21 @@
 // ein Proxy fuer Aktivitaet, keine Aussage ueber Leben -- und traegt deshalb den
 // Claim-Tier MODEL/PROXY.
 
-import { evaluateNineRules, R2_MODUS, R4_MODUS } from "./nine-rules.js";
+import { evaluateNineRules, R2_MODUS } from "./nine-rules.js";
 
-/** Fuer diese Entitaet sinnlose Regeln -- bewusst abgeschaltet statt erfunden. */
-export const NICHT_ANWENDBAR = Object.freeze(["R5", "R6"]);
+// Fuer diese Entitaet sinnlose Regeln -- bewusst abgeschaltet statt erfunden.
+//
+// R5/R6: eine Population hat keinen Ort und keine Orientierung.
+// R4 kam am 2026-08-11 dazu (Befund B3 der unabhaengigen Pruefung). Der erste Entwurf
+// verglich hier Populationszahl mit Aenderungszahl -- zwei verschiedene Groessen
+// desselben Frames. Deren Ungleichheit belegt keine Unterscheidungsleistung, und
+// empirisch fiel das Urteil falsch herum aus: ein ERSTARRTER Automat "unterschied"
+// (9 != 0), ein sterbender nicht (0 == 0). In den Physik-Modi ist es sogar determiniert,
+// weil dort pop === active gesetzt wird -- das Ergebnis haengt am Simulationsmodus statt
+// am Gegenstand. Arithmetisch korrekt auf falsch konstruierter Metrik ist wertlos.
+// Der Populations-Ringpuffer traegt keinen Vergleichsraum, der Unterscheidung belegen
+// koennte; er ist eine Zahl pro Generation. Also: aus.
+export const NICHT_ANWENDBAR = Object.freeze(["R4", "R5", "R6"]);
 
 /**
  * Baut den Trace aus dem Populations-Ringpuffer.
@@ -89,16 +100,12 @@ export function bewerteGolHex(buf, gen, opts = {}) {
     // sich wieder erholen -- deshalb ORDERED und nicht MONOTONE.
     progressVariable: (s) => s.a,
     r2Modus: opts.r2Modus || R2_MODUS.ORDERED,
-    // R4: Unterscheidet die Population ueberhaupt Zustaende? Strukturell, denn ein
-    // Zellautomat hat keinen eigenen Klassifikator -- ACTIVE waere hier eine
-    // Behauptung ueber etwas, das es nicht gibt.
-    r4Modus: R4_MODUS.STRUCTURAL,
-    population: (s) => (s ? [s.u, s.aktiv ?? 0] : []),
-    // R7: terminal heisst ausgestorben ODER vollstaendig erstarrt.
+    // R4 ist abgeschaltet (siehe NICHT_ANWENDBAR) -- kein Vergleichsraum vorhanden.
+    // R7: terminal heisst ausgestorben.
     terminalPredicate: (s) => s.u <= 0,
     lifeModel: CA_LIFE,
   };
 
-  const enabled = ["R1", "R2", "R3", "R4", "R7", "R8", "R9"]; // R5/R6 bewusst aus
+  const enabled = ["R1", "R2", "R3", "R7", "R8", "R9"]; // R4/R5/R6 bewusst aus
   return evaluateNineRules(trace, config, { traceComplete: !laeuft, enabled });
 }
