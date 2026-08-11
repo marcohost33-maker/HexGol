@@ -275,6 +275,41 @@ real-valued rules (snow/water/HQST/Collatz/genes) + solver + seed, LiouScope
 recorder, Globalarchiv snapshot, stats detail → **Tab 4**. **No function is removed
 or made unreachable** — only re-grouped behind the tabs.
 
+### HexForge 2D silhouettes (Issue #128 first scope)
+
+The gallery carries a second tile row, **HEXFORGE 2D (SILHOUETTEN)**: six planar
+symbol shapes (`rounded-cross`, `four-lobe-clover`, `spiky-rosette`,
+`thin-eight-star`, `jagged-starburst`, `radial-burst`) defined as **explicit
+parametric silhouettes** (star-shaped radial functions r(θ)) and rasterised
+deterministically onto the hex cell centres of the **current grid** — a
+silhouette-to-cell-graph adapter, **not** 3D wireframe lines interpreted as
+cells (the explicit non-goal of Issue #128).
+
+The adapter (`src/lib/hexforge-2d.js`, pure + unit-tested) enforces the issue's
+gates fail-closed with typed errors:
+
+- **Explicit projection** — scale, rotation, centre, hex orientation
+  (`pointy-oddr`) and all shape parameters live in the preset spec; nothing is
+  implicit.
+- **Deterministic hash** — FNV-1a over the canonical spec + sorted cell list;
+  golden hashes for all six shapes are pinned in
+  `tests/unit/hexforge-2d.test.js`.
+- **Topology gates** — exactly 1 connected component, 0 enclosed holes.
+  Raster pinholes at concave notches (aliasing artefacts — the star-shaped
+  silhouettes are simply connected, so enclosed dead regions cannot be real)
+  are sealed deterministically; the sealed count is reported in `stats.sealed`
+  and `sealHoles: false` switches to the strict gate instead.
+- **Cell-budget guard** (`E_BUDGET`), empty/degenerate silhouette rejection
+  (`E_EMPTY`/`E_DEGENERATE`), NaN/out-of-range parameter rejection (`E_PARAM`).
+- **Round-trip** through the existing `.golhex.json` savestate envelope with
+  hash re-verification on import (`E_HASH`) and a version gate for
+  newer/incompatible presets (`E_VERSION`).
+
+Loading a tile rasterises for the current grid size and re-hydrates through the
+standard `applyLoadedState` path (rule H:B2/S34, static state — the sim does
+not auto-start). e2e covers the tiles functionally (`hexforge-gallery.spec.ts`)
+and pins one visual baseline per shape (`hexforge-visual.spec.ts`).
+
 ### v33 (PR-B): left drawer + stamp mathematics
 
 Tabs **1 Farben** and **2 Formen** open a **drawer that slides in from the left**
