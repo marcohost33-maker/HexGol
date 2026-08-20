@@ -1,0 +1,30 @@
+{
+  "schema": "golhex-5x9-crosswalk-v1",
+  "status": "DESIGN_SEMANTIC_CROSSWALK",
+  "claim_boundary": "relations are semantic overlaps/prerequisites, never equivalence",
+  "sources": {
+    "five_axioms": "docs/watzlawick-rule.md",
+    "nine_rules": "src/lib/nine-rules.js"
+  },
+  "relations": [
+    {"axiom":"A1","rule":"R4","relation":"STRONG_OVERLAP","reason":"signal/absence must be distinguishable"},
+    {"axiom":"A1","rule":"R1","relation":"PREREQUISITE","reason":"a valid modeled state is required"},
+    {"axiom":"A2","rule":"R4","relation":"STRONG_OVERLAP","reason":"relationship gates/classifies content"},
+    {"axiom":"A2","rule":"R1","relation":"PREREQUISITE","reason":"classification requires modeled state"},
+    {"axiom":"A3","rule":"R3","relation":"STRONG_OVERLAP","reason":"punctuation is history-dependent"},
+    {"axiom":"A3","rule":"R2","relation":"SUPPORTING_OVERLAP","reason":"trajectory/development carries sequence context"},
+    {"axiom":"A3","rule":"R8","relation":"SUPPORTING_OVERLAP","reason":"specific transition observes intrinsic change"},
+    {"axiom":"A4","rule":"R4","relation":"SUPPORTING_OVERLAP","reason":"digital and analog modalities must be distinguished"},
+    {"axiom":"A4","rule":"R8","relation":"SUPPORTING_OVERLAP","reason":"modal state may change across transitions"},
+    {"axiom":"A5","rule":"R4","relation":"STRONG_OVERLAP","reason":"symmetric vs complementary is an explicit relationship classification"},
+    {"axiom":"A5","rule":"R1","relation":"PREREQUISITE","reason":"relationship classification requires modeled state"}
+  ],
+  "explicit_no_direct": [
+    {"rule":"R5","reason":"spatial orientation is not Watzlawick symmetric/complementary interaction"},
+    {"rule":"R6","reason":"physical movement has no direct five-axiom correspondence"},
+    {"rule":"R7","reason":"terminality has no direct five-axiom correspondence"},
+    {"rule":"R9","reason":"cellular-life metaphor is not a Watzlawick communication axiom"}
+  ],
+  "invalidated_by_changes_to": ["docs/watzlawick-rule.md", "src/lib/nine-rules.js"],
+  "known_defect": "Issue #147: src/lib/sim-engine.js AXIOMS currently exports only A1-A4"
+}
