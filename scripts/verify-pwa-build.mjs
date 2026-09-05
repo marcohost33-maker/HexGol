@@ -1,10 +1,18 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { resolve, relative, sep, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { fingerprintEntries } from "./pwa-fingerprint.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, "..");
 const dist = resolve(root, "dist");
+const PUBLIC_SHELL_FILES = Object.freeze([
+  "manifest.webmanifest",
+  "icon.svg",
+  "icon-192.png",
+  "icon-512.png",
+  "apple-touch-icon.png",
+]);
 
 function fail(message) {
   console.error(`[pwa-build] FAIL: ${message}`);
@@ -12,9 +20,17 @@ function fail(message) {
   throw new Error(message);
 }
 
-function readRequired(path) {
+function requiredPath(path) {
   if (!existsSync(path)) fail(`missing required build output: ${relative(root, path)}`);
-  return readFileSync(path, "utf8");
+  return path;
+}
+
+function readRequired(path) {
+  return readFileSync(requiredPath(path), "utf8");
+}
+
+function readRequiredBytes(path) {
+  return readFileSync(requiredPath(path));
 }
 
 function walkFiles(dir) {
@@ -71,4 +87,25 @@ for (const url of precache) {
   if (!existsSync(path)) fail(`precache URL has no build artifact: ${url}`);
 }
 
-console.log(`[pwa-build] OK build=${buildId} generated-assets=${precache.length}`);
+// Recompute identity from the exact bytes that Cache.addAll(APP_SHELL) will
+// persist. This proves the worker generation changes when HTML, manifest, icons,
+// or any generated asset changes -- even in a dirty/non-git local build.
+const shellEntries = [
+  { path: "./", content: readRequiredBytes(resolve(dist, "index.html")) },
+  ...actualAssets.map((url) => ({
+    path: url,
+    content: readRequiredBytes(resolve(dist, url.slice(2))),
+  })),
+  ...PUBLIC_SHELL_FILES.map((fileName) => ({
+    path: `./${fileName}`,
+    content: readRequiredBytes(resolve(dist, fileName)),
+  })),
+];
+const expectedFingerprint = fingerprintEntries(shellEntries);
+if (!buildId.endsWith(`-${expectedFingerprint}`)) {
+  fail(`build id does not fingerprint complete precached shell; expected suffix=${expectedFingerprint} actual=${buildId}`);
+}
+
+console.log(
+  `[pwa-build] OK build=${buildId} generated-assets=${precache.length} shell-fingerprint=${expectedFingerprint}`,
+);
