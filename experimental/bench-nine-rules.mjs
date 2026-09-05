@@ -3,7 +3,25 @@ import { writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { evaluateNineRules, RULES, R2_MODUS } from "../src/lib/nine-rules.js";
 
-const LENGTHS = [16, 64, 256, 1024, 4096];
+function parsePositiveInt(value, fallback, name) {
+  if (value === undefined || value === "") return fallback;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) throw new Error(`${name} must be a positive integer`);
+  return parsed;
+}
+
+function parseLengths(value) {
+  if (!value) return [16, 64, 256, 1024, 4096];
+  const lengths = value.split(",").map((part) => parsePositiveInt(part.trim(), null, "BENCH_LENGTHS"));
+  if (new Set(lengths).size !== lengths.length) throw new Error("BENCH_LENGTHS must be unique");
+  return lengths;
+}
+
+const LENGTHS = parseLengths(process.env.BENCH_LENGTHS);
+const TARGET_STATES = parsePositiveInt(process.env.BENCH_TARGET_STATES, 200_000, "BENCH_TARGET_STATES");
+const MIN_SAMPLES = parsePositiveInt(process.env.BENCH_MIN_SAMPLES, 40, "BENCH_MIN_SAMPLES");
+const OUTPUT = resolve(process.cwd(), process.env.BENCH_OUTPUT || "nine-rules-benchmark.json");
+
 const PROFILES = Object.freeze({
   local: ["R1", "R3", "R5", "R6", "R8"],
   golhex: ["R1", "R2", "R3", "R7", "R8", "R9"],
@@ -58,9 +76,9 @@ function stats(samples) {
 
 function benchmarkOne(trace, enabled) {
   // Keep total processed states roughly comparable across trace lengths while
-  // retaining enough samples for a useful p95 at the largest case.
-  const iterations = Math.max(40, Math.floor(200_000 / trace.length));
-  const warmup = Math.max(20, Math.floor(iterations / 5));
+  // retaining enough samples for a useful p95 at the largest default case.
+  const iterations = Math.max(MIN_SAMPLES, Math.floor(TARGET_STATES / trace.length));
+  const warmup = Math.max(5, Math.floor(iterations / 5));
   const options = { enabled, traceComplete: true };
 
   for (let i = 0; i < warmup; i++) evaluateNineRules(trace, config, options);
@@ -112,6 +130,7 @@ for (const length of LENGTHS) {
 // Fit a simple least-squares line time = intercept + slope * traceLength per
 // profile. This is a descriptive scaling indicator, not a complexity proof.
 function linearFit(profileRows) {
+  if (profileRows.length < 2) return { interceptMs: null, slopeMsPerState: null };
   const n = profileRows.length;
   const sx = profileRows.reduce((s, r) => s + r.traceLength, 0);
   const sy = profileRows.reduce((s, r) => s + r.meanMs, 0);
@@ -135,6 +154,7 @@ const report = {
   generatedAt: new Date().toISOString(),
   node: process.version,
   platform: `${process.platform}-${process.arch}`,
+  parameters: { targetStates: TARGET_STATES, minSamples: MIN_SAMPLES },
   profiles: PROFILES,
   lengths: LENGTHS,
   rows,
@@ -145,6 +165,5 @@ const report = {
   },
 };
 
-const output = resolve(process.cwd(), "nine-rules-benchmark.json");
-writeFileSync(output, `${JSON.stringify(report, null, 2)}\n`, "utf8");
-console.log(`wrote ${output}`);
+writeFileSync(OUTPUT, `${JSON.stringify(report, null, 2)}\n`, "utf8");
+console.log(`wrote ${OUTPUT}`);
