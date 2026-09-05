@@ -13,7 +13,8 @@
     "test:mutation": "node tests/unit/mutation-probe.mjs",
     "test:watch": "vitest",
     "test:e2e": "npm run build && playwright test",
-    "test:e2e:update": "npm run build && playwright test --update-snapshots"
+    "test:e2e:update": "npm run build && playwright test --update-snapshots",
+    "bench:nine-rules": "node experimental/bench-nine-rules.mjs"
   },
   "dependencies": {
     "react": "^19.2.8",
