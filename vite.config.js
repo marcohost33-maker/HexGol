@@ -3,7 +3,7 @@ import react from "@vitejs/plugin-react";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { fingerprintEntries } from "./scripts/pwa-fingerprint.mjs";
 
 // Single source of truth for the app version: package.json `version`.
 // Injected at build time as __APP_VERSION__ so the Splash/branding reads the
@@ -95,9 +95,25 @@ if (istAuslieferung && ausLokalemGit && baumIstSchmutzig) {
   );
 }
 
+const PUBLIC_SHELL_FILES = Object.freeze([
+  "manifest.webmanifest",
+  "icon.svg",
+  "icon-192.png",
+  "icon-512.png",
+  "apple-touch-icon.png",
+]);
+
+function bundleContent(entry, path) {
+  if (!entry) throw new Error(`PWA build fingerprint missing bundle entry: ${path}`);
+  return entry.type === "chunk" ? entry.code : entry.source;
+}
+
 function emitBuildMetadata() {
   return {
     name: "hexgol-build-metadata",
+    // Run after ordinary Vite/core transforms so index.html and generated chunks
+    // represent the bytes/URLs that are about to be written.
+    enforce: "post",
     generateBundle(_options, bundle) {
       // Vite content-hashes generated JS/CSS/assets. Feed those exact URLs into
       // the service-worker install set so a new shell and its referenced code are
@@ -105,13 +121,31 @@ function emitBuildMetadata() {
       const generatedAssets = Object.keys(bundle)
         .filter((fileName) => fileName.startsWith("assets/"))
         .sort();
-      const assetFingerprint = createHash("sha256")
-        .update(generatedAssets.join("\n"))
-        .digest("hex")
-        .slice(0, 16);
-      // Deploy builds always have a commit (guarded above). The deterministic
-      // asset fingerprint keeps local/preview builds revisioned as well.
-      const buildId = commitSha || `v${pkg.version}-${assetFingerprint}`;
+      const indexEntry = bundle["index.html"];
+      if (!indexEntry || indexEntry.type !== "asset") {
+        throw new Error("PWA build fingerprint requires generated index.html");
+      }
+
+      // The worker generation must change whenever ANY byte in APP_SHELL changes,
+      // not only when Git HEAD or a Vite asset filename changes. This matters for
+      // local/preview builds and prevents stale unrevisioned manifest/icon/HTML
+      // content when the same checkout is rebuilt with working-tree changes.
+      const shellEntries = [
+        { path: "./", content: bundleContent(indexEntry, "index.html") },
+        ...generatedAssets.map((fileName) => ({
+          path: `./${fileName}`,
+          content: bundleContent(bundle[fileName], fileName),
+        })),
+        ...PUBLIC_SHELL_FILES.map((fileName) => ({
+          path: `./${fileName}`,
+          content: readFileSync(fileURLToPath(new URL(`./public/${fileName}`, import.meta.url))),
+        })),
+      ];
+      const shellFingerprint = fingerprintEntries(shellEntries);
+      // Keep provenance and cache identity separate-but-linked: `commit` remains
+      // the exact source revision, while `build` additionally fingerprints every
+      // precached shell byte. Dirty/non-git local builds therefore still revise.
+      const buildId = `${commitSha || `v${pkg.version}`}-${shellFingerprint}`;
       const precache = generatedAssets.map((fileName) => `./${fileName}`);
 
       this.emitFile({
