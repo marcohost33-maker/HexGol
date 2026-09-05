@@ -89,8 +89,8 @@ describe("service worker cache/update strategy (#115/#159)", () => {
   });
 
   it("keeps provenance/update metadata network-only", () => {
-    expect(sw).toContain('/version.json");');
-    expect(sw).toContain('/sw-version.js");');
+    expect(sw).toMatch(/url\.pathname\.endsWith\("\/version\.json"\)/);
+    expect(sw).toMatch(/url\.pathname\.endsWith\("\/sw-version\.js"\)/);
     expect(sw).toMatch(/event\.respondWith\(fetch\(request\)\)/);
   });
 });
