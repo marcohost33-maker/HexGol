@@ -1,8 +1,8 @@
 # GolHex — Threat-Model (leichtgewichtig)
 
-Stand 2026-07-18. GolHex ist eine **rein clientseitige, statische Web-App/PWA**
+Stand 2026-09-05. GolHex ist eine **rein clientseitige, statische Web-App/PWA**
 (React + Canvas2D, Vite-Bundle) ohne Backend, ohne Login, ohne Nutzer-Accounts.
-Dieses Modell ist bewusst minimal und Marco-zu-bestätigen bei Deploy-Änderungen.
+Dieses Modell ist bewusst minimal und bei Deploy-Änderungen neu zu prüfen.
 
 ## Datenklassifikation
 
@@ -16,17 +16,16 @@ Dieses Modell ist bewusst minimal und Marco-zu-bestätigen bei Deploy-Änderunge
 
 | Grenze | Risiko | Mitigation |
 |---|---|---|
-| Statisches Hosting (PWA) | Stale/torn Service-Worker-Shell | `index.html` NICHT als Offline-Shell cachen (NR #126); network-first-Nav |
+| Statisches Hosting (PWA) | Stale/torn oder gemischte Service-Worker-Shell-Generation | build-revisioniertes, atomisches Precache von HTML-Shell + aktuellen Vite-Hash-Assets; network-first Navigation; HTML-Fallback ausschliesslich für Navigation; keine erzwungene `skipWaiting()`/`clients.claim()`-Übernahme |
 | Supply-Chain (npm/Actions) | kompromittierte Dependency/Action | SHA-gepinnte Actions (zizmor), Dependabot, minimale Runtime-Deps |
 | Client-Storage | lokaler Zustand von anderen lokalen Apps lesbar | keine Secrets gespeichert; nur Sim-State (nicht sensibel) |
 | Worker/OffscreenCanvas | Feature-Detection-Fehler | fail-closed (`worker-support.js`) |
 
 ## Nicht im Scope
 
-- Server-seitige Bedrohungen (es gibt keinen Server).
+- Server-seitige Bedrohungen (es gibt keinen Anwendungsserver; statisches Hosting bleibt als Infrastruktur-Grenze relevant).
 - Authentifizierung/Autorisierung (keine Accounts).
 - Verschlüsselung ruhender Daten (keine sensiblen Daten gespeichert).
 
 > Bei künftiger Aufnahme von Backend/Sync/Accounts ist dieses Modell zu
 > überarbeiten (dann auch `DATA_CLASSIFICATION.md` ergänzen).
-</content>
