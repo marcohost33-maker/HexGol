@@ -3,6 +3,7 @@ import react from "@vitejs/plugin-react";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 
 // Single source of truth for the app version: package.json `version`.
 // Injected at build time as __APP_VERSION__ so the Splash/branding reads the
@@ -94,14 +95,39 @@ if (istAuslieferung && ausLokalemGit && baumIstSchmutzig) {
   );
 }
 
-function emitVersionJson() {
+function emitBuildMetadata() {
   return {
-    name: "hexgol-version-json",
-    generateBundle() {
+    name: "hexgol-build-metadata",
+    generateBundle(_options, bundle) {
+      // Vite content-hashes generated JS/CSS/assets. Feed those exact URLs into
+      // the service-worker install set so a new shell and its referenced code are
+      // cached atomically. Public icons/manifest are added by sw.js itself.
+      const generatedAssets = Object.keys(bundle)
+        .filter((fileName) => fileName.startsWith("assets/"))
+        .sort();
+      const assetFingerprint = createHash("sha256")
+        .update(generatedAssets.join("\n"))
+        .digest("hex")
+        .slice(0, 16);
+      // Deploy builds always have a commit (guarded above). The deterministic
+      // asset fingerprint keeps local/preview builds revisioned as well.
+      const buildId = commitSha || `v${pkg.version}-${assetFingerprint}`;
+      const precache = generatedAssets.map((fileName) => `./${fileName}`);
+
       this.emitFile({
         type: "asset",
         fileName: "version.json",
-        source: `${JSON.stringify({ version: `v${pkg.version}`, commit: commitSha }, null, 2)}\n`,
+        source: `${JSON.stringify({ version: `v${pkg.version}`, commit: commitSha, build: buildId }, null, 2)}\n`,
+      });
+      // `sw.js` imports this classic worker script. Browser SW update checks include
+      // importScripts() dependencies; registration uses updateViaCache="none" so a
+      // changed build id/precache list cannot be hidden by the HTTP cache.
+      this.emitFile({
+        type: "asset",
+        fileName: "sw-version.js",
+        source:
+          `self.__GOLHEX_BUILD__ = ${JSON.stringify(buildId)};\n` +
+          `self.__GOLHEX_PRECACHE__ = ${JSON.stringify(precache)};\n`,
       });
     },
   };
@@ -114,7 +140,7 @@ export default defineConfig({
     // Kurz-SHA reicht fuer den Blick; version.json traegt den vollen Wert.
     __APP_COMMIT__: JSON.stringify(commitSha ? commitSha.slice(0, 7) : null),
   },
-  plugins: [react(), emitVersionJson()],
+  plugins: [react(), emitBuildMetadata()],
   server: {
     port: 5173,
     strictPort: false,
