@@ -34,6 +34,7 @@ describe("nine-rule benchmark harness", () => {
       expect(report.rows).toHaveLength(6);
       expect(report.rows.every((row) => row.n >= 4)).toBe(true);
       expect(report.rows.every((row) => row.p50Ms >= 0 && row.p95Ms >= row.p50Ms)).toBe(true);
+      expect(report.rows.every((row) => row.probeStatusCounts.CONFIG_ERROR === 0)).toBe(true);
       expect(report.interpretation.thresholdPolicy).toMatch(/observe-only/i);
       expect(report.interpretation.cachePolicy).toMatch(/incremental caching only if/i);
     } finally {
