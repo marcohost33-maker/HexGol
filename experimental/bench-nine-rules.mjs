@@ -31,6 +31,56 @@ const PROFILES = Object.freeze({
   full: RULES.map((rule) => rule.id),
 });
 
+// Code-derived cost model. Keep this next to the benchmark so timing data is not
+// interpreted without knowing which rule actually scans which dimension.
+// T = trace length, P = population size returned by config.population().
+const HOT_PATH_ANALYSIS = Object.freeze({
+  R1: {
+    traceLengthComplexity: "O(1)",
+    note: "Reads the current/last state only relative to trace length.",
+  },
+  R2: {
+    traceLengthComplexity: "O(T)",
+    note: "Materializes progress over the full trace with trace.map(); ORDERED may then scan its bounded window, so the full map remains the trace-length hot path.",
+    benchmarkCoverage: "Enabled in golhex and full profiles.",
+  },
+  R3: {
+    traceLengthComplexity: "O(1)",
+    note: "Checks trace length/history presence only.",
+  },
+  R4: {
+    traceLengthComplexity: "O(1) with respect to T",
+    populationComplexity: "O(P^2) worst case",
+    note: "Pairwise discriminator/comparator search can inspect every population pair; benchmark P is fixed at 12 and may exit early, so this benchmark does not characterize large-P scaling.",
+  },
+  R5: {
+    traceLengthComplexity: "O(1)",
+    note: "Validates the last state's orientation only.",
+  },
+  R6: {
+    traceLengthComplexity: "O(1)",
+    note: "Compares only the last transition.",
+  },
+  R7: {
+    traceLengthComplexity: "O(T) worst case",
+    note: "Uses trace.findIndex(terminalPredicate); the benchmark puts the terminal state last, deliberately exercising the full scan.",
+    benchmarkCoverage: "Enabled in golhex and full profiles.",
+  },
+  R8: {
+    traceLengthComplexity: "O(1)",
+    note: "Compares only the last two intrinsic values.",
+  },
+  R9: {
+    traceLengthComplexity: "Delegated to lifeModel.predicate",
+    note: "The benchmark proxy predicate is O(1). Arbitrary application life models may scan the trace and are explicitly outside this evaluator-core baseline.",
+  },
+  profileExpectation: {
+    local: "Should remain approximately flat as T grows because its enabled rules are O(1) in trace length.",
+    golhex: "Expected to grow with T because R2 performs a full trace map and R7 performs a worst-case full terminal scan in this fixture.",
+    full: "Expected to grow with T for the same R2/R7 reason; R4 population cost is held constant by fixed P=12.",
+  },
+});
+
 function buildTrace(length) {
   return Array.from({ length }, (_, i) => ({
     u: i % 7,
@@ -150,9 +200,12 @@ for (const length of LENGTHS) {
 }
 
 // Fit a simple least-squares line time = intercept + slope * traceLength per
-// profile. This is a descriptive scaling indicator, not a complexity proof.
+// profile. R^2 describes this sample's linear fit quality; neither is a proof of
+// algorithmic complexity. The code-derived model above remains authoritative.
 function linearFit(profileRows) {
-  if (profileRows.length < 2) return { interceptMs: null, slopeMsPerState: null };
+  if (profileRows.length < 2) {
+    return { interceptMs: null, slopeMsPerState: null, rSquared: null };
+  }
   const n = profileRows.length;
   const sx = profileRows.reduce((s, r) => s + r.traceLength, 0);
   const sy = profileRows.reduce((s, r) => s + r.meanMs, 0);
@@ -161,7 +214,17 @@ function linearFit(profileRows) {
   const denom = n * sxx - sx * sx;
   const slopeMsPerState = denom === 0 ? null : (n * sxy - sx * sy) / denom;
   const interceptMs = slopeMsPerState === null ? null : (sy - slopeMsPerState * sx) / n;
-  return { interceptMs, slopeMsPerState };
+  if (slopeMsPerState === null || interceptMs === null) {
+    return { interceptMs, slopeMsPerState, rSquared: null };
+  }
+  const meanY = sy / n;
+  const ssTot = profileRows.reduce((s, r) => s + (r.meanMs - meanY) ** 2, 0);
+  const ssRes = profileRows.reduce((s, r) => {
+    const predicted = interceptMs + slopeMsPerState * r.traceLength;
+    return s + (r.meanMs - predicted) ** 2;
+  }, 0);
+  const rSquared = ssTot === 0 ? null : 1 - (ssRes / ssTot);
+  return { interceptMs, slopeMsPerState, rSquared };
 }
 
 const scaling = Object.fromEntries(
@@ -181,9 +244,11 @@ const report = {
   lengths: LENGTHS,
   rows,
   scaling,
+  hotPathAnalysis: HOT_PATH_ANALYSIS,
   interpretation: {
     thresholdPolicy: "observe-only; no CI performance threshold from a single machine",
     cachePolicy: "introduce incremental caching only if repeated production/UI measurements justify invalidation complexity",
+    complexityPolicy: "timing-fit slope/R^2 are descriptive only; code-derived path analysis determines asymptotic claims",
   },
 };
 
