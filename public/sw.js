@@ -53,28 +53,52 @@ self.addEventListener("activate", (event) => {
 // Offline fallback is HTML and therefore belongs ONLY to navigation requests.
 function networkFirstShell(request) {
   return fetch(request).catch(async () => {
-    const cache = await caches.open(CACHE_NAME);
-    return (await cache.match(request)) || (await cache.match("./")) || Response.error();
+    try {
+      const cache = await caches.open(CACHE_NAME);
+      return (await cache.match(request)) || (await cache.match("./")) || Response.error();
+    } catch {
+      return Response.error();
+    }
   });
 }
 
-async function cacheFirst(request) {
-  const cache = await caches.open(CACHE_NAME);
-  const cached = await cache.match(request);
-  if (cached) return cached;
-
+async function cacheFirst(request, event) {
+  let cache = null;
   try {
-    const response = await fetch(request);
-    if (response && response.status === 200 && response.type === "basic") {
-      await cache.put(request, response.clone());
-    }
-    return response;
+    cache = await caches.open(CACHE_NAME);
+    const cached = await cache.match(request);
+    if (cached) return cached;
+  } catch {
+    // Cache Storage can be unavailable or quota-constrained. That must not turn
+    // a healthy network path into an application failure.
+    cache = null;
+  }
+
+  let response;
+  try {
+    response = await fetch(request);
   } catch {
     // Never answer a missing JS/CSS/image/font request with the HTML app shell.
     // A network error is correct here; returning HTML would create MIME/type
     // failures and hide the actual missing-asset condition.
     return Response.error();
   }
+
+  if (cache && response && response.status === 200 && response.type === "basic") {
+    // Return the successful network response independently of cache persistence.
+    // Keep the worker alive for the best-effort write, but swallow storage/quota
+    // failures so they cannot discard an otherwise valid response.
+    const cacheWrite = cache.put(request, response.clone()).catch(() => undefined);
+    event.waitUntil(cacheWrite);
+  }
+  return response;
+}
+
+function authoritativeNetworkRequest(request) {
+  // Deployment provenance must bypass the browser HTTP cache as well as Cache
+  // Storage. Constructing from the incoming Request preserves method/headers and
+  // same-origin credentials while overriding only its HTTP-cache mode.
+  return new Request(request, { cache: "no-store" });
 }
 
 self.addEventListener("fetch", (event) => {
@@ -84,17 +108,17 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
 
+  // Provenance/update metadata must be authoritative even when opened directly
+  // as a browser navigation. Route this BEFORE the HTML navigation fallback.
+  if (url.pathname.endsWith("/version.json") || url.pathname.endsWith("/sw-version.js")) {
+    event.respondWith(fetch(authoritativeNetworkRequest(request)));
+    return;
+  }
+
   if (request.mode === "navigate") {
     event.respondWith(networkFirstShell(request));
     return;
   }
 
-  // Provenance/update metadata should describe the server/deploy now, not a
-  // previously cached answer. sw-version.js is also update-critical metadata.
-  if (url.pathname.endsWith("/version.json") || url.pathname.endsWith("/sw-version.js")) {
-    event.respondWith(fetch(request));
-    return;
-  }
-
-  event.respondWith(cacheFirst(request));
+  event.respondWith(cacheFirst(request, event));
 });
