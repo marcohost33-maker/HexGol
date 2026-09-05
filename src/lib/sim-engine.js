@@ -187,7 +187,6 @@ const AXIOMS = [
   { id: "a2", short: "A2 Beziehung > Inhalt", desc: "Inhalts-/Beziehungsaspekt: Nachbar-Mehrheit (mMix) klassifiziert den Inhalt statt Mischung (cMix)." },
   { id: "a3", short: "A3 Interpunktion", desc: "Interpunktion der Ereignisfolge: alte Zellen (Alter >= 6) erhalten +/-1 Ueberlebens-Toleranz." },
   { id: "a4", short: "A4 Analog", desc: "Digital + analog: sterbende Zellen hinterlassen einen Halbzustand (Ghost), 1 Generation als Nachbar." },
-  { id: "a5", short: "A5 Symmetrisch / komplementaer", desc: "Symmetrische vs. komplementaere Interaktion: Ueberleben verlangt K <= S; Geburt verlangt S > K." },
 ];
 
 // --- Geometrie (kanonisch, verifiziert) -------------------------------------
@@ -285,8 +284,8 @@ function buildNeighbors(R, C, shape, opts) {
   // radius = Welt-Radius der Dreieck-Eckpunkte (immer das Maximum, fuellt das Gitter).
   const radius = radiusMax;
   // Kreis-Radius: expliziter Wert (in Gitterschritten -> Welt: *1.5 = vertikaler
-// Reihenabstand) ODER eingeschriebenes Maximum. Auf [0, radiusMax] geklemmt
-// (fail-closed: kein Kreis ueber den Gitterrand hinaus).
+  // Reihenabstand) ODER eingeschriebenes Maximum. Auf [0, radiusMax] geklemmt
+  // (fail-closed: kein Kreis ueber den Gitterrand hinaus).
   let circleRad = radiusMax;
   if (opts && Number.isFinite(opts.circleRadius) && opts.circleRadius > 0) {
     circleRad = Math.min(opts.circleRadius * 1.5, radiusMax);
