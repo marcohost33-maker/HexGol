@@ -39,22 +39,36 @@ function seed(field, C, cells) {
   return field;
 }
 
-describe("stepLife conditional translation invariant", () => {
-  it("commutes with parity-preserving translation on an even toroidal box", () => {
+function occupancy(field) {
+  return Array.from(field, (state) => (state === 0 ? 0 : 1));
+}
+
+describe("stepLife conditional toroidal translation invariant", () => {
+  it("commutes at occupancy level with a parity-preserving translation that exercises the torus seam", () => {
     const R = 18, C = 20;
-    const { torus, mask } = buildNeighbors(R, C, "box");
+    const { torus, edge, mask } = buildNeighbors(R, C, "box");
+    // Mixed colors intentionally exercise the distinction between occupancy and
+    // hue identity. The totalistic Life rule is translation-equivariant in
+    // occupancy; color tie-breaking is allowed to depend on absolute cell index.
+    // Several cells straddle the top/bottom and left/right seams.
     const col = seed(new Uint8Array(R * C), C, [
-      [2, 2], [2, 3], [3, 2], [8, 10], [9, 10], [9, 11], [14, 4],
+      [0, 19, 1], [0, 0, 7], [17, 19, 3], [17, 0, 9],
+      [8, 10, 5], [8, 11, 1], [9, 10, 7],
     ]);
     const dr = 2, dc = 3;
 
     const direct = runOne(R, C, torus, mask, col);
+    const bounded = runOne(R, C, edge, mask, col);
+    // Anti-vacuity: if wrapping were accidentally replaced by bounded lookup,
+    // this fixture must notice. Otherwise the claimed torus invariant is weak.
+    expect(occupancy(direct)).not.toEqual(occupancy(bounded));
+    expect(occupancy(direct).some((value) => value !== 0)).toBe(true);
+
     const transformedInput = translateEvenRows(col, R, C, dr, dc);
     const transformedOutput = runOne(R, C, torus, mask, transformedInput);
+    const expected = translateEvenRows(direct, R, C, dr, dc);
 
-    expect(Array.from(transformedOutput)).toEqual(
-      Array.from(translateEvenRows(direct, R, C, dr, dc)),
-    );
+    expect(occupancy(transformedOutput)).toEqual(occupancy(expected));
   });
 
   it("fails fast when the odd-r parity precondition is violated", () => {
@@ -63,7 +77,7 @@ describe("stepLife conditional translation invariant", () => {
     expect(() => translateEvenRows(field, R, C, 1, 0)).toThrow(/even dr/);
   });
 
-  it("keeps a non-vacuous negative control: index-hashed A1 seeding breaks translation equivariance", () => {
+  it("keeps a non-vacuous negative control: index-hashed A1 seeding breaks occupancy translation equivariance", () => {
     const R = 30, C = 32;
     const { torus, mask } = buildNeighbors(R, C, "box");
     const empty = new Uint8Array(R * C);
@@ -73,9 +87,9 @@ describe("stepLife conditional translation invariant", () => {
     const transformedInput = translateEvenRows(empty, R, C, dr, dc);
     const transformedOutput = runOne(R, C, torus, mask, transformedInput, { a1: true, tick: 17 });
 
-    expect(direct.some((value) => value !== 0)).toBe(true);
-    expect(Array.from(transformedOutput)).not.toEqual(
-      Array.from(translateEvenRows(direct, R, C, dr, dc)),
+    expect(occupancy(direct).some((value) => value !== 0)).toBe(true);
+    expect(occupancy(transformedOutput)).not.toEqual(
+      occupancy(translateEvenRows(direct, R, C, dr, dc)),
     );
   });
 });
