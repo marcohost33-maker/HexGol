@@ -1,10 +1,13 @@
 import { performance } from "node:perf_hooks";
 import { writeFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { evaluateNineRules, RULES, R2_MODUS } from "../src/lib/nine-rules.js";
+import { evaluateNineRules, RULES, R2_MODUS, STATUS } from "../src/lib/nine-rules.js";
 
 function parsePositiveInt(value, fallback, name) {
-  if (value === undefined || value === "") return fallback;
+  if (value === undefined || value === "") {
+    if (fallback !== null && fallback !== undefined) return fallback;
+    throw new Error(`${name} must not contain an empty value`);
+  }
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed <= 0) throw new Error(`${name} must be a positive integer`);
   return parsed;
@@ -74,12 +77,30 @@ function stats(samples) {
   };
 }
 
+function statusHistogram(result) {
+  return Object.fromEntries(
+    Object.values(STATUS).map((status) => [
+      status,
+      result.rules.filter((rule) => rule.status === status).length,
+    ]),
+  );
+}
+
 function benchmarkOne(trace, enabled) {
   // Keep total processed states roughly comparable across trace lengths while
   // retaining enough samples for a useful p95 at the largest default case.
   const iterations = Math.max(MIN_SAMPLES, Math.floor(TARGET_STATES / trace.length));
   const warmup = Math.max(5, Math.floor(iterations / 5));
   const options = { enabled, traceComplete: true };
+
+  // Untimed semantic sanity probe: a benchmark that immediately falls into a
+  // configuration error is a fast error path, not useful performance evidence.
+  const probe = evaluateNineRules(trace, config, options);
+  const configErrors = probe.rules.filter((rule) => rule.status === STATUS.CONFIG_ERROR);
+  if (configErrors.length > 0) {
+    throw new Error(`benchmark profile has CONFIG_ERROR: ${configErrors.map((rule) => rule.id).join(",")}`);
+  }
+  const probeStatusCounts = statusHistogram(probe);
 
   for (let i = 0; i < warmup; i++) evaluateNineRules(trace, config, options);
 
@@ -101,6 +122,7 @@ function benchmarkOne(trace, enabled) {
   return {
     ...s,
     opsPerSecondFromMean: s.meanMs > 0 ? 1000 / s.meanMs : null,
+    probeStatusCounts,
     heapDeltaBytesObserved: heapAfter - heapBefore,
     heapNote: "process.memoryUsage delta is observational only; GC makes it unsuitable as a gate",
     sink,
