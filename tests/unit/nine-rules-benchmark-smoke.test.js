@@ -35,8 +35,24 @@ describe("nine-rule benchmark harness", () => {
       expect(report.rows.every((row) => row.n >= 4)).toBe(true);
       expect(report.rows.every((row) => row.p50Ms >= 0 && row.p95Ms >= row.p50Ms)).toBe(true);
       expect(report.rows.every((row) => row.probeStatusCounts.CONFIG_ERROR === 0)).toBe(true);
+
+      expect(report.hotPathAnalysis.R2.traceLengthComplexity).toBe("O(T)");
+      expect(report.hotPathAnalysis.R2.note).toMatch(/trace\.map/i);
+      expect(report.hotPathAnalysis.R7.traceLengthComplexity).toMatch(/O\(T\)/);
+      expect(report.hotPathAnalysis.R7.note).toMatch(/findIndex|full scan/i);
+      expect(report.hotPathAnalysis.R4.populationComplexity).toBe("O(P^2) worst case");
+      expect(report.hotPathAnalysis.R9.traceLengthComplexity).toMatch(/Delegated/i);
+      expect(report.hotPathAnalysis.R9.note).toMatch(/outside this evaluator-core baseline/i);
+      expect(report.hotPathAnalysis.profileExpectation.local).toMatch(/approximately flat/i);
+      expect(report.hotPathAnalysis.profileExpectation.golhex).toMatch(/R2.*R7/i);
+
+      for (const fit of Object.values(report.scaling)) {
+        expect(fit).toHaveProperty("rSquared");
+        expect(fit.rSquared === null || Number.isFinite(fit.rSquared)).toBe(true);
+      }
       expect(report.interpretation.thresholdPolicy).toMatch(/observe-only/i);
       expect(report.interpretation.cachePolicy).toMatch(/incremental caching only if/i);
+      expect(report.interpretation.complexityPolicy).toMatch(/descriptive only/i);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
