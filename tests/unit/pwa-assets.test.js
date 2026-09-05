@@ -32,7 +32,7 @@ describe("PWA/mobile manifest assets", () => {
   });
 });
 
-describe("PWA service-worker registration (B1)", () => {
+describe("PWA service-worker registration", () => {
   const main = readFileSync(resolve(root, "src/main.jsx"), "utf8");
 
   it("registers public/sw.js from src/main.jsx", () => {
@@ -49,37 +49,53 @@ describe("PWA service-worker registration (B1)", () => {
     expect(main).toContain("import.meta.env.BASE_URL");
     expect(main).toMatch(/scope:\s*base/);
   });
+
+  it("bypasses the HTTP cache for worker and importScripts update checks", () => {
+    expect(main).toMatch(/updateViaCache:\s*"none"/);
+  });
 });
 
-describe("service worker cache strategy (stale-shell safety, #115)", () => {
+describe("service worker cache/update strategy (#115/#159)", () => {
   const sw = readFileSync(resolve(root, "public/sw.js"), "utf8");
+  const vite = readFileSync(resolve(root, "vite.config.js"), "utf8");
 
-  it("network-firsts navigation requests so a stale shell cannot trap old code", () => {
+  it("imports build-specific metadata and derives the cache name from the build id", () => {
+    expect(sw).toContain('importScripts("./sw-version.js")');
+    expect(sw).toMatch(/CACHE_NAME\s*=\s*`\$\{CACHE_PREFIX\}\$\{SAFE_BUILD_ID\}`/);
+    expect(vite).toContain('fileName: "sw-version.js"');
+    expect(vite).toContain("generatedAssets");
+    expect(vite).toContain("__GOLHEX_PRECACHE__");
+  });
+
+  it("atomically precaches generated Vite assets with the shell", () => {
+    expect(sw).toContain("...GENERATED_PRECACHE");
+    expect(sw).toMatch(/cache\.addAll\(APP_SHELL\)/);
+  });
+
+  it("network-firsts navigation requests and keeps HTML fallback navigation-only", () => {
     expect(sw).toMatch(/request\.mode\s*===\s*"navigate"/);
-    expect(sw).toContain("networkFirstShell");
-    // navigation path must try the network before any cache
-    expect(sw).toMatch(/function networkFirstShell[\s\S]*?fetch\(request\)/);
+    const navigationBody = sw.slice(sw.indexOf("function networkFirstShell"), sw.indexOf("async function cacheFirst"));
+    expect(navigationBody).toMatch(/fetch\(request\)/);
+    expect(navigationBody).toMatch(/cache\.match\("\.\/"\)/);
+
+    const assetBody = sw.slice(sw.indexOf("async function cacheFirst"), sw.indexOf('self.addEventListener("fetch"'));
+    expect(assetBody).not.toMatch(/match\("\.\/"\)/);
+    expect(assetBody).toContain("Response.error()");
   });
 
-  it("does not overwrite the offline shell from a navigation response (no torn shell)", () => {
-    // The new index.html may reference not-yet-cached hashed assets; persisting
-    // it as the shell could strand an offline relaunch. See PR #126 review.
-    const body = sw.slice(sw.indexOf("function networkFirstShell"), sw.indexOf("function cacheFirst"));
-    expect(body).not.toMatch(/cache\.put/);
-    expect(body).toMatch(/caches\.match/); // offline fallback only
+  it("does not force a waiting worker over pages still using old hashed assets", () => {
+    expect(sw).not.toMatch(/self\.skipWaiting\s*\(/);
+    expect(sw).not.toMatch(/clients\.claim\s*\(/);
   });
 
-  it("keeps static/hashed assets cache-first with an offline shell fallback", () => {
-    expect(sw).toContain("cacheFirst");
-    expect(sw).toMatch(/caches\.match\("\.\/"\)/);
-  });
-
-  it("bumps the cache version so existing installs re-prime on activate", () => {
-    expect(sw).toMatch(/CACHE_NAME\s*=\s*"golhex-app-shell-v2"/);
+  it("keeps provenance/update metadata network-only", () => {
+    expect(sw).toContain('/version.json");');
+    expect(sw).toContain('/sw-version.js");');
+    expect(sw).toMatch(/event\.respondWith\(fetch\(request\)\)/);
   });
 });
 
-describe("index.html asset paths are base-URL-safe (B2)", () => {
+describe("index.html asset paths are base-URL-safe", () => {
   const html = readFileSync(resolve(root, "index.html"), "utf8");
 
   it("uses %BASE_URL% for manifest + all icon links", () => {
