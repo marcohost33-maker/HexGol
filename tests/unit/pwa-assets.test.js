@@ -84,8 +84,10 @@ describe("service worker cache/update strategy (#115/#159)", () => {
   });
 
   it("does not force a waiting worker over pages still using old hashed assets", () => {
-    expect(sw).not.toMatch(/self\.skipWaiting\s*\(/);
-    expect(sw).not.toMatch(/clients\.claim\s*\(/);
+    // Match the executable API calls used by the old worker, not explanatory
+    // comments such as "No clients.claim()".
+    expect(sw).not.toMatch(/\bself\.skipWaiting\s*\(/);
+    expect(sw).not.toMatch(/\bself\.clients\.claim\s*\(/);
   });
 
   it("keeps provenance/update metadata network-only", () => {
