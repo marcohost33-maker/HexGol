@@ -78,9 +78,18 @@ describe("service worker cache/update strategy (#115/#159)", () => {
     expect(navigationBody).toMatch(/fetch\(request\)/);
     expect(navigationBody).toMatch(/cache\.match\("\.\/"\)/);
 
-    const assetBody = sw.slice(sw.indexOf("async function cacheFirst"), sw.indexOf('self.addEventListener("fetch"'));
+    const assetBody = sw.slice(sw.indexOf("async function cacheFirst"), sw.indexOf("function authoritativeNetworkRequest"));
     expect(assetBody).not.toMatch(/match\("\.\/"\)/);
     expect(assetBody).toContain("Response.error()");
+  });
+
+  it("treats runtime cache persistence as best-effort, independent of network success", () => {
+    const assetBody = sw.slice(sw.indexOf("async function cacheFirst"), sw.indexOf("function authoritativeNetworkRequest"));
+    expect(assetBody).toMatch(/let cache = null/);
+    expect(assetBody).toMatch(/cache\.put\(request, response\.clone\(\)\)\.catch\(\(\) => undefined\)/);
+    expect(assetBody).toMatch(/event\.waitUntil\(cacheWrite\)/);
+    expect(assetBody.indexOf("let response;")).toBeGreaterThan(assetBody.indexOf("cache = null"));
+    expect(assetBody.lastIndexOf("return response;")).toBeGreaterThan(assetBody.indexOf("event.waitUntil(cacheWrite)"));
   });
 
   it("does not force a waiting worker over pages still using old hashed assets", () => {
@@ -90,10 +99,15 @@ describe("service worker cache/update strategy (#115/#159)", () => {
     expect(sw).not.toMatch(/\bself\.clients\.claim\s*\(/);
   });
 
-  it("keeps provenance/update metadata network-only", () => {
-    expect(sw).toMatch(/url\.pathname\.endsWith\("\/version\.json"\)/);
-    expect(sw).toMatch(/url\.pathname\.endsWith\("\/sw-version\.js"\)/);
-    expect(sw).toMatch(/event\.respondWith\(fetch\(request\)\)/);
+  it("routes provenance metadata before navigation fallback and bypasses HTTP cache", () => {
+    const fetchHandler = sw.slice(sw.indexOf('self.addEventListener("fetch"'));
+    const metadataIndex = fetchHandler.indexOf('url.pathname.endsWith("/version.json")');
+    const navigationIndex = fetchHandler.indexOf('request.mode === "navigate"');
+    expect(metadataIndex).toBeGreaterThanOrEqual(0);
+    expect(navigationIndex).toBeGreaterThanOrEqual(0);
+    expect(metadataIndex).toBeLessThan(navigationIndex);
+    expect(sw).toMatch(/new Request\(request, \{ cache: "no-store" \}\)/);
+    expect(fetchHandler).toMatch(/event\.respondWith\(fetch\(authoritativeNetworkRequest\(request\)\)\)/);
   });
 });
 
