@@ -1,7 +1,9 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { resolve, relative, sep } from "node:path";
+import { resolve, relative, sep, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const root = resolve(import.meta.dirname, "..");
+const here = dirname(fileURLToPath(import.meta.url));
+const root = resolve(here, "..");
 const dist = resolve(root, "dist");
 
 function fail(message) {
