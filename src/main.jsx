@@ -9,11 +9,16 @@ createRoot(document.getElementById("root")).render(<App />);
 // PWA: register the app-shell service worker (public/sw.js) in Production only,
 // base-URL-safe so it works on both Cloudflare root ("/") and the GH-Pages
 // subpath ("/HexGol/"). Dev is intentionally skipped so Vite HMR is never
-// shadowed by a cached shell. Errors are swallowed — SW is a progressive
-// enhancement, never a hard dependency.
+// shadowed by a cached shell. updateViaCache="none" applies to the worker and its
+// importScripts() dependencies; build-specific sw-version.js therefore cannot be
+// hidden by an HTTP-cache hit during update checks. Errors are swallowed because
+// the SW remains progressive enhancement, never a hard dependency.
 if (import.meta.env.PROD && "serviceWorker" in navigator) {
   window.addEventListener("load", () => {
     const base = import.meta.env.BASE_URL || "/";
-    navigator.serviceWorker.register(`${base}sw.js`, { scope: base }).catch(() => {});
+    navigator.serviceWorker.register(`${base}sw.js`, {
+      scope: base,
+      updateViaCache: "none",
+    }).catch(() => {});
   });
 }
