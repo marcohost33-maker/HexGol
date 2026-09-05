@@ -6,6 +6,11 @@ import {
   WATZLAWICK_BOOLEAN_AXIOMS,
 } from "../../src/lib/watzlawick-axioms.js";
 
+function withoutControl(axiom) {
+  const { control: _control, ...metadata } = axiom;
+  return metadata;
+}
+
 describe("Watzlawick axiom metadata SoT", () => {
   it("exports exactly A1-A5 once and in canonical order", () => {
     const ids = WATZLAWICK_AXIOMS.map((axiom) => axiom.id);
@@ -32,5 +37,9 @@ describe("Watzlawick axiom metadata SoT", () => {
     expect(booleanIds).toEqual(["a1", "a2", "a3", "a4"]);
     expect(AXIOMS.map((axiom) => axiom.id)).toEqual(booleanIds);
     expect(AXIOMS.some((axiom) => axiom.id === "a5")).toBe(false);
+  });
+
+  it("fails if the legacy A1-A4 display metadata drifts from the canonical source", () => {
+    expect(AXIOMS).toEqual(WATZLAWICK_BOOLEAN_AXIOMS.map(withoutControl));
   });
 });
