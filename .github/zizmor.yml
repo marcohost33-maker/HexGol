@@ -1,10 +1,12 @@
 # zizmor-Konfiguration (docs.zizmor.sh/configuration)
-# [2026-06-06] NUR impostor-commit deaktiviert (Praezisierung des Vormittags-
-# Fixes "online-audits: false"): das Audit crasht hart am privaten Cross-Repo-
-# Pin coworkerz-ci, weil der repo-scoped GITHUB_TOKEN designbedingt keine
-# fremden privaten Repos lesen kann. SHA-Echtheit des Pins wird bei jedem Bump
-# via gh api Pre/Post verifiziert. Alle uebrigen Online-Audits (known-
-# vulnerable-actions, stale-action-refs) bleiben AKTIV.
+# [2026-06-06 / 2026-09-09] Deaktiviert sind genau die Online-Audits, die am
+# privaten Cross-Repo-Pin coworkerz-ci HART abbrechen, weil der repo-scoped
+# GITHUB_TOKEN designbedingt keine fremden privaten Repos lesen kann:
+#   impostor-commit        (seit 2026-06-06, Pin in mobile-render.yml)
+#   stale-action-refs      (seit 2026-09-09, zizmor 1.30.0)
+#   ref-version-mismatch   (seit 2026-09-09, zizmor 1.30.0)
+# AKTIV bleibt insbesondere known-vulnerable-actions. Die SHA-Echtheit der
+# Pins wird bei jedem Bump via gh api Pre/Post verifiziert.
 rules:
   impostor-commit:
     disable: true
