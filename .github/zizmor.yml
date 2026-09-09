@@ -8,6 +8,25 @@
 rules:
   impostor-commit:
     disable: true
+  # [2026-09-09] stale-action-refs + ref-version-mismatch deaktiviert --
+  # GLEICHE Ursache wie impostor-commit oben. zizmor 1.30.0 hat BEIDE Audits
+  # auf `uses:` von REUSABLE WORKFLOWS ausgeweitet (Release-Notes v1.30.0,
+  # #2345 bzw. #2344). Damit treffen die Online-Audits erstmals den privaten
+  # Cross-Repo-Pin coworkerz-ci in mobile-render.yml und brechen HART ab
+  # ("fatal: no audit was performed" -- kein Finding, sondern ein Abbruch),
+  # weil der repo-scoped GITHUB_TOKEN designbedingt keine fremden privaten
+  # Repos lesen kann. Gemessen 2026-09-09 gegen ein nicht zugreifbares Repo:
+  #   zizmor 1.29.0 -> exit 0 | zizmor 1.30.0 -> exit 1 (identische Eingabe)
+  # `ignore:` hilft hier NICHT: es filtert Befunde NACH dem Audit, der Abbruch
+  # passiert davor (nachgemessen, ebenfalls exit 1). Nur `disable` greift.
+  # Bei Dependabot-PRs ist zudem nur der Dependabot-Secret-Store verfuegbar,
+  # ein PAT waere dort also ohnehin keine Loesung.
+  # SHA-Echtheit der Pins wird weiterhin bei jedem Bump via gh api Pre/Post
+  # verifiziert; known-vulnerable-actions bleibt als Online-Audit AKTIV.
+  stale-action-refs:
+    disable: true
+  ref-version-mismatch:
+    disable: true
   # [2026-06-29] artipacked intentionally accepted for update-snapshots.yml:
   # that job pushes refreshed visual baselines back to the branch and therefore
   # MUST keep persist-credentials TRUE (the in-step comment documents the WHY).
