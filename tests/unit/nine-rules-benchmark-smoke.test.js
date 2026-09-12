@@ -41,6 +41,15 @@ describe("nine-rule benchmark harness", () => {
 
     try {
       expect(run.status, run.stderr || run.stdout).toBe(0);
+      // Assert the report exists BEFORE reading it. Without this line the
+      // "harness exited 0 but never ran" case (entry-point guard failing
+      // open) dies inside readFileSync with a bare ENOENT -- an exception
+      // that points at this test's filesystem access instead of at the
+      // harness that wrote nothing. A named assertion names the culprit.
+      expect(
+        existsSync(output),
+        `harness exited 0 but wrote no report to ${output} -- stdout/stderr: ${run.stdout}${run.stderr}`,
+      ).toBe(true);
       const report = JSON.parse(readFileSync(output, "utf8"));
       expect(report.schema).toBe("hexgol.nine-rules-benchmark.v1");
       expect(report.lengths).toEqual([8, 16]);
