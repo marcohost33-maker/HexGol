@@ -23,7 +23,10 @@
 // GEPRUEFT WIRD
 // -------------
 //   1. Null Referenzen auf fremde Schrift-Origins in irgendeiner Textdatei in dist/.
-//   2. dist/index.html enthaelt kein ausfuehrbares Inline-<script>.
+//   2. dist/index.html enthaelt kein ausfuehrbares Inline-<script> -- gezaehlt ueber
+//      das OEFFNENDE Tag, nicht ueber ein Auf/Zu-Paar. Ein <script> ohne </script>
+//      ist fuer den Parser kein defektes Element, sondern eines, dessen Rumpf bis
+//      zum Dateiende reicht und ausgefuehrt wird.
 //   3. dist/index.html traegt keine Ausfuehrungsstelle NEBEN dem <script>-Element:
 //      weder ein Inline-Event-Handler-Attribut (onload, onerror, onclick ...) noch
 //      eine `javascript:`-URI. Der Browser wendet script-src auf beide an --
@@ -110,9 +113,12 @@ function hasAttribute(attrs, name) {
 // <script>/<style> werden vorher entfernt: dort steht kein Markup, aber sehr wohl
 // Zeichen wie `a<b`, die sonst als Tag durchgingen. Die Tags selbst bleiben stehen.
 function markupTags(html) {
+  // Die zweite Ersetzung nimmt BEIDE Faelle: den Rumpf bis zur schliessenden Marke
+  // -- und, wenn keine mehr kommt, den Rumpf bis EOF. Ohne den zweiten Ast haette
+  // ein unabgeschlossenes <script> seinen Rumpf als Markup eingespeist.
   const scrubbed = String(html)
     .replace(/<!--[\s\S]*?-->/g, "")
-    .replace(/(<(script|style)\b[^>]*>)[\s\S]*?(<\/\2\s*>)/gi, "$1$3");
+    .replace(/(<(script|style)\b(?:"[^"]*"|'[^']*'|[^>"'])*>)(?:[\s\S]*?<\/\2\s*>|[\s\S]*$)/gi, "$1");
   const out = [];
   for (const match of scrubbed.matchAll(/<([a-zA-Z][^\s/>]*)((?:"[^"]*"|'[^']*'|[^>"'])*)>/g)) {
     out.push({ tag: match[1].toLowerCase(), attrs: match[2] });
@@ -166,16 +172,80 @@ for (const path of distFiles) {
 // --- 2. Ausfuehrbares Inline-<script> in dist/index.html? --------------------
 const html = readRequired(resolve(dist, "index.html")) ?? "";
 
-// Nicht-gieriger Abgleich ueber das oeffnende Tag und den Rumpf. Ein </script> im
-// Rumpf kann es nicht geben -- der Parser beendet dort das Element, also ist die
-// erste schliessende Marke immer die richtige.
-const inlineScripts = [...html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script\s*>/gi)]
-  .map(([, attrs, body]) => ({ attrs, body }))
-  .filter(({ attrs }) => !hasAttribute(attrs, "src"))  // externes Skript: faellt nicht unter 'unsafe-inline'
-  .filter(({ body }) => body.trim().length > 0);       // leerer Rumpf fuehrt nichts aus
+// Warum hier KEIN Auf/Zu-Paar mehr gesucht wird (Review #168, Runde 2, Befund N2).
+// Die alte Fassung verlangte `<script ...>RUMPF</script>`. Ein oeffnendes Tag OHNE
+// schliessendes war damit unsichtbar -- an jeder Position, nicht nur am Dateiende.
+// Fuer den Parser ist das aber kein unvollstaendiges Element: er nimmt alles bis zur
+// naechsten schliessenden Marke und, wenn keine mehr kommt, alles bis EOF als Rumpf,
+// und fuehrt ihn aus. `<script>window.__boot=1` ohne Abschluss lief hier mit Exit 0
+// durch (gemessen 2026-09-12 auf 1ba42f1, im Kopf wie mitten im Dokument).
+//
+// Das ist genau die Klasse, gegen die dieser Waechter gebaut ist -- zum zweiten Mal:
+// erst stand er offen gegen `javascript:`, jetzt gegen den unabgeschlossenen Rumpf.
+// Die Lehre ist nicht "noch ein Muster", sondern die BAUFORM: eine Paar-Suche kann
+// das unpaarige Vorkommen prinzipiell nicht sehen. Deshalb wird ab hier das
+// OEFFNENDE Tag gesucht und der Rumpf danach bestimmt, so wie der Parser es tut.
+//
+// Kommentare werden dabei bewusst NICHT vorher entfernt. Ein `<script` in einem
+// HTML-Kommentar meldet dieser Scan also als Verstoss, obwohl der Browser ihn
+// nicht ausfuehrt -- eine Ueber-Meldung. Sie ist die guenstigere Seite: das
+// Kommentar-Ende korrekt zu bestimmen ist selbst eine Parser-Aufgabe mit Kanten
+// (`<!->`, `--!>`), und wer sie falsch macht, baut sich damit die naechste
+// Umgehung. Eine Ueber-Meldung kostet eine benannte Nachfrage, eine Unter-
+// Meldung einen stillen Bruch live.
+const SCRIPT_OPEN_TAG = /<script\b((?:"[^"]*"|'[^']*'|[^>"'])*)>/gi;
+const SCRIPT_CLOSE_TAG = /<\/script\s*>/i;
+
+function scanScriptElements(source) {
+  const out = [];
+  let cursor = 0;
+  while (cursor <= source.length) {
+    SCRIPT_OPEN_TAG.lastIndex = cursor;
+    const open = SCRIPT_OPEN_TAG.exec(source);
+    if (!open) break;
+    const bodyStart = open.index + open[0].length;
+    const rest = source.slice(bodyStart);
+    const closeAt = rest.search(SCRIPT_CLOSE_TAG);
+    if (closeAt < 0) {
+      // Der Rumpf reicht bis EOF; danach kann kein weiteres Element folgen.
+      out.push({ attrs: open[1], body: rest, terminated: false });
+      break;
+    }
+    out.push({ attrs: open[1], body: rest.slice(0, closeAt), terminated: true });
+    cursor = bodyStart + closeAt;
+  }
+  return out;
+}
+
+const scriptElements = scanScriptElements(html);
+
+// Gegenprobe gegen den eigenen Zerleger. Jedes `<script` im Text muss auch als
+// Element angekommen sein; bleibt eines uebrig -- etwa ein oeffnendes Tag, dessen
+// `>` fehlt --, dann hat der Zerleger nicht "nichts gefunden", sondern weggesehen.
+// Fail-closed: was hier nicht eindeutig als Element erkannt ist, ist ein Verstoss
+// und keine Abwesenheit. Eine blinde Suche liest sich sonst wie eine Abwesenheit.
+const rawScriptOpeners = (html.match(/<script/gi) ?? []).length;
+if (rawScriptOpeners !== scriptElements.length) {
+  fail(
+    `script scan accounted for ${scriptElements.length} of ${rawScriptOpeners} "<script" occurrences in ` +
+    "dist/index.html -- the remainder is undecided, and undecided counts as a violation here",
+  );
+}
 
 const executableInline = [];
-for (const { attrs, body } of inlineScripts) {
+for (const { attrs, body, terminated } of scriptElements) {
+  if (!terminated) {
+    // Nie eine Erlaubnis, immer ein Verstoss: kein korrekter Build erzeugt ein
+    // unabgeschlossenes <script>. Diesen Fall als "braucht 'unsafe-inline'" zu
+    // verbuchen hiesse, die Richtlinie wegen eines Defekts zu weiten.
+    fail(
+      "unterminated <script> in dist/index.html -- the parser runs everything to EOF as its body " +
+      `(${JSON.stringify(body.trim().slice(0, 60))}); no correct build emits this`,
+    );
+    continue;
+  }
+  if (hasAttribute(attrs, "src")) continue;      // externes Skript: nicht 'unsafe-inline'
+  if (body.trim().length === 0) continue;        // leerer Rumpf fuehrt nichts aus
   const typeMatch = attrs.match(/\btype\s*=\s*("([^"]*)"|'([^']*)'|([^\s>]+))/i);
   const type = (typeMatch ? (typeMatch[2] ?? typeMatch[3] ?? typeMatch[4]) : "").trim().toLowerCase();
   if (EXECUTABLE_SCRIPT_TYPES.includes(type)) {
@@ -274,6 +344,7 @@ if (failures.length > 0) {
 
 console.log(
   `[csp-contract] OK text-files=${scannedTextFiles} remote-font-refs=0 ` +
+  `script-elements=${scriptElements.length}/${rawScriptOpeners} ` +
   `executable-inline-scripts=${executableInline.length} markup-tags=${scannedTags.length} ` +
   `inline-script-sources=${inlineHandlers.length} inline-style-block=${hasInlineStyleBlock} ` +
   `script-src-unsafe-inline=${(directive("script-src") ?? []).includes("'unsafe-inline'")}`,
