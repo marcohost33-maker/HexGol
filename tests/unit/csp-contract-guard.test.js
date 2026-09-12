@@ -10,6 +10,10 @@
 //   T4  <img onerror="..."> ohne jedes Inline-<script> lief komplett an der
 //       Pruefung vorbei, obwohl script-src auch auf Handler-Attribute wirkt.
 //
+// Die dritte Zelle stammt NICHT aus dem Review, sondern aus der Gegenprobe am
+// eigenen Ergebnis: die Haertung gegen T4 war gruen und liess `javascript:`-URIs
+// weiter durch -- dieselbe Klasse, eine Ebene hoeher.
+//
 // Geprueft wird hier der Waechter so, WIE ER LAEUFT -- als Prozess, mit echtem
 // Exit-Code -- und nicht eine herausgeloeste Hilfsfunktion. Das Skript loest sein
 // dist/ ueber die EIGENE Position auf (`resolve(here, "..")`), also genuegt eine
@@ -74,7 +78,7 @@ describe("CSP output guard (#168 review)", () => {
     expect(run.stderr, "guard rejected the unmodified output shape").not.toMatch(/FAIL/);
     expect(run.status).toBe(0);
     expect(run.stdout).toContain("executable-inline-scripts=0");
-    expect(run.stdout).toContain("inline-event-handlers=0");
+    expect(run.stdout).toContain("inline-script-sources=0");
   });
 
   it("rejects an inline bootstrap whose only src-like attribute is data-src (T2)", () => {
@@ -88,7 +92,17 @@ describe("CSP output guard (#168 review)", () => {
   it("rejects an inline event handler even with no inline script body at all (T4)", () => {
     const run = runGuard(baselineHtml('<img src="/icon-192.png" onerror="window.__f()" alt="" />'));
     expect(run.status).not.toBe(0);
-    expect(run.stderr).toMatch(/inline event handler <img onerror=\.\.\.>/);
+    expect(run.stderr).toMatch(/inline script source <img onerror=\.\.\.>/);
+  });
+
+  it("rejects a javascript: URI, the third thing script-src governs", () => {
+    // NICHT aus dem Review. Der Befund T4 nannte die Handler-Attribute; die
+    // Haertung dagegen war gruen und liess `javascript:` weiter durch -- ein
+    // Waechter gegen "behauptet fail-closed, ist offen", der genau diese Klasse
+    // enthielt. Reproduziert gegen den bereits geharteten Stand: exit 0, "OK".
+    const run = runGuard(baselineHtml('<a href="javascript:window.__boot()">start</a>'));
+    expect(run.status).not.toBe(0);
+    expect(run.stderr).toMatch(/inline script source <a href="javascript:\.\.\.">/);
   });
 
   it("still classifies a genuine external src attribute as external", () => {

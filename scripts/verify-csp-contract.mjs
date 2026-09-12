@@ -24,9 +24,18 @@
 // -------------
 //   1. Null Referenzen auf fremde Schrift-Origins in irgendeiner Textdatei in dist/.
 //   2. dist/index.html enthaelt kein ausfuehrbares Inline-<script>.
-//   3. dist/index.html traegt kein Inline-Event-Handler-Attribut (onload, onerror,
-//      onclick ...). Der Browser wendet script-src AUCH auf diese an -- unabhaengig
-//      davon, ob irgendwo ein Inline-<script>-Rumpf steht.
+//   3. dist/index.html traegt keine Ausfuehrungsstelle NEBEN dem <script>-Element:
+//      weder ein Inline-Event-Handler-Attribut (onload, onerror, onclick ...) noch
+//      eine `javascript:`-URI. Der Browser wendet script-src auf beide an --
+//      unabhaengig davon, ob irgendwo ein Inline-<script>-Rumpf steht.
+//
+//      Dieser Punkt ist zweimal gewachsen, und das zweite Mal ist die Lehre. Der
+//      Review-Befund T4 nannte die Handler-Attribute; die Haertung dagegen war
+//      gruen -- und stand daneben weiter offen gegen `javascript:`. Ein Waechter
+//      gegen "behauptet fail-closed, ist offen" enthielt also genau diese Klasse.
+//      Gegenprobe am eigenen Ergebnis, bevor sie jemand anders fuehrt:
+//      script-src regelt <script>, Handler-Attribute und javascript:-URIs; alle
+//      drei stehen im Markup, also gehoeren alle drei hierher.
 //   4. Die CSP in dist/_headers passt zu 1. und 2.:
 //        - font-src bleibt ausschliesslich 'self'
 //        - script-src traegt 'unsafe-inline' GENAU DANN, wenn die Ausgabe ein
@@ -188,8 +197,13 @@ const hasInlineStyleBlock = /<style\b[^>]*>[\s\S]*?\S[\s\S]*?<\/style\s*>/i.test
 const scannedTags = markupTags(html);
 const inlineHandlers = [];
 for (const { tag, attrs } of scannedTags) {
-  for (const { name } of parseAttributes(attrs)) {
+  for (const { name, value } of parseAttributes(attrs)) {
     if (INLINE_HANDLER_NAME.test(name)) inlineHandlers.push(`<${tag} ${name}=...>`);
+    // Gegen den eigenen Befund gerichtet (siehe Kopf, Punkt 3): script-src regelt
+    // DREI Dinge, und die Haertung nach dem Review deckte erst zwei davon ab.
+    else if (value.trim().toLowerCase().startsWith("javascript:")) {
+      inlineHandlers.push(`<${tag} ${name}="javascript:...">`);
+    }
   }
 }
 // Eine blinde Suche liest sich wie eine Abwesenheit: findet der Tag-Zerleger gar
@@ -198,7 +212,7 @@ if (html.trim().length > 0 && scannedTags.length === 0) {
   fail("markup scan found zero tags in dist/index.html -- the scanner is broken, not the output clean");
 }
 for (const hit of inlineHandlers) {
-  fail(`inline event handler ${hit} in dist/index.html -- script-src applies to it; move it into the bundle instead of widening the policy`);
+  fail(`inline script source ${hit} in dist/index.html -- script-src applies to it; move it into the bundle instead of widening the policy`);
 }
 
 // --- 4. Passt die ausgelieferte CSP zur Ausgabe? -----------------------------
@@ -261,6 +275,6 @@ if (failures.length > 0) {
 console.log(
   `[csp-contract] OK text-files=${scannedTextFiles} remote-font-refs=0 ` +
   `executable-inline-scripts=${executableInline.length} markup-tags=${scannedTags.length} ` +
-  `inline-event-handlers=${inlineHandlers.length} inline-style-block=${hasInlineStyleBlock} ` +
+  `inline-script-sources=${inlineHandlers.length} inline-style-block=${hasInlineStyleBlock} ` +
   `script-src-unsafe-inline=${(directive("script-src") ?? []).includes("'unsafe-inline'")}`,
 );
