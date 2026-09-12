@@ -16,9 +16,11 @@
 //
 // RUNDE 2 (#168, 2026-09-12) brachte dieselbe Klasse ein drittes und viertes Mal:
 //
-//   N2  <script>window.__boot=1 OHNE </script> lief mit Exit 0 durch. Der Parser
-//       nimmt den Rest der Datei als Rumpf und fuehrt ihn aus; die Paar-Suche des
-//       Waechters konnte das unpaarige Auf-Tag prinzipiell nicht sehen.
+//   N2  <script>window.__boot=1 OHNE </script> lief mit Exit 0 durch. Die Paar-Suche
+//       des Waechters konnte das unpaarige Auf-Tag prinzipiell nicht sehen.
+//       Nachgemessen in Chromium: der Rumpf wird NICHT ausgefuehrt -- der Befund
+//       sagte etwas anderes --, aber alles danach verschwindet darin, im Versuch
+//       samt #root. Die Ausgabe ist also kaputt, nur anders als behauptet.
 //   N1  href="&#106;avascript:..." lief mit Exit 0 durch. Der Parser dekodiert die
 //       Zeichenreferenz VOR der Navigation, der Waechter verglich den Rohtext.
 //
@@ -149,6 +151,20 @@ describe("CSP output guard (#168 review)", () => {
     expect(run.stderr).toMatch(/character reference this guard cannot resolve/);
   });
 
+  it("does not mistake a prototype property for a known character reference (N1, self-check)", () => {
+    // Dieser Fall stammt aus keinem Review, sondern aus der Probe der eigenen
+    // Fassung: die Tabelle war ein gewoehnliches Objekt, also lieferte
+    // NAMED_REFERENCES["constructor"] eine FUNKTION statt undefined.
+    // `&constructor;javascript:alert(1)` wurde damit zu
+    // `function Object() { [native code] }javascript:alert(1)`, trug an Position 0
+    // kein Schema mehr -- und galt als harmlos. Exit 0, in genau dem Waechter, der
+    // gegen "unbekannt liest sich wie harmlos" gebaut wurde.
+    for (const href of ["&constructor;javascript:alert(1)", "&toString;javascript:alert(1)", "&hasOwnProperty;javascript:x()"]) {
+      const run = runGuard(baselineHtml(`<a href="${href}">start</a>`));
+      expect(run.status, `guard accepted ${href}`).not.toBe(0);
+    }
+  });
+
   it("accepts relative, https, mailto and query URLs unchanged (N1 counter-direction)", () => {
     // Ein Waechter, der alles rot faerbt, ist so wertlos wie einer, der alles
     // durchlaesst -- und bei einer fail-closed-Bauform ist das die reale Gefahr.
@@ -176,16 +192,18 @@ describe("CSP output guard (#168 review)", () => {
   });
 
   it("rejects an unterminated inline script at the end of the file (N2)", () => {
-    // Der schwerste Befund der zweiten Runde. Kein Attribut, sondern ein
-    // ausfuehrbarer RUMPF: alles ab dem Auf-Tag bis EOF laeuft im Browser.
+    // Der schwerste Befund der zweiten Runde. Kein Attribut, sondern ein RUMPF:
+    // alles ab dem Auf-Tag bis EOF gehoert dazu und faellt aus dem Dokument.
     const run = runGuard(`${baselineHtml()}<script>window.__boot=1`);
     expect(run.status).not.toBe(0);
     expect(run.stderr).toMatch(/unterminated <script> in dist\/index\.html/);
   });
 
   it("rejects an unterminated inline script in the middle of the document (N2)", () => {
-    // Die Stellung ist egal -- wer nur das Dateiende prueft, hat die Klasse nicht
-    // verstanden, sondern nur den vorgefuehrten Fall.
+    // Die Stellung ist egal fuer den Waechter -- und sie ist der schlimmere Fall:
+    // hier verschwindet das gesamte folgende Markup im Rumpf (in Chromium gemessen,
+    // #root war weg). Wer nur das Dateiende prueft, hat den vorgefuehrten Fall
+    // verstanden, nicht die Klasse.
     const run = runGuard(baselineHtml("<script>window.__boot=1"));
     expect(run.status).not.toBe(0);
     expect(run.stderr).toMatch(/unterminated <script> in dist\/index\.html/);

@@ -26,7 +26,7 @@
 //   2. dist/index.html enthaelt kein ausfuehrbares Inline-<script> -- gezaehlt ueber
 //      das OEFFNENDE Tag, nicht ueber ein Auf/Zu-Paar. Ein <script> ohne </script>
 //      ist fuer den Parser kein defektes Element, sondern eines, dessen Rumpf bis
-//      zum Dateiende reicht und ausgefuehrt wird.
+//      zum Dateiende reicht; das restliche Markup verschwindet darin.
 //   3. dist/index.html traegt keine Ausfuehrungsstelle NEBEN dem <script>-Element:
 //      weder ein Inline-Event-Handler-Attribut (onload, onerror, onclick ...) noch
 //      eine URI mit einem Schema, das nicht als harmlos bekannt ist. Der Browser
@@ -156,13 +156,26 @@ function markupTags(html) {
 // Was nicht in der Tabelle steht, bleibt undekodiert -- und dafuer gibt es unten
 // die fail-closed-Klausel: eine nicht aufloesbare Referenz VOR dem Pfadbeginn
 // macht den Wert unentscheidbar, und unentscheidbar zaehlt als Verstoss.
-const NAMED_REFERENCES = Object.freeze({
+//
+// `Object.create(null)` und nicht `{}`: das ist keine Stilfrage. Ein gewoehnliches
+// Objekt erbt von Object.prototype, und `NAMED_REFERENCES["constructor"]` liefert
+// dann eine FUNKTION statt undefined. `&constructor;javascript:alert(1)` wurde
+// damit zu `function Object() { [native code] }javascript:alert(1)`, trug an
+// Position 0 kein Schema mehr -- und galt als harmlos. Exit 0, gemessen an der
+// eigenen Fassung dieses Laufs, bevor sie jemand anders gefunden hat.
+//
+// Das ist wortwoertlich die Klasse, gegen die dieser Waechter gebaut ist: was er
+// nicht aufloesen kann, meldete er still als Abwesenheit. Wer einen Waechter gegen
+// eine Fehlerklasse baut, hat deren eben erlebte Erscheinungsform vor Augen -- ob
+// die eigene Umsetzung dieselbe Klasse eine Ebene hoeher wiederholt, beurteilt
+// dieselbe Faehigkeit, die eben versagt hat. Deshalb die Selbstprobe.
+const NAMED_REFERENCES = Object.freeze(Object.assign(Object.create(null), {
   tab: "\t", newline: "\n", colon: ":", semi: ";", amp: "&", sol: "/", bsol: "\\",
   quot: '"', apos: "'", lt: "<", gt: ">", nbsp: "\u00a0", nonbreakingspace: "\u00a0",
   lpar: "(", rpar: ")", excl: "!", num: "#", percnt: "%", period: ".", comma: ",",
   lowbar: "_", verbar: "|", plus: "+", equals: "=", quest: "?", ast: "*", commat: "@",
   dollar: "$", grave: "'", hyphen: "-", dash: "-", sp: " ", space: " ",
-});
+}));
 
 function decodeCharacterReferences(value) {
   let unresolved = false;
@@ -291,16 +304,28 @@ const html = readRequired(resolve(dist, "index.html")) ?? "";
 // Warum hier KEIN Auf/Zu-Paar mehr gesucht wird (Review #168, Runde 2, Befund N2).
 // Die alte Fassung verlangte `<script ...>RUMPF</script>`. Ein oeffnendes Tag OHNE
 // schliessendes war damit unsichtbar -- an jeder Position, nicht nur am Dateiende.
-// Fuer den Parser ist das aber kein unvollstaendiges Element: er nimmt alles bis zur
-// naechsten schliessenden Marke und, wenn keine mehr kommt, alles bis EOF als Rumpf,
-// und fuehrt ihn aus. `<script>window.__boot=1` ohne Abschluss lief hier mit Exit 0
-// durch (gemessen 2026-09-12 auf 1ba42f1, im Kopf wie mitten im Dokument).
+// `<script>window.__boot=1` ohne Abschluss lief mit Exit 0 durch (gemessen
+// 2026-09-12 auf 1ba42f1, im Kopf wie mitten im Dokument).
 //
-// Das ist genau die Klasse, gegen die dieser Waechter gebaut ist -- zum zweiten Mal:
-// erst stand er offen gegen `javascript:`, jetzt gegen den unabgeschlossenen Rumpf.
-// Die Lehre ist nicht "noch ein Muster", sondern die BAUFORM: eine Paar-Suche kann
-// das unpaarige Vorkommen prinzipiell nicht sehen. Deshalb wird ab hier das
-// OEFFNENDE Tag gesucht und der Rumpf danach bestimmt, so wie der Parser es tut.
+// WAS DABEI WIRKLICH PASSIERT -- nachgemessen, nicht uebernommen. Der Review-Befund
+// sagte, der Parser fuehre den Rumpf bis EOF aus. In Chromium 2026-09-12 (echte
+// Navigation auf eine Datei, nicht setContent) ist das NICHT so: das Element
+// entsteht mit dem Rumpf, wird aber nicht ausgefuehrt; die Gegenprobe mit
+// </script> im selben Lauf lief. Firefox und WebKit sind hier nicht gemessen.
+//
+// Der Schaden ist trotzdem real und sogar groesser: steht das unabgeschlossene Tag
+// MITTEN im Dokument, verschwindet alles danach im Rumpf -- im Versuch war
+// #root nicht mehr da, die App haette also gar nicht erst gemountet.
+//
+// Deshalb ist ein unabgeschlossener Rumpf hier ein Verstoss, aber aus dem
+// belegten Grund: kein korrekter Build erzeugt so etwas, und die Ausgabe ist
+// nachweislich kaputt. Ob eine Engine ihn zusaetzlich ausfuehrt, ist eine offene
+// Frage und keine Voraussetzung fuer das Urteil.
+//
+// Die Bauform bleibt der eigentliche Punkt: eine Paar-Suche kann das unpaarige
+// Vorkommen prinzipiell nicht sehen -- das ist dieselbe Klasse wie die
+// javascript:-Luecke der ersten Runde, nur eine Ebene tiefer. Deshalb wird ab hier
+// das OEFFNENDE Tag gesucht und der Rumpf danach bestimmt, so wie der Parser es tut.
 //
 // Kommentare werden dabei bewusst NICHT vorher entfernt. Ein `<script` in einem
 // HTML-Kommentar meldet dieser Scan also als Verstoss, obwohl der Browser ihn
@@ -355,8 +380,8 @@ for (const { attrs, body, terminated } of scriptElements) {
     // unabgeschlossenes <script>. Diesen Fall als "braucht 'unsafe-inline'" zu
     // verbuchen hiesse, die Richtlinie wegen eines Defekts zu weiten.
     fail(
-      "unterminated <script> in dist/index.html -- the parser runs everything to EOF as its body " +
-      `(${JSON.stringify(body.trim().slice(0, 60))}); no correct build emits this`,
+      "unterminated <script> in dist/index.html -- everything to EOF becomes its body, so the rest of " +
+      `the markup is swallowed (${JSON.stringify(body.trim().slice(0, 60))}); no correct build emits this`,
     );
     continue;
   }
