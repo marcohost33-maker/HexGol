@@ -32,6 +32,18 @@ const REMOTE_FONT_HOSTS = Object.freeze(["fonts.googleapis.com", "fonts.gstatic.
 // jemand kuenftig echten Produktionscode unter experimental/ ablegt.
 const PRODUCTION_SOURCES = Object.freeze(["index.html", "src", "public"]);
 
+// Jede Schrift-Deklaration in der Produktionsquelle -- CSS (`font-family:`) wie
+// JSX (`fontFamily:`). Gelesen wird, WAS hinter dem Doppelpunkt steht.
+const FONT_DECLARATION = /(?:font-family|fontFamily)\s*:\s*([^\n]*)/g;
+
+// Die einzigen erlaubten Formen. Alles andere -- vor allem alles, was mit einem
+// Anfuehrungszeichen beginnt -- ist ein zweiter Stapel und damit ein Verstoss.
+//   var(--ghx-font-sans|mono)   die index.html-Spiegelung, zeichengleich geprueft
+//   FONT_SANS / FONT_MONO       die Quelle selbst
+//   DISP / MONO                 die App.tsx-Aliasse (oben als Gleichheit geprueft)
+//   ${...}                      dieselben Namen in einer Vorlagen-Zeichenkette
+const ALLOWED_FONT_VALUE = /^(?:var\(--ghx-font-(?:sans|mono)\)|\$\{\s*(?:FONT_SANS|FONT_MONO|DISP|MONO)\s*\}|(?:FONT_SANS|FONT_MONO|DISP|MONO)\b)/;
+
 const BINARY_EXTENSIONS = Object.freeze([".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".woff", ".woff2", ".ttf", ".otf"]);
 
 function walkFiles(path) {
@@ -116,6 +128,40 @@ describe("system font stacks are the single source (#163)", () => {
     expect(app).toContain('from "./lib/typography.js"');
     expect(app).toMatch(/const DISP = FONT_SANS;/);
     expect(app).toMatch(/const MONO = FONT_MONO;/);
+  });
+
+  // Review #168, Befund T1. Der Test oben prueft, dass App.tsx die Konstanten
+  // BENUTZT -- er sagt nichts darueber, ob daneben noch jemand seinen eigenen
+  // Stapel fuehrt. Genau das war der Fall: Splash.jsx und ConwayIntro.jsx trugen
+  // an drei Stellen `fontFamily: "'Space Grotesk', system-ui, sans-serif"`. Die
+  // Schrift wird seit #163 nirgends mehr geladen und auch nicht ausgeliefert --
+  // die Overlays sahen also auf Rechnern MIT installierter Schrift anders aus
+  // als auf allen anderen, und "eine Quelle" stimmte nicht.
+  //
+  // Deshalb prueft der Waechter ab jetzt die FORM jeder Deklaration statt eine
+  // Liste bekannter Schriftnamen: erlaubt sind nur Verweise auf die eine Quelle.
+  // Ein Namensverbot faengt nur die drei Namen, die man schon kennt; ein
+  // Formverbot faengt auch den vierten, den noch niemand eingesetzt hat.
+  it("lets no production source declare its own font stack (#168 T1)", () => {
+    const violations = [];
+    let declarations = 0;
+    for (const { rel, text } of productionTextFiles()) {
+      const lines = text.split("\n");
+      for (let i = 0; i < lines.length; i += 1) {
+        for (const match of lines[i].matchAll(FONT_DECLARATION)) {
+          declarations += 1;
+          const value = match[1].trim();
+          if (!ALLOWED_FONT_VALUE.test(value)) {
+            violations.push(`${rel}:${i + 1} -> ${value.slice(0, 60)}`);
+          }
+        }
+      }
+    }
+    expect(violations).toEqual([]);
+    // Eine blinde Suche liest sich wie eine Abwesenheit: faende der Abgleich gar
+    // keine Deklaration mehr (umbenanntes Attribut, kaputter Sammler), waere die
+    // leere Verstossliste keine Aussage.
+    expect(declarations, "font declaration scan found nothing -- the scan is broken").toBeGreaterThan(20);
   });
 });
 
