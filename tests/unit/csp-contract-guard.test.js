@@ -118,7 +118,53 @@ describe("CSP output guard (#168 review)", () => {
     // enthielt. Reproduziert gegen den bereits geharteten Stand: exit 0, "OK".
     const run = runGuard(baselineHtml('<a href="javascript:window.__boot()">start</a>'));
     expect(run.status).not.toBe(0);
-    expect(run.stderr).toMatch(/inline script source <a href="javascript:\.\.\.">/);
+    expect(run.stderr).toMatch(/inline script source <a href=\.\.\.> resolves to scheme "javascript:"/);
+  });
+
+  it("decodes character references before reading the scheme (N1)", () => {
+    // Der Parser loest die Referenz auf, BEVOR er navigiert. Wer den Rohwert
+    // vergleicht, liest `&#106;avascript:` als harmlosen relativen Pfad.
+    const run = runGuard(baselineHtml('<a href="&#106;avascript:window.__boot()">start</a>'));
+    expect(run.status).not.toBe(0);
+    expect(run.stderr).toMatch(/resolves to scheme "javascript:"/);
+  });
+
+  it("decodes hexadecimal and semicolon-less references too (N1)", () => {
+    // Drei Schreibweisen derselben Sache. Waere hier nur die dezimale Form mit
+    // Semikolon geprueft, haette der Waechter das Muster gelernt und nicht die
+    // Klasse -- und die naechste Schreibweise liefe wieder durch.
+    for (const href of ["&#x6A;avascript:x()", "&#106avascript:x()", "jav&Tab;ascript:x()"]) {
+      const run = runGuard(baselineHtml(`<a href="${href}">start</a>`));
+      expect(run.status, `guard accepted ${href}`).not.toBe(0);
+      expect(run.stderr).toMatch(/resolves to scheme "javascript:"/);
+    }
+  });
+
+  it("treats an unresolvable character reference before the path as undecided (N1)", () => {
+    // Die Tabelle der benannten Referenzen ist endlich. Was sie nicht kennt und
+    // an einer Stelle steht, an der es noch ein Schema bilden koennte, ist
+    // unentscheidbar -- und unentscheidbar zaehlt hier als Verstoss.
+    const run = runGuard(baselineHtml('<a href="&zzz;script:x()">start</a>'));
+    expect(run.status).not.toBe(0);
+    expect(run.stderr).toMatch(/character reference this guard cannot resolve/);
+  });
+
+  it("accepts relative, https, mailto and query URLs unchanged (N1 counter-direction)", () => {
+    // Ein Waechter, der alles rot faerbt, ist so wertlos wie einer, der alles
+    // durchlaesst -- und bei einer fail-closed-Bauform ist das die reale Gefahr.
+    // Besonders `?a=1&b=2`: dort steht ein `&`, das KEINE Referenz ist.
+    for (const href of ["/icon.svg", "https://example.org/x", "/pfad?a=1&b=2&zzz=3", "mailto:x@y.de?subject=A&body=B", "#abschnitt"]) {
+      const run = runGuard(baselineHtml(`<a href="${href}">start</a>`));
+      expect(run.status, `guard rejected the harmless ${href}`).toBe(0);
+    }
+  });
+
+  it("does not read a CSS property as a URI scheme (N1 counter-direction)", () => {
+    // `style="background:url(...)"` passt auf das Schema-Muster. Die strenge
+    // Einstufung gilt deshalb nur fuer Attribute, deren Wert der Browser als URL
+    // aufloest -- sonst waere jedes Stil-Attribut ein Fehlalarm.
+    const run = runGuard(baselineHtml('<div style="background:url(/x.png); color:red">x</div>'));
+    expect(run.status).toBe(0);
   });
 
   it("still classifies a genuine external src attribute as external", () => {

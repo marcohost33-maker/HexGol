@@ -29,8 +29,14 @@
 //      zum Dateiende reicht und ausgefuehrt wird.
 //   3. dist/index.html traegt keine Ausfuehrungsstelle NEBEN dem <script>-Element:
 //      weder ein Inline-Event-Handler-Attribut (onload, onerror, onclick ...) noch
-//      eine `javascript:`-URI. Der Browser wendet script-src auf beide an --
-//      unabhaengig davon, ob irgendwo ein Inline-<script>-Rumpf steht.
+//      eine URI mit einem Schema, das nicht als harmlos bekannt ist. Der Browser
+//      wendet script-src auf beide an -- unabhaengig davon, ob irgendwo ein
+//      Inline-<script>-Rumpf steht.
+//
+//      Geprueft wird dabei der DEKODIERTE Wert, nicht der Rohtext. Der Parser
+//      loest Zeichenreferenzen auf, bevor er navigiert: `href="&#106;avascript:..."`
+//      wird zu `javascript:...`. Ein Textvergleich auf dem Rohwert sieht davon
+//      nichts -- gemessen 2026-09-12 auf 1ba42f1, Exit 0 (Befund N1).
 //
 //      Dieser Punkt ist zweimal gewachsen, und das zweite Mal ist die Lehre. Der
 //      Review-Befund T4 nannte die Handler-Attribute; die Haertung dagegen war
@@ -54,8 +60,21 @@
 // immer ein roter Build, nie eine Erlaubnis. Die Alternative waere, Handler wie
 // einen Inline-Rumpf zu zaehlen und daraufhin script-src 'unsafe-inline' zu
 // VERLANGEN -- dann zoege ein einziges nachlaessig erzeugtes onerror= die Erlaubnis
-// wieder auf, die #163 gerade geschlossen hat. Der Waechter darf die Richtlinie
-// nicht selbsttaetig weiten; er darf nur haltmachen.
+// wieder auf, die #163 gerade geschlossen hat.
+//
+// WIE WEIT DIESE BEGRUENDUNG TRAEGT (Review #168, Runde 2, Befund N4). Hier stand
+// bis 2026-09-12 der Satz "der Waechter darf die Richtlinie nicht selbsttaetig
+// weiten; er darf nur haltmachen". Als allgemeine Aussage ist er FALSCH, und das
+// ist nachgemessen: ein Inline-<script> zusammen mit einem von Hand gesetzten
+// script-src 'unsafe-inline' ergibt hier Exit 0. Fuer die <script>-Klasse ist das
+// Weiten der Richtlinie also sehr wohl ein Weg zu gruen -- absichtlich, denn genau
+// die Beidseitigkeit von Punkt 4 hat den Ist-Befund aus #163 gefunden.
+//
+// Der Satz gilt nur fuer Punkt 3, die Handler- und URI-Klasse: dort gibt es keinen
+// Weg zu gruen ausser den Fund zu entfernen. Ob script-src ueberdies NIE
+// 'unsafe-inline' tragen darf, ist eine Aussage ueber die RICHTLINIE und nicht
+// ueber den Waechter; sie steht offen und gehoert entschieden, nicht hier
+// stillschweigend eingezogen.
 import { strict as assert } from "node:assert";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { resolve, relative, dirname, extname, sep } from "node:path";
@@ -124,6 +143,103 @@ function markupTags(html) {
     out.push({ tag: match[1].toLowerCase(), attrs: match[2] });
   }
   return out;
+}
+
+// ZEICHENREFERENZEN (Review #168, Runde 2, Befund N1). Der Parser dekodiert den
+// Attributwert, BEVOR navigiert wird -- `href="&#106;avascript:window.__boot()"`
+// ist fuer ihn `javascript:window.__boot()`. Die alte Pruefung verglich den
+// Rohtext und war deshalb gruen (gemessen 2026-09-12 auf 1ba42f1, Exit 0, in
+// dezimaler, hexadezimaler, semikolonloser und benannter Form).
+//
+// Die volle HTML5-Tabelle hat ueber 2000 benannte Referenzen. Hier steht die
+// Teilmenge, die sich zu ASCII aufloest und damit IN einem Schema stehen kann.
+// Was nicht in der Tabelle steht, bleibt undekodiert -- und dafuer gibt es unten
+// die fail-closed-Klausel: eine nicht aufloesbare Referenz VOR dem Pfadbeginn
+// macht den Wert unentscheidbar, und unentscheidbar zaehlt als Verstoss.
+const NAMED_REFERENCES = Object.freeze({
+  tab: "\t", newline: "\n", colon: ":", semi: ";", amp: "&", sol: "/", bsol: "\\",
+  quot: '"', apos: "'", lt: "<", gt: ">", nbsp: "\u00a0", nonbreakingspace: "\u00a0",
+  lpar: "(", rpar: ")", excl: "!", num: "#", percnt: "%", period: ".", comma: ",",
+  lowbar: "_", verbar: "|", plus: "+", equals: "=", quest: "?", ast: "*", commat: "@",
+  dollar: "$", grave: "'", hyphen: "-", dash: "-", sp: " ", space: " ",
+});
+
+function decodeCharacterReferences(value) {
+  let unresolved = false;
+  const decoded = String(value).replace(
+    /&(#[xX][0-9a-fA-F]+|#[0-9]+|[a-zA-Z][a-zA-Z0-9]*);?/g,
+    (whole, ref) => {
+      if (ref[0] === "#") {
+        const hex = ref[1] === "x" || ref[1] === "X";
+        const code = Number.parseInt(hex ? ref.slice(2) : ref.slice(1), hex ? 16 : 10);
+        // Ersatzzeichen-Halbpaare (D800-DFFF) wuerfe fromCodePoint als Fehler --
+        // ein abstuerzender Waechter ist kein urteilender. Sie bleiben stehen.
+        if (!Number.isFinite(code) || code < 0 || code > 0x10ffff) return whole;
+        if (code >= 0xd800 && code <= 0xdfff) return whole;
+        return String.fromCodePoint(code);
+      }
+      const named = NAMED_REFERENCES[ref.toLowerCase()];
+      if (named !== undefined) return named;
+      unresolved = true;
+      return whole;
+    },
+  );
+  return { decoded, unresolved };
+}
+
+// Der Browser entfernt Tab, LF und CR UEBERALL aus einer URL und schneidet
+// fuehrende wie schliessende C0-Steuerzeichen und Leerzeichen ab (WHATWG URL,
+// "URL parsing"). `jav&Tab;ascript:` und "\u0001javascript:" sind danach beide
+// wieder `javascript:` -- ein Vergleich ohne diesen Schritt sieht sie nicht.
+function normalizeUriValue(value) {
+  return value.replace(/[\t\n\r]/g, "").replace(/^[\u0000-\u0020]+|[\u0000-\u0020]+$/g, "");
+}
+
+// Attribute, deren Wert der Browser als URL aufloest. Nur fuer sie gilt die
+// strenge Einstufung unten; ein `style="background:url(x)"` traegt sonst ein
+// vermeintliches Schema "background:" und waere ein Fehlalarm.
+const URI_ATTRIBUTES = Object.freeze([
+  "href", "src", "action", "formaction", "data", "poster", "cite", "ping",
+  "background", "longdesc", "usemap", "manifest", "icon", "codebase", "xlink:href",
+]);
+
+// POSITIV-Liste statt Sperrliste. Eine Sperrliste faengt die Schemata, die man
+// schon kennt -- sie hat `livescript:`, `mocha:` und das naechste nicht. Hier gilt
+// umgekehrt: ohne Schema (relative URL) ist harmlos, mit Schema nur diese hier,
+// alles andere verlangt eine benannte Entscheidung statt einer stillen Annahme.
+const HARMLESS_SCHEMES = Object.freeze(["http", "https", "mailto", "tel", "blob"]);
+
+// Fuer Attribute AUSSERHALB der URI-Liste bleibt es bei einer Sperrliste: dort
+// darf keine strenge Form verlangt werden, aber ein bekannt ausfuehrbares Schema
+// soll trotzdem auffallen.
+const EXECUTABLE_SCHEMES = Object.freeze(["javascript", "vbscript", "livescript", "jscript", "mocha", "data"]);
+const SCHEME_HEAD = /^([a-zA-Z][a-zA-Z0-9+.-]*):/;
+
+function classifyUriAttribute(raw) {
+  const { decoded, unresolved } = decodeCharacterReferences(raw);
+  const value = normalizeUriValue(decoded);
+  // Alles vor dem ersten /, ? oder # -- nur dort kann noch ein Schema stehen.
+  const head = value.split(/[/?#]/)[0];
+  if (unresolved && /&[a-zA-Z][a-zA-Z0-9]*;?/.test(head)) {
+    // Eine Referenz, die wir nicht aufloesen konnten, und sie steht an einer
+    // Stelle, an der sie ein Schema bilden koennte. Hinter dem Pfadbeginn waere
+    // dasselbe `&` ein gewoehnliches Argument-Trennzeichen und harmlos.
+    return { verdict: "undecided", detail: "carries a character reference this guard cannot resolve" };
+  }
+  const scheme = head.match(SCHEME_HEAD);
+  if (!scheme) return { verdict: "harmless", detail: "" };
+  const name = scheme[1].toLowerCase();
+  if (HARMLESS_SCHEMES.includes(name)) return { verdict: "harmless", detail: "" };
+  return { verdict: "violation", detail: `resolves to scheme "${name}:"` };
+}
+
+function executableSchemeIn(raw) {
+  const { decoded } = decodeCharacterReferences(raw);
+  for (const token of normalizeUriValue(decoded).split(/[\s,;=]+/)) {
+    const scheme = token.match(SCHEME_HEAD);
+    if (scheme && EXECUTABLE_SCHEMES.includes(scheme[1].toLowerCase())) return scheme[1].toLowerCase();
+  }
+  return null;
 }
 
 const failures = [];
@@ -268,12 +384,20 @@ const scannedTags = markupTags(html);
 const inlineHandlers = [];
 for (const { tag, attrs } of scannedTags) {
   for (const { name, value } of parseAttributes(attrs)) {
-    if (INLINE_HANDLER_NAME.test(name)) inlineHandlers.push(`<${tag} ${name}=...>`);
-    // Gegen den eigenen Befund gerichtet (siehe Kopf, Punkt 3): script-src regelt
-    // DREI Dinge, und die Haertung nach dem Review deckte erst zwei davon ab.
-    else if (value.trim().toLowerCase().startsWith("javascript:")) {
-      inlineHandlers.push(`<${tag} ${name}="javascript:...">`);
+    // Attribut-NAMEN werden vom Parser nicht dekodiert -- hier genuegt der Rohtext.
+    if (INLINE_HANDLER_NAME.test(name)) {
+      inlineHandlers.push(`<${tag} ${name}=...>`);
+      continue;
     }
+    // Attribut-WERTE dagegen schon. Deshalb wird ab hier der dekodierte und
+    // normalisierte Wert eingestuft, nicht der Rohtext (Befund N1).
+    if (URI_ATTRIBUTES.includes(name)) {
+      const { verdict, detail } = classifyUriAttribute(value);
+      if (verdict !== "harmless") inlineHandlers.push(`<${tag} ${name}=...> ${detail}`);
+      continue;
+    }
+    const scheme = executableSchemeIn(value);
+    if (scheme) inlineHandlers.push(`<${tag} ${name}="${scheme}:..."> (non-URI attribute)`);
   }
 }
 // Eine blinde Suche liest sich wie eine Abwesenheit: findet der Tag-Zerleger gar
