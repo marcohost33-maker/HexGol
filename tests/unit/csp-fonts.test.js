@@ -127,16 +127,53 @@ const html = readFileSync(resolve(root, "index.html"), "utf8");
 const app = readFileSync(resolve(root, "src/App.tsx"), "utf8");
 const headers = readFileSync(resolve(root, "public/_headers"), "utf8");
 
+// Die Suche liegt in einer eigenen Funktion, damit sie gegen eine SYNTHETISCHE
+// Dateiliste pruefbar ist. Vorher stand sie in der Zelle, und die konnte nur
+// gegen den heutigen Baum urteilen -- dort steht kein grossgeschriebener Host,
+// also war die Zelle gegen Befund N4 blind (Review #168, Runde 3).
+//
+// Verglichen wird auf einer kleingeschriebenen Kopie: DNS loest Hostnamen ohne
+// Ruecksicht auf die Schreibweise auf, `FONTS.GSTATIC.COM` ist dieselbe Herkunft.
+// Gemeldet wird weiter die Zeilennummer im Originaltext.
+function remoteFontHits(files) {
+  const hits = [];
+  for (const { rel, text } of files) {
+    const lower = text.toLowerCase();
+    for (const host of REMOTE_FONT_HOSTS) {
+      if (!lower.includes(host)) continue;
+      const lineIndex = text.split("\n").findIndex((line) => line.toLowerCase().includes(host));
+      hits.push(`${rel}:${lineIndex + 1} (${host})`);
+    }
+  }
+  return hits;
+}
+
 describe("no remote font origins in production source (#163)", () => {
   it("finds zero references to remote font origins", () => {
-    const hits = [];
-    for (const { rel, text } of productionTextFiles()) {
-      for (const host of REMOTE_FONT_HOSTS) {
-        const lineIndex = text.split("\n").findIndex((line) => line.includes(host));
-        if (lineIndex >= 0) hits.push(`${rel}:${lineIndex + 1} (${host})`);
-      }
+    expect(remoteFontHits(productionTextFiles())).toEqual([]);
+  });
+
+  it("compares font hostnames case-insensitively (#168 N4)", () => {
+    // Der Quell-Waechter trug denselben woertlichen Vergleich wie der
+    // Ausgabe-Waechter. Eine abweichende Schreibweise kam damit durch beide
+    // Netze, landete im Buendel und wurde live von `font-src 'self'` geblockt --
+    // die Typografie-Drift, die #163 geschlossen hat, waere zurueck.
+    const shouted = REMOTE_FONT_HOSTS.map((h) => h.toUpperCase());
+    for (const host of shouted) {
+      const hits = remoteFontHits([{ rel: "probe.css", text: `@font-face{src:url(https://${host}/x.woff2)}` }]);
+      expect(hits, `missed the shouted spelling ${host}`).toHaveLength(1);
     }
-    expect(hits).toEqual([]);
+    // Gemischte Schreibweise ebenfalls, sonst waere nur GROSS gelernt.
+    expect(remoteFontHits([{ rel: "p.css", text: `url(https://Fonts.GStatic.com/x)` }])).toHaveLength(1);
+  });
+
+  it("reports the right line and stays silent on unrelated text (#168 N4 counter-direction)", () => {
+    // Ein Waechter, der jede Datei meldet, ist so wertlos wie einer, der keine
+    // meldet. Und die Zeilennummer muss die des ORIGINALS bleiben, nicht die
+    // einer umgeschriebenen Kopie.
+    const text = ["/* nichts */", "body{}", `@import url(https://${REMOTE_FONT_HOSTS[0].toUpperCase()}/css)`].join("\n");
+    expect(remoteFontHits([{ rel: "p.css", text }])).toEqual([`p.css:3 (${REMOTE_FONT_HOSTS[0]})`]);
+    expect(remoteFontHits([{ rel: "q.css", text: "body{font-family:system-ui}" }])).toEqual([]);
   });
 
   it("scans a non-empty set of files, so an empty result means absence and not a broken walk", () => {

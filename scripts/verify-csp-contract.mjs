@@ -479,9 +479,20 @@ for (const path of distFiles) {
   if (bytes.includes(0)) continue; // Binaerdatei ohne bekannte Endung (Git-Heuristik)
   const text = bytes.toString("utf8");
   scannedTextFiles += 1;
+  // GROSS-/KLEINSCHREIBUNG (Review #168, Runde 3, Befund N4). Ein Hostname wird
+  // im DNS ohne Ruecksicht auf die Schreibweise aufgeloest -- der Browser laedt
+  // `https://FONTS.GSTATIC.COM/x.woff2` von genau derselben Stelle wie die
+  // kleingeschriebene Form. Der woertliche Vergleich sah davon nichts und meldete
+  // null Referenzen; nachgestellt auf fe5e7b2 gegen das echte dist/, Exit 0,
+  // waehrend dieselbe Datei kleingeschrieben Exit 1 ergab (Positiv-Kontrolle).
+  //
+  // Das ist dieselbe Klasse wie zuvor: der Waechter verglich eine SCHREIBWEISE,
+  // wo die Semantik eine andere ist. Verglichen wird deshalb ab hier auf einer
+  // kleingeschriebenen Kopie; gemeldet wird weiter der Originaltext-Ort.
+  const lowerText = text.toLowerCase();
   for (const host of REMOTE_FONT_HOSTS) {
-    if (text.includes(host)) {
-      const line = text.split("\n").findIndex((l) => l.includes(host)) + 1;
+    if (lowerText.includes(host)) {
+      const line = text.split("\n").findIndex((l) => l.toLowerCase().includes(host)) + 1;
       fail(`remote font origin "${host}" in build output: ${relative(root, path).split(sep).join("/")}:${line}`);
     }
   }
@@ -597,12 +608,21 @@ const hasInlineStyleBlock = /<style\b[^>]*>[\s\S]*?\S[\s\S]*?<\/style\s*>/i.test
 const scannedTags = markupTags(html);
 const inlineHandlers = [];
 const blockedResources = [];
+const inlineStyleAttributes = [];
 for (const { tag, attrs } of scannedTags) {
   const attributes = parseAttributes(attrs);
   for (const { name, value } of attributes) {
     // Attribut-NAMEN werden vom Parser nicht dekodiert -- hier genuegt der Rohtext.
     if (INLINE_HANDLER_NAME.test(name)) {
       inlineHandlers.push(`<${tag} ${name}=...>`);
+      continue;
+    }
+    // Ein style-Attribut IST ein Inline-Stil (Review #168, Runde 3, Befund N3).
+    // Unter `style-src 'self'` blockt der Browser es genauso wie einen
+    // <style>-Block -- die Entscheidung unten darf sich deshalb nicht allein am
+    // Block festmachen.
+    if (name === "style" && value.trim().length > 0) {
+      inlineStyleAttributes.push(`<${tag} style=...>`);
       continue;
     }
     // Attribut-WERTE dagegen schon. Deshalb wird ab hier der dekodierte und
@@ -654,6 +674,17 @@ if (!scriptSrc) {
 }
 
 const styleSrc = directive("style-src");
+// ZWEI GESTALTEN EINES INLINE-STILS (Review #168, Runde 3, Befund N3). Bis
+// 2026-09-12 hing diese Entscheidung allein am <style>-BLOCK. Eine Ausgabe mit
+// `<body style="background:red">` und ohne Block galt damit als stilfrei: unter
+// `style-src 'self'` meldete der Waechter Exit 0, waehrend der Browser das
+// Attribut blockt. Auf fe5e7b2 am echten dist/ nachgestellt.
+//
+// Das ist wieder ein falsches OK aus derselben Wurzel wie N1: eine der beiden
+// Formen, die die Direktive regelt, stand gar nicht in der Frage. Gezaehlt werden
+// ab hier beide, und die Beidseitigkeit von Punkt 4 bleibt erhalten -- die
+// Erlaubnis faellt weg, sobald KEINE der beiden Formen mehr vorkommt.
+const needsStyleUnsafeInline = hasInlineStyleBlock || inlineStyleAttributes.length > 0;
 if (!styleSrc) {
   fail("CSP has no style-src directive");
 } else {
@@ -661,11 +692,15 @@ if (!styleSrc) {
   // #163 Punkt 7: die Stil-Migration ist ausdruecklich NICHT Teil dieses Schritts.
   // React setzt style-Attribute und index.html traegt einen Inline-<style>-Block --
   // solange das so ist, ist 'unsafe-inline' hier kein Rueckstand, sondern noetig.
-  if (hasInlineStyleBlock && !allowsInline) {
-    fail("dist/index.html has an inline <style> block but style-src forbids inline styles");
+  if (needsStyleUnsafeInline && !allowsInline) {
+    fail(
+      "dist/index.html carries inline styles but style-src forbids them " +
+      `(<style> block: ${hasInlineStyleBlock}, style attributes: ${inlineStyleAttributes.length}` +
+      `${inlineStyleAttributes.length ? ` -- first: ${inlineStyleAttributes[0]}` : ""}) -- the browser blocks them`,
+    );
   }
-  if (!hasInlineStyleBlock && allowsInline) {
-    fail("style-src allows 'unsafe-inline' but dist/index.html has no inline <style> block -- re-check whether React still needs it, then drop it");
+  if (!needsStyleUnsafeInline && allowsInline) {
+    fail("style-src allows 'unsafe-inline' but dist/index.html has neither an inline <style> block nor a style attribute -- re-check whether React still needs it, then drop it");
   }
 }
 
@@ -683,6 +718,6 @@ console.log(
   `script-elements=${scriptElements.length}/${rawScriptOpeners} ` +
   `executable-inline-scripts=${executableInline.length} markup-tags=${scannedTags.length} ` +
   `inline-script-sources=${inlineHandlers.length} blocked-resources=${blockedResources.length} ` +
-  `inline-style-block=${hasInlineStyleBlock} ` +
+  `inline-style-block=${hasInlineStyleBlock} inline-style-attributes=${inlineStyleAttributes.length} ` +
   `script-src-unsafe-inline=${(directive("script-src") ?? []).includes("'unsafe-inline'")}`,
 );

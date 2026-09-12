@@ -276,6 +276,72 @@ describe("CSP output guard (#168 review)", () => {
     expect(remote.stderr).toMatch(/is not allowed by style-src/);
   });
 
+  // Der Hostname steht hier zusammengesetzt: woertlich darf er im Baum nur an den
+  // beiden benannten Stellen vorkommen (scripts/verify-csp-contract.mjs und
+  // tests/unit/csp-fonts.test.js), damit der stumpfe Quell-Waechter nicht an
+  // einer Ausnahme vorbeisehen muss.
+  const FONT_HOST = ["fonts", "gstatic", "com"].join(".");
+
+  it("compares remote font hostnames case-insensitively (N3 round 3, N4)", () => {
+    // DNS loest einen Hostnamen ohne Ruecksicht auf die Schreibweise auf --
+    // `FONTS.GSTATIC.COM` und die kleine Form sind dieselbe Herkunft. Der
+    // woertliche Vergleich meldete auf fe5e7b2 null Referenzen, und die
+    // Schrift ging live an `font-src 'self'` kaputt: genau die Drift zwischen
+    // Entwicklung und Produktion, gegen die dieser Punkt gebaut ist.
+    const shouted = runGuard(baselineHtml(`<link rel="preconnect" href="https://${FONT_HOST.toUpperCase()}" />`));
+    expect(shouted.status).not.toBe(0);
+    expect(shouted.stderr).toMatch(/remote font origin/);
+  });
+
+  it("still finds the lower-case spelling and still passes without it (N4 controls)", () => {
+    // Positiv-Kontrolle und Gegenrichtung in einer Zelle: die kleine Form MUSS
+    // weiter rot sein (sonst misst die Zelle oben nichts), und eine Ausgabe ohne
+    // fremde Schrift-Origin MUSS gruen bleiben (sonst faerbt der Waechter alles).
+    const lower = runGuard(baselineHtml(`<link rel="preconnect" href="https://${FONT_HOST}" />`));
+    expect(lower.status, "the lower-case control no longer reddens").not.toBe(0);
+    const clean = runGuard(baselineHtml('<link rel="preconnect" href="https://example.org" />'));
+    expect(clean.status, clean.stderr).toBe(0);
+    expect(clean.stdout).toContain("remote-font-refs=0");
+  });
+
+  it("counts a style attribute as an inline style, not only a <style> block (N3)", () => {
+    // Zweites falsches OK der Runde. Die Entscheidung ueber
+    // `style-src 'unsafe-inline'` hing allein am <style>-BLOCK -- eine Ausgabe mit
+    // `style="..."` und ohne Block galt als stilfrei, und der Waechter war gruen,
+    // waehrend der Browser das Attribut blockt.
+    const withoutBlock = baselineHtml('<div style="background:red">x</div>')
+      .replace("    <style>:root{--ghx-font-sans:system-ui}</style>\n", "");
+    expect(withoutBlock, "the fixture still carries a <style> block").not.toContain("<style>");
+    const strict = HEADERS_SELF_ONLY.replace("style-src 'self' 'unsafe-inline';", "style-src 'self';");
+    expect(strict, "the strict fixture did not change").not.toBe(HEADERS_SELF_ONLY);
+
+    const run = runGuard(withoutBlock, strict);
+    expect(run.status).not.toBe(0);
+    expect(run.stderr).toMatch(/carries inline styles but style-src forbids them/);
+    expect(run.stderr).toMatch(/style attributes: 1/);
+  });
+
+  it("keeps the style decision two-sided after counting attributes (N3 counter-direction)", () => {
+    // Punkt 4 ist bewusst beidseitig: die Erlaubnis muss auch WEGFALLEN, wenn
+    // nichts mehr sie braucht. Sonst haette das Mitzaehlen der Attribute die
+    // Richtlinie stillschweigend nach oben verriegelt.
+    const withoutAnyInlineStyle = baselineHtml()
+      .replace("    <style>:root{--ghx-font-sans:system-ui}</style>\n", "");
+    expect(withoutAnyInlineStyle).not.toContain("<style>");
+    expect(withoutAnyInlineStyle).not.toContain("style=");
+    const stale = runGuard(withoutAnyInlineStyle);
+    expect(stale.status, "the unused 'unsafe-inline' is no longer reported").not.toBe(0);
+    expect(stale.stderr).toMatch(/neither an inline <style> block nor a style attribute/);
+
+    // Und mit der Erlaubnis bleibt das style-Attribut gruen -- sonst waere die
+    // Verschaerfung ein Fehlalarm auf der heutigen, bewusst offenen Richtlinie.
+    const permitted = runGuard(
+      baselineHtml('<div style="background:red">x</div>').replace("    <style>:root{--ghx-font-sans:system-ui}</style>\n", ""),
+    );
+    expect(permitted.status, permitted.stderr).toBe(0);
+    expect(permitted.stdout).toContain("inline-style-attributes=1");
+  });
+
   it("reports how many tags it scanned, so an empty result cannot pass as absence", () => {
     // Ohne diese Zahl waere "null Handler" auch dann gruen, wenn der Tag-Zerleger
     // gar nichts mehr faende -- genau die Klasse, gegen die dieser Waechter baut.
