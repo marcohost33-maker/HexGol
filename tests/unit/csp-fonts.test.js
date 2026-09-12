@@ -33,16 +33,33 @@ const REMOTE_FONT_HOSTS = Object.freeze(["fonts.googleapis.com", "fonts.gstatic.
 const PRODUCTION_SOURCES = Object.freeze(["index.html", "src", "public"]);
 
 // Jede Schrift-Deklaration in der Produktionsquelle -- CSS (`font-family:`) wie
-// JSX (`fontFamily:`). Gelesen wird, WAS hinter dem Doppelpunkt steht.
-const FONT_DECLARATION = /(?:font-family|fontFamily)\s*:\s*([^\n]*)/g;
+// JSX (`fontFamily:`). Die SCHREIBWEISE wird mitgelesen, weil sie entscheidet,
+// wo die Deklaration endet (siehe unten).
+const FONT_DECLARATION = /(font-family|fontFamily)\s*:\s*([^\n]*)/g;
 
-// Die einzigen erlaubten Formen. Alles andere -- vor allem alles, was mit einem
-// Anfuehrungszeichen beginnt -- ist ein zweiter Stapel und damit ein Verstoss.
+// Die einzigen erlaubten Namen:
 //   var(--ghx-font-sans|mono)   die index.html-Spiegelung, zeichengleich geprueft
 //   FONT_SANS / FONT_MONO       die Quelle selbst
 //   DISP / MONO                 die App.tsx-Aliasse (oben als Gleichheit geprueft)
 //   ${...}                      dieselben Namen in einer Vorlagen-Zeichenkette
-const ALLOWED_FONT_VALUE = /^(?:var\(--ghx-font-(?:sans|mono)\)|\$\{\s*(?:FONT_SANS|FONT_MONO|DISP|MONO)\s*\}|(?:FONT_SANS|FONT_MONO|DISP|MONO)\b)/;
+const FONT_TOKEN = "(?:var\\(--ghx-font-(?:sans|mono)\\)|\\$\\{\\s*(?:FONT_SANS|FONT_MONO|DISP|MONO)\\s*\\}|FONT_SANS|FONT_MONO|DISP|MONO)";
+
+// Geprueft wird die GANZE Deklaration, nicht ihr Anfang (Review #168, Runde 2,
+// Befund N3). Die alte Fassung war nur am Wertanfang verankert; damit passierten
+// `FONT_SANS && "'Space Grotesk', sans-serif"` und
+// `var(--ghx-font-sans), "Space Grotesk"` -- beide selbst nachgestellt. Ein
+// Anfangs-Anker prueft, womit ein Wert BEGINNT; welche Schrift am Ende steht,
+// entscheidet aber der ganze Ausdruck.
+//
+// Wo die Deklaration endet, haengt an der Schreibweise, denn das sind zwei
+// verschiedene Sprachen:
+//   font-family:  CSS -- Ende an `;`, `}`, am Zeilenende oder an einem
+//                 schliessenden Anfuehrungszeichen. NICHT am Komma: dort geht der
+//                 Schriftstapel weiter, und genau das war der Verstoss aus N3.
+//   fontFamily:   JS  -- Ende an `,`, `;` oder `}`. Hier trennt das Komma
+//                 Objekt-Eigenschaften und ist ein echtes Ende.
+const ALLOWED_CSS_VALUE = new RegExp("^" + FONT_TOKEN + "\\s*(?:[;}'\"`]|$)");
+const ALLOWED_JS_VALUE = new RegExp("^" + FONT_TOKEN + "\\s*(?:[,;}]|$)");
 
 const BINARY_EXTENSIONS = Object.freeze([".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".woff", ".woff2", ".ttf", ".otf"]);
 
@@ -61,6 +78,22 @@ function productionTextFiles() {
       const bytes = readFileSync(path);
       if (bytes.includes(0)) continue;
       out.push({ rel: relative(root, path).split(sep).join("/"), text: bytes.toString("utf8") });
+    }
+  }
+  return out;
+}
+
+// Eine Sammelstelle fuer alle Schrift-Deklarationen. Vorher lag die Schleife in
+// der Verstoss-Zelle; damit konnte die Deckungs-Zelle nur eine Gesamtzahl sehen
+// und nicht, WO die Treffer herkamen -- genau die Blindheit, die N5 benannt hat.
+function fontDeclarations() {
+  const out = [];
+  for (const { rel, text } of productionTextFiles()) {
+    const lines = text.split("\n");
+    for (let i = 0; i < lines.length; i += 1) {
+      for (const match of lines[i].matchAll(FONT_DECLARATION)) {
+        out.push({ rel, text: "", spelling: match[1], value: match[2].trim(), line: i + 1 });
+      }
     }
   }
   return out;
@@ -144,24 +177,84 @@ describe("system font stacks are the single source (#163)", () => {
   // Formverbot faengt auch den vierten, den noch niemand eingesetzt hat.
   it("lets no production source declare its own font stack (#168 T1)", () => {
     const violations = [];
-    let declarations = 0;
-    for (const { rel, text } of productionTextFiles()) {
-      const lines = text.split("\n");
-      for (let i = 0; i < lines.length; i += 1) {
-        for (const match of lines[i].matchAll(FONT_DECLARATION)) {
-          declarations += 1;
-          const value = match[1].trim();
-          if (!ALLOWED_FONT_VALUE.test(value)) {
-            violations.push(`${rel}:${i + 1} -> ${value.slice(0, 60)}`);
-          }
-        }
-      }
+    for (const { rel, text, spelling, value, line } of fontDeclarations()) {
+      const allowed = spelling === "fontFamily" ? ALLOWED_JS_VALUE : ALLOWED_CSS_VALUE;
+      if (!allowed.test(value)) violations.push(`${rel}:${line} -> ${value.slice(0, 60)}`);
+      void text;
     }
     expect(violations).toEqual([]);
-    // Eine blinde Suche liest sich wie eine Abwesenheit: faende der Abgleich gar
-    // keine Deklaration mehr (umbenanntes Attribut, kaputter Sammler), waere die
-    // leere Verstossliste keine Aussage.
-    expect(declarations, "font declaration scan found nothing -- the scan is broken").toBeGreaterThan(20);
+  });
+
+  it("rejects a stack that continues past the shared token (#168 N3)", () => {
+    // Diese Zelle prueft die FORM-Regel unmittelbar, nicht nur ihre Wirkung auf
+    // den heutigen Baum. Grund: die Verstossliste oben ist leer, solange niemand
+    // einen zweiten Stapel eingebaut hat -- sie kann also gruen bleiben, waehrend
+    // die Regel offen steht. Genau so war es: der Anfangs-Anker liess alle sechs
+    // Formen unten passieren (selbst nachgestellt auf 1ba42f1).
+    const rejected = [
+      ["fontFamily", `FONT_SANS && "'Space Grotesk', sans-serif"`],
+      ["font-family", `var(--ghx-font-sans), "Space Grotesk"`],
+      ["fontFamily", `MONO + ", 'JetBrains Mono'"`],
+      ["font-family", "${FONT_SANS} , \"Space Grotesk\""],
+      ["fontFamily", `MONO ?? "Arial"`],
+      ["fontFamily", `FONT_SANS.replace("system-ui", "Space Grotesk")`],
+      ["font-family", "MONO, monospace;"],
+    ];
+    for (const [spelling, value] of rejected) {
+      const allowed = spelling === "fontFamily" ? ALLOWED_JS_VALUE : ALLOWED_CSS_VALUE;
+      expect(allowed.test(value), `accepted a second stack: ${spelling}: ${value}`).toBe(false);
+    }
+  });
+
+  it("still accepts every form the tree actually uses (#168 N3 counter-direction)", () => {
+    // Ein Formverbot, das alles verwirft, ist so wertlos wie keines -- und bei
+    // einer verschaerften Regel ist das die reale Gefahr. Diese sieben Formen
+    // stehen so im Baum; sie muessen weiterhin durchgehen.
+    const accepted = [
+      ["font-family", "var(--ghx-font-sans); }"],
+      ["font-family", "${FONT_SANS};text-align:center;padding:24px'>` +"],
+      ["fontFamily", "MONO, fontSize: 11.5, fontWeight: 700 }}>"],
+      ["fontFamily", "MONO }}>"],
+      ["fontFamily", "MONO,"],
+      ["fontFamily", "FONT_SANS,"],
+      ["fontFamily", "MONO };"],
+    ];
+    for (const [spelling, value] of accepted) {
+      const allowed = spelling === "fontFamily" ? ALLOWED_JS_VALUE : ALLOWED_CSS_VALUE;
+      expect(allowed.test(value), `rejected a form the tree uses: ${spelling}: ${value}`).toBe(true);
+    }
+  });
+
+  // Die Nachbarzelle zur Verstossliste: ohne sie waere eine leere Liste auch dann
+  // gruen, wenn der Sammler gar nichts mehr faende -- eine blinde Suche liest sich
+  // wie eine Abwesenheit.
+  //
+  // Hier stand bis 2026-09-12 eine Gesamtzahl ("mehr als 20 Deklarationen"). Die
+  // trug nicht, und das ist nachgezaehlt: 147 der 151 Deklarationen stehen in
+  // src/App.tsx allein. Faellt jede ANDERE Datei aus dem Sammler, bleiben 147 --
+  // die Schwelle merkt nichts. Faellt umgekehrt nur App.tsx aus, bleiben 4 und sie
+  // greift. Eine Gesamtzahl misst also die groesste Datei, nicht die Deckung.
+  //
+  // Getragen wird der Nachweis deshalb von der DECKUNG: beide Schreibweisen
+  // muessen Treffer liefern, und es muessen mehrere Dateien beitragen -- auch
+  // ohne App.tsx.
+  it("covers both spellings and more than one file, so the scan cannot go half-blind (#168 N5)", () => {
+    const found = fontDeclarations();
+    const spellings = new Set(found.map((d) => d.spelling));
+    const files = new Set(found.map((d) => d.rel));
+    const withoutApp = new Set([...files].filter((f) => f !== "src/App.tsx"));
+
+    expect(spellings, "CSS spelling font-family: no longer matches").toContain("font-family");
+    expect(spellings, "JS spelling fontFamily: no longer matches").toContain("fontFamily");
+    expect(files, "index.html contributes no declaration -- the walk misses the HTML entry").toContain("index.html");
+    expect(
+      withoutApp.size,
+      "only src/App.tsx contributes -- every other file fell out of the scan unnoticed",
+    ).toBeGreaterThanOrEqual(2);
+    expect(
+      found.filter((d) => d.rel === "src/App.tsx").length,
+      "src/App.tsx contributes almost nothing -- the .tsx branch of the scan is broken",
+    ).toBeGreaterThan(50);
   });
 });
 
