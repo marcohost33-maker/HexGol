@@ -7,6 +7,7 @@
 import { createReadStream, existsSync, readFileSync, statSync } from "node:fs";
 import { createServer } from "node:http";
 import { extname, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const MIME = new Map([
   [".html", "text/html; charset=utf-8"],
@@ -59,7 +60,7 @@ function safePath(distDir, pathname) {
   return candidate;
 }
 
-export async function startProductionHeaderServer({ distDir, host = "127.0.0.1", port = 0 }) {
+export async function startProductionHeaderServer({ distDir, host = "127.0.0.1", port = 4173 }) {
   const absoluteDist = resolve(distDir);
   const headersPath = resolve(absoluteDist, "_headers");
   if (!existsSync(headersPath)) throw new Error(`missing ${headersPath}`);
@@ -91,7 +92,10 @@ export async function startProductionHeaderServer({ distDir, host = "127.0.0.1",
     }
 
     for (const [name, value] of wildcardHeaders) res.setHeader(name, value);
-    res.setHeader("Content-Type", MIME.get(extname(filePath).toLowerCase()) ?? "application/octet-stream");
+    res.setHeader(
+      "Content-Type",
+      MIME.get(extname(filePath).toLowerCase()) ?? "application/octet-stream",
+    );
     res.setHeader("Content-Length", statSync(filePath).size);
 
     if (req.method === "HEAD") {
@@ -117,18 +121,24 @@ export async function startProductionHeaderServer({ distDir, host = "127.0.0.1",
     });
   });
   const address = server.address();
-  if (!address || typeof address === "string") throw new Error("server did not expose a TCP address");
+  if (!address || typeof address === "string") {
+    throw new Error("server did not expose a TCP address");
+  }
 
   return {
     origin: `http://${host}:${address.port}`,
     csp: wildcardHeaders.get("Content-Security-Policy"),
-    close: () => new Promise((resolveClose, reject) => server.close((error) => (error ? reject(error) : resolveClose()))),
+    close: () =>
+      new Promise((resolveClose, reject) =>
+        server.close((error) => (error ? reject(error) : resolveClose())),
+      ),
   };
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === resolve(new URL(import.meta.url).pathname)) {
+const invokedPath = process.argv[1] ? resolve(process.argv[1]) : null;
+if (invokedPath && invokedPath === resolve(fileURLToPath(import.meta.url))) {
   const distDir = process.env.GHX_DIST ?? resolve(process.cwd(), "dist");
-  const port = Number(process.env.PORT ?? 4174);
+  const port = Number(process.env.PORT ?? 4173);
   const running = await startProductionHeaderServer({ distDir, port });
   console.log(`production-header preview listening at ${running.origin}`);
 }
