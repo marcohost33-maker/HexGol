@@ -22,6 +22,14 @@ import { defineConfig, devices } from "@playwright/test";
 // macOS dev run. The visual-regression workflow runs inside the official
 // Microsoft Playwright Docker image so baselines are always generated and
 // asserted in identical environments (playwright.dev/docs/docker).
+//
+// Security contract (#176): Vite preview does not apply Cloudflare Pages'
+// dist/_headers. The e2e server is therefore the tiny static
+// scripts/serve-dist-with-headers.mjs server, which applies the checked-in `/*`
+// header block to EVERY response. That means existing service-worker and
+// OffscreenCanvas worker specs exercise their production resources under the
+// same CSP as the document instead of only the CSP smoke test doing so.
+//
 // The first-open education intro (ConwayIntro) is a fixed full-screen overlay
 // that intercepts pointer events until dismissed. Every existing functional spec
 // drives the app directly and is unaware of it, so we pre-seed the "seen" flag in
@@ -101,9 +109,9 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: "npm run preview -- --host 127.0.0.1 --port 4173",
+    command: "node scripts/serve-dist-with-headers.mjs",
     url: "http://127.0.0.1:4173",
-    reuseExistingServer: !process.env.CI,
+    reuseExistingServer: false,
     timeout: 120000,
   },
 });
