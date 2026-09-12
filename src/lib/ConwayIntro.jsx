@@ -24,6 +24,10 @@
 // Einblend-Animation (analog Splash.jsx).
 
 import { useEffect, useRef, useState } from "react";
+// #163/#168: der Schriftstapel kommt aus der EINEN Quelle. Ein eigenes Literal
+// hier hiesse: auf Rechnern mit der benannten Schrift sieht das Overlay anders
+// aus als auf allen anderen -- und die App liefert diese Schrift nicht aus.
+import { FONT_SANS } from "./typography.js";
 
 // localStorage-Flag: einmal gesehen -> nicht mehr automatisch zeigen. Versioniert
 // (v1), damit ein spaeteres, inhaltlich neues Intro erneut einmalig erscheinen kann.
@@ -145,7 +149,7 @@ export default function ConwayIntro({ onDismiss, persist = true }) {
         background: "rgba(8, 11, 16, 0.74)",
         backdropFilter: reduced ? "none" : "blur(2px)",
         WebkitBackdropFilter: reduced ? "none" : "blur(2px)",
-        fontFamily: "'Space Grotesk', system-ui, sans-serif",
+        fontFamily: FONT_SANS,
         opacity: leaving ? 0 : 1,
         transition: reduced ? "none" : `opacity ${fadeMs}ms ease`,
         pointerEvents: leaving ? "none" : "auto",
@@ -225,7 +229,7 @@ export default function ConwayIntro({ onDismiss, persist = true }) {
             color: "#04110d",
             fontSize: 15,
             fontWeight: 800,
-            fontFamily: "'Space Grotesk', system-ui, sans-serif",
+            fontFamily: FONT_SANS,
             cursor: "pointer",
             letterSpacing: "0.01em",
           }}

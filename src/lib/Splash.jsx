@@ -9,6 +9,10 @@
 // (own palette per the mockup spec) so it does not depend on the app theme.
 
 import { useEffect, useRef, useState } from "react";
+// #163/#168: der Schriftstapel kommt aus der EINEN Quelle. Ein eigenes Literal
+// hier hiesse: auf Rechnern mit der benannten Schrift sieht das Overlay anders
+// aus als auf allen anderen -- und die App liefert diese Schrift nicht aus.
+import { FONT_SANS } from "./typography.js";
 
 const GREEN = "#34d399"; // HEX wordmark accent (brand)
 
@@ -105,7 +109,7 @@ export default function Splash({ version, holdMs = 1500, onDismiss }) {
         gap: "20px",
         background: "radial-gradient(120% 100% at 50% 35%, #1b2230 0%, #0f1216 70%)",
         color: "#ffffff",
-        fontFamily: "'Space Grotesk', system-ui, sans-serif",
+        fontFamily: FONT_SANS,
         cursor: "pointer",
         userSelect: "none",
         WebkitUserSelect: "none",

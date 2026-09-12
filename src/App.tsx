@@ -18,6 +18,7 @@ import ConwayIntro, { introSeen } from "./lib/ConwayIntro.jsx"; // Bildungs-Intr
 import { renderRaster } from "./lib/raster-render.js"; // geteilter Raster-Pfad (Worker + Main)
 import { bewerteGolHex } from "./lib/golhex-nine-rules-adapter.js"; // 9-Regel-Semantikprofil (optional, neben den Axiomen)
 import { STATUS } from "./lib/nine-rules.js";
+import { FONT_SANS, FONT_MONO } from "./lib/typography.js"; // #163: System-Schriftstapel, eine Quelle, kein Fremd-Download
 import { supportsOffscreenWorker } from "./lib/worker-support.js"; // Feature-Detection (fail-closed)
 import { shouldStartPan, decideCloseAction, usesRasterPath, wheelSelectionEffect, WHEEL_ERASE, clampWheelCenter } from "./lib/ui-gestures.js"; // pure UI-Entscheider (Pan-Hit-Test + Schliess-Dispatch + HEX-Render-Gate + Farbrad-Wahl + Rad-Clamp)
 import {
@@ -297,7 +298,8 @@ function frameOptsFor(shape, { circleRadius, ellipseA, ellipseB, polygon }) {
 //   - Farb-Pinsel oben, Tap-Zyklus leer->blau->rot->gelb, 5 Watzlawick-Axiome.
 //
 // Originaltechniken erhalten:
-//   - Theme T (Teal/Neon, accent #5CF0CC), Space Grotesk + JetBrains Mono.
+//   - Theme T (Teal/Neon, accent #5CF0CC). Die Schrift ist seit #163 ein
+//     System-Stapel (src/lib/typography.js) statt zweier nachgeladener Webfonts.
 //   - Echte Grid-Groessen mit Hexradius pro Stufe (S..XXL).
 //   - Kanonisches Red-Blob pixelToOddR (Pixel->Axial->Cube-Round->odd-r),
 //     100% Trefferquote alle Groessen (verifiziert).
@@ -349,8 +351,8 @@ function showCloseFallback() {
   if (typeof document === "undefined" || document.hidden) return;
   try {
     document.documentElement.innerHTML =
-      '<body style="margin:0;height:100vh;display:flex;align-items:center;justify-content:center;' +
-      'background:#0a0a0a;color:#8a94a6;font-family:system-ui,sans-serif;text-align:center;padding:24px">' +
+      `<body style='margin:0;height:100vh;display:flex;align-items:center;justify-content:center;` +
+      `background:#0a0a0a;color:#8a94a6;font-family:${FONT_SANS};text-align:center;padding:24px'>` +
       '<div style="max-width:360px"><div style="font-size:18px;color:#5CF0CC;font-weight:700;margin-bottom:8px">GolHex beendet</div>' +
       '<div style="line-height:1.5">Du kannst diesen Tab / dieses Fenster jetzt schliessen.' +
       '<div style="font-size:13px;color:#aab4c2;margin-top:10px">Ein Browser-Tab oder eine Web-App darf sich aus Sicherheitsgruenden nicht immer selbst schliessen &ndash; das ist normal, kein Fehler. Schliesse das Fenster bei Bedarf manuell.</div></div></div></body>';
@@ -2800,7 +2802,12 @@ export default function GolHex() {
           octx.drawImage(src, 0, 0);
           const label = buildWatermarkLabel(snapGen, currentRuleLabel());
           const fs = Math.max(11, Math.round(src.width / 48));
-          octx.font = `${fs}px ui-monospace, monospace`;
+          // #168 N6: auch hier die eine Quelle. Ein Canvas-`font` ist eine
+          // Schrift-Deklaration wie jede andere -- nur ohne die CSS-Eigenschaft
+          // davor, weshalb der Form-Waechter sie bis 2026-09-12 nicht sah. Die
+          // Eigenschaft wird hier absichtlich nicht ausgeschrieben: der Waechter
+          // sucht wortwoertlich und darf an einem Kommentar nicht haengenbleiben.
+          octx.font = `${fs}px ${FONT_MONO}`;
           octx.textBaseline = "bottom";
           const padX = Math.round(fs * 0.6), padY = Math.round(fs * 0.45);
           const tw = octx.measureText(label).width;
@@ -3174,18 +3181,14 @@ export default function GolHex() {
   };
 
   // --- Fonts ---------------------------------------------------------------
-  useEffect(() => {
-    try {
-      if (!document.getElementById("ghx-font")) {
-        const l = document.createElement("link"); l.id = "ghx-font"; l.rel = "stylesheet";
-        l.href = "https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=JetBrains+Mono:wght@400;600&display=swap";
-        document.head.appendChild(l);
-      }
-    } catch (e) { /* ignore */ }
-  }, []);
-
-  const DISP = "'Space Grotesk', system-ui, sans-serif";
-  const MONO = "'JetBrains Mono', ui-monospace, Menlo, monospace";
+  // Keine Laufzeit-Injektion mehr (#163). Hier haengte ein Effekt einen zweiten
+  // <link id="ghx-font"> auf eine fremde Schrift-Origin in den <head> -- zusaetzlich
+  // zu dem in index.html, und nicht einmal fuer denselben Schriftsatz. In Produktion
+  // scheiterten beide an `font-src 'self'`, lokal nicht; die App sah live anders aus.
+  // Die Stapel kommen jetzt aus src/lib/typography.js, derselben Quelle, die auch die
+  // CSS-Custom-Properties in index.html speist.
+  const DISP = FONT_SANS;
+  const MONO = FONT_MONO;
   const total = stats.pop;
   const pct = (x) => (total ? Math.round((x / total) * 100) : 0);
   // Randzellen-Info kommt aus dem Zustand boundaryStat, der GENAU DANN gesetzt wird,

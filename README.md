@@ -4,6 +4,16 @@ Hexagonal Game of Life **plus a real-valued physics layer** (Schneeflocke,
 Wasser, Collatz, Genetik) and a norm-conserving **quantum tight-binding
 simulation (HQST)** — single React component over a Canvas2D render path.
 
+**Status:** research prototype / hobby-research app. It runs, it is unit- and
+e2e-tested, and it is used interactively — but it is **not** a validated scientific
+instrument. Nothing here has been peer-reviewed or externally reproduced. Numbers in
+this file are measured on the author's machine unless a test file is named; treat them
+as indicative, not as a benchmark result.
+
+**This README doubles as an engineering log.** It records feature waves (v33/v34,
+"AP-*", "PR-*", issue numbers) in the order they were built, in a mix of English and
+German. It is honest about what exists, but it is not a tidy product page.
+
 > **Coworker Research / Coworkerz** — the current version is authoritative in
 > `package.json` (the `version` field). The `v31` re-convergence note below is
 > retained as dated history, not a current-version claim.
@@ -207,7 +217,7 @@ unaffected.
   dispatcher) are unit-tested; e2e covers both the download path (PNG magic bytes)
   and the share path (stubbed `navigator.share`, asserting a PNG `File[]`).
 - **iOS reality-anchor:** Web-Share-of-files on iOS Safari is historically fragile
-  (verified only on a real device per `EVALUATION_STRATEGY §8`). The download
+  (verified only on a real device per an internal real-device gate (that document is not part of this repository)). The download
   fallback guarantees the feature works even where share is unavailable.
 
 ### v34 (Feature 2): record the field evolution → shareable video
@@ -226,7 +236,7 @@ unaffected.
   supports and is the most broadly re-shareable on Apple devices; Chrome/Firefox/
   Android fall through to WebM.
 - **Honest browser / iOS support matrix** (researched 2026-06-09 — verify on a real
-  device per `EVALUATION_STRATEGY §8` before claiming "works on iPhone"):
+  device per an internal real-device gate (that document is not part of this repository) before claiming "works on iPhone"):
 
   | Browser / platform | `MediaRecorder` | `canvas.captureStream` | Result |
   |---|---|---|---|
@@ -541,13 +551,40 @@ lock + step-skip; the auto-worker does not override it.
 
 ## Rules
 
-16 classic hex birth/survival rules (`B2/S34` … `B1/S245`) plus one **formula
-rule** `WZL` (rule index 16). WZL maps **Watzlawick's five pragmatic axioms of
-communication** onto the hex cell transition: symmetric vs. complementary
-neighbours, relationship-coherence as a birth gate, and cell age as
-"punctuation". The classic B/S rules and the WZL formula rule are implemented
-inline in the app component (`src/App.tsx`). Full derivation:
-[`docs/watzlawick-rule.md`](docs/watzlawick-rule.md).
+Three rule families, all defined in `src/lib/sim-engine.js` (not inline in
+`src/App.tsx`):
+
+- **16 totalistic hex birth/survival rules** — `H:B2/S34` … `H:B1/S245`
+  (`RULES`, `sim-engine.js:114-123`).
+- **4 isotropic non-totalistic (INT) rules** — `INT H:B2o/S2` … `INT H:B2om/S2`
+  (`INT_RULES`, `sim-engine.js:143-148`); at exactly 2 neighbours the *arrangement*
+  (ortho / meta / para) decides.
+- **One Watzlawick "communication band" rule** — `WATZ_RULE = B2,3 / S1-5`
+  (`sim-engine.js:159`). It is **not** a 17th entry of the rule dropdown: it is a
+  separate `watzOnly` toggle that replaces the selected rule's metadata
+  (`src/App.tsx:1167`).
+
+The Watzlawick layer maps Paul Watzlawick's pragmatic axioms of communication onto
+the cell transition. Axioms A1–A4 (silence, relationship-over-content, punctuation
+via cell age, analog "ghost" state) act on the transition; **A5** (symmetric vs.
+complementary — count only same-coloured resp. differently-coloured neighbours) is a
+separate opt-in mode (`sim-engine.js:548-549`, UI toggle `src/App.tsx:3700`).
+
+The canonical axiom registry is
+[`src/lib/watzlawick-axioms.js`](src/lib/watzlawick-axioms.js). `WATZLAWICK_AXIOMS`
+exports all five and types the difference between them: A1-A4 carry
+`control: { kind: "boolean" }`, A5 carries
+`control: { kind: "mode", options: ["off", "sym", "komp"] }`.
+
+The separate `AXIOMS` array in `sim-engine.js:185-190` is the **UI adapter for the
+four Boolean toggles** and holds only a1-a4 on purpose. It is not a second axiom
+list: the registry *derives* those four from it instead of restating their labels,
+so there is one source and not two. `tests/unit/watzlawick-axioms.test.js` goes red
+if the two drift apart, if the exported list is not exactly A1-A5, or if A5 is ever
+remodelled as a fifth Boolean -- that last one is issue #147, closed by commit
+b855a45.
+
+Full derivation: [`docs/watzlawick-rule.md`](docs/watzlawick-rule.md).
 
 ## Getting started
 
@@ -576,14 +613,20 @@ Run one with `npm run test:e2e -- --project=mobile`.
 ```
 index.html         - Vite entry (loads /src/main.jsx)
 src/
-  App.tsx          - main React component (~2200 lines, v31)
+  App.tsx          - main React component (4577 lines, measured 2026-09-12)
   main.jsx         - React root mount
+  worker/          - OffscreenCanvas render worker
+  lib/             - 21 modules; the pure, unit-tested ones are listed below
+  lib/sim-engine.js- rule tables (RULES / INT_RULES / WATZ_RULE), grid sizes, cell caps, step kernel
   lib/sim-core.js  - pure HQST core (applyH, solveCN — Crank-Nicolson); unit-tested
   lib/hex-geom.js  - pure hex cube-coord geometry (oddRToCube/cubeToOddR/hexDist/CUBE_DIRS); unit-tested
   lib/popgraph.js  - pure population-sparkline ring buffer + path scaling (push/reset/buildPaths); unit-tested
   lib/presets.js   - pure pattern-gallery: built-in seeds (verified alive), serialize/validate (fail-closed), localStorage persistence, thumbnail sampling; unit-tested
   lib/snapshot.js  - pure share/download dispatcher + filename/watermark builders (Web Share L2 + <a download>); unit-tested
   lib/recorder.js  - pure recorder state machine + codec negotiation + mockable captureStream/MediaRecorder controller (Feature 2 video); unit-tested
+  (further modules: cell-style, golhex-lab-core, golhex-nine-rules-adapter,
+   hex-render, hexforge-2d, nine-rules, raster-render, savestate, ui-gestures,
+   worker-support, watzlawick-axioms, typography, ConwayIntro.jsx, Splash.jsx)
 tests/
   unit/            - Vitest: sim-core.test.js (CN norm conservation + convergence flag),
                      hex-geom.test.js (hexagon frame == mask, centered-hex number)
