@@ -218,6 +218,64 @@ describe("CSP output guard (#168 review)", () => {
     expect(run.stderr).toMatch(/script scan accounted for 1 of 2 "<script" occurrences/);
   });
 
+  // RUNDE 3 (#168, 2026-09-12, vier Minuten NACH dem Merge). Der Befund trifft die
+  // Bauform, nicht ein Muster: bis fe5e7b2 lag EINE Schema-Positivliste ueber allen
+  // URI-Attributen, ohne Ruecksicht darauf, welche Direktive der Browser anwendet.
+  // Das war in beide Richtungen falsch, und beides ist auf fe5e7b2 nachgemessen.
+  it("rejects an external script origin that script-src does not allow (N1, round 3)", () => {
+    // Der schwerste der vier: ein falsches OK auf main. Die Liste kennt `https`
+    // als harmlos, also galt <script src="https://cdn.example/app.js"> als in
+    // Ordnung -- unter `script-src 'self'` blockt der Browser genau das. Der
+    // Waechter meldete Exit 0 fuer eine Ausgabe, die live nicht startet.
+    const run = runGuard(baselineHtml('<script src="https://cdn.example/app.js"></script>'));
+    expect(run.status).not.toBe(0);
+    expect(run.stderr).toMatch(/blocked resource <script src="https:\/\/cdn\.example\/app\.js">/);
+    expect(run.stderr).toMatch(/is not allowed by script-src 'self'/);
+  });
+
+  it("accepts a data: image because img-src permits it (N1 counter-direction)", () => {
+    // Die andere Richtung desselben Befunds: `data:` stand auf der Sperrliste und
+    // war damit ueberall ein Verstoss -- auch unter `img-src 'self' data:`, wo die
+    // Richtlinie es ausdruecklich erlaubt. Ein Waechter, der Korrektes rot faerbt,
+    // wird abgeschaltet; deshalb steht diese Zelle direkt neben der obigen.
+    const run = runGuard(baselineHtml('<img src="data:image/png;base64,iVBORw0KGgo=" alt="" />'));
+    expect(run.status, run.stderr).toBe(0);
+    expect(run.stdout).toContain("blocked-resources=0");
+  });
+
+  it("still rejects the same data: image when img-src does not permit it", () => {
+    // Die Gegenprobe zur Gegenprobe. Ohne sie waere die Zelle darueber auch dann
+    // gruen, wenn `data:` jetzt ueberall durchginge -- die Lockerung muss an der
+    // RICHTLINIE haengen, nicht am Schema.
+    const strict = HEADERS_SELF_ONLY.replace("img-src 'self' data:;", "img-src 'self';");
+    expect(strict, "the strict fixture did not change").not.toBe(HEADERS_SELF_ONLY);
+    const run = runGuard(baselineHtml('<img src="data:image/png;base64,iVBORw0KGgo=" alt="" />'), strict);
+    expect(run.status).not.toBe(0);
+    expect(run.stderr).toMatch(/is not allowed by img-src 'self'/);
+  });
+
+  it("does not read a scheme-relative URL as a relative one (N1, self-check)", () => {
+    // NICHT aus dem Review. Beim Umbau auf die Direktiven-Pruefung fiel auf, dass
+    // `//cdn.example/x.png` vor dem ersten `/` kein Schema traegt und deshalb als
+    // relative -- also gleich-origin -- URL galt. Sie zeigt aber auf eine fremde
+    // Origin. Derselbe Fehler wie der Hauptbefund, nur ohne Schema; auf fe5e7b2
+    // mit Exit 0 nachgestellt.
+    const run = runGuard(baselineHtml('<img src="//cdn.example/x.png" alt="" />'));
+    expect(run.status).not.toBe(0);
+    expect(run.stderr).toMatch(/\(scheme-relative\)\/\/cdn\.example is not allowed by img-src/);
+  });
+
+  it("keeps judging <link href> by its rel, not by one list for all of them", () => {
+    // Dasselbe Attribut, drei Direktiven: ein Icon faellt unter img-src, ein
+    // Stylesheet unter style-src, ein Manifest unter manifest-src (und mangels
+    // Eintrag unter default-src). Eine einzige Liste ueber alles kann das nicht.
+    const ok = runGuard(baselineHtml('<link rel="icon" href="/icon.svg" />'));
+    expect(ok.status, ok.stderr).toBe(0);
+    const remote = runGuard(baselineHtml('<link rel="stylesheet" href="https://cdn.example/x.css" />'));
+    expect(remote.status).not.toBe(0);
+    expect(remote.stderr).toMatch(/is not allowed by style-src/);
+  });
+
   it("reports how many tags it scanned, so an empty result cannot pass as absence", () => {
     // Ohne diese Zahl waere "null Handler" auch dann gruen, wenn der Tag-Zerleger
     // gar nichts mehr faende -- genau die Klasse, gegen die dieser Waechter baut.

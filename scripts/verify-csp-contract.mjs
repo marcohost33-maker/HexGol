@@ -216,19 +216,173 @@ const URI_ATTRIBUTES = Object.freeze([
   "background", "longdesc", "usemap", "manifest", "icon", "codebase", "xlink:href",
 ]);
 
-// POSITIV-Liste statt Sperrliste. Eine Sperrliste faengt die Schemata, die man
-// schon kennt -- sie hat `livescript:`, `mocha:` und das naechste nicht. Hier gilt
-// umgekehrt: ohne Schema (relative URL) ist harmlos, mit Schema nur diese hier,
-// alles andere verlangt eine benannte Entscheidung statt einer stillen Annahme.
+// POSITIV-Liste statt Sperrliste -- fuer die Attribute, auf die KEINE
+// Fetch-Direktive wirkt (Navigation, Metadaten). Eine Sperrliste faengt die
+// Schemata, die man schon kennt; sie hat `livescript:`, `mocha:` und das naechste
+// nicht. Hier gilt umgekehrt: ohne Schema harmlos, mit Schema nur diese hier.
 const HARMLESS_SCHEMES = Object.freeze(["http", "https", "mailto", "tel", "blob"]);
 
 // Fuer Attribute AUSSERHALB der URI-Liste bleibt es bei einer Sperrliste: dort
 // darf keine strenge Form verlangt werden, aber ein bekannt ausfuehrbares Schema
 // soll trotzdem auffallen.
 const EXECUTABLE_SCHEMES = Object.freeze(["javascript", "vbscript", "livescript", "jscript", "mocha", "data"]);
+
+// Schemata, die eine AUSFUEHRUNGSSTELLE im Markup sind und keine Ressource. Fuer
+// sie gibt es keinen Weg zu gruen ausser den Fund zu entfernen -- keine Direktive
+// kann sie erlauben (ausser 'unsafe-inline', und das ist eine Entscheidung ueber
+// die Richtlinie, nicht ueber den Waechter). `data:` steht bewusst NICHT hier:
+// unter img-src ist es erlaubt und unter script-src verboten, also entscheidet es
+// die Direktive und nicht eine feste Liste.
+const SCRIPTING_SCHEMES = Object.freeze(["javascript", "vbscript", "livescript", "jscript", "mocha"]);
 const SCHEME_HEAD = /^([a-zA-Z][a-zA-Z0-9+.-]*):/;
 
-function classifyUriAttribute(raw) {
+// WELCHE DIREKTIVE REGELT WAS (Review #168, Runde 3, Befund N1).
+//
+// Bis 2026-09-12 lag hier EINE Schema-Positivliste ueber allen URI-Attributen.
+// Das ist die falsche Bauform, und zwar in beide Richtungen -- nachgemessen auf
+// fe5e7b2 am echten dist/:
+//
+//   * `<script src="https://cdn.example/app.js">` galt als harmlos, weil https
+//     auf der Liste steht. Unter `script-src 'self'` blockt der Browser genau das:
+//     der Waechter meldete Exit 0 fuer eine Ausgabe, die live nicht startet.
+//   * `<img src="data:image/png;base64,...">` galt als Verstoss, obwohl die CSP
+//     `img-src 'self' data: blob:` ausdruecklich erlaubt -- Exit 1 auf etwas
+//     Korrektem.
+//   * `<img src="//cdn.example/x.png">` galt als harmlos, weil vor dem ersten `/`
+//     kein Schema steht. Eine schema-relative URL ist aber eine FREMDE Origin;
+//     das ist derselbe Fehler wie der erste, nur ohne Schema. (Nicht aus dem
+//     Review -- Gegenprobe am eigenen Ergebnis.)
+//
+// Eine URL ist also nicht an sich harmlos oder gefaehrlich. Sie ist erlaubt oder
+// verboten RELATIV zu der Direktive, die der Browser auf sie anwendet. Ab hier
+// wird deshalb erst die zustaendige Direktive bestimmt und dann die URL gegen
+// DEREN Quellliste geprueft.
+const RESOURCE_DIRECTIVE = Object.freeze(Object.assign(Object.create(null), {
+  "script:src": "script-src",
+  "img:src": "img-src", "img:srcset": "img-src", "input:src": "img-src",
+  "source:srcset": "img-src", "video:poster": "img-src",
+  "iframe:src": "frame-src", "frame:src": "frame-src",
+  "audio:src": "media-src", "video:src": "media-src",
+  "source:src": "media-src", "track:src": "media-src",
+  "object:data": "object-src", "embed:src": "object-src",
+  "form:action": "form-action", "base:href": "base-uri",
+}));
+
+// Attribute, die unabhaengig vom Tag dieselbe Direktive ziehen.
+const ATTRIBUTE_DIRECTIVE = Object.freeze(Object.assign(Object.create(null), {
+  formaction: "form-action", ping: "connect-src", poster: "img-src",
+  background: "img-src", manifest: "manifest-src", "xlink:href": "img-src",
+}));
+
+// Attribute, auf die KEINE Fetch-Direktive wirkt: sie navigieren oder verweisen,
+// sie laden nichts. Ein `javascript:` darin faellt trotzdem unter script-src --
+// das faengt SCRIPTING_SCHEMES oben, nicht diese Liste.
+const NAVIGATION_ATTRIBUTES = Object.freeze(["href", "cite", "longdesc", "usemap"]);
+
+// <link> haengt am rel-Wert: dasselbe href traegt ein Stylesheet, ein Icon oder
+// ein Manifest -- drei verschiedene Direktiven.
+const LINK_REL_DIRECTIVE = Object.freeze(Object.assign(Object.create(null), {
+  stylesheet: "style-src", icon: "img-src", "shortcut icon": "img-src",
+  "apple-touch-icon": "img-src", "apple-touch-startup-image": "img-src",
+  manifest: "manifest-src", modulepreload: "script-src",
+  preconnect: null, "dns-prefetch": null, canonical: null, alternate: null,
+  author: null, license: null, next: null, prev: null,
+}));
+const PRELOAD_AS_DIRECTIVE = Object.freeze(Object.assign(Object.create(null), {
+  script: "script-src", style: "style-src", image: "img-src", font: "font-src",
+  fetch: "connect-src", track: "media-src", audio: "media-src", video: "media-src",
+  worker: "worker-src", document: "frame-src",
+}));
+
+// Rueckfall-Kette. Eine fehlende Fetch-Direktive erbt von default-src; worker-src
+// von script-src, frame-src von child-src. `form-action` und `base-uri` erben
+// NICHT -- fehlen sie, ist nichts eingeschraenkt.
+const DIRECTIVE_FALLBACK = Object.freeze(Object.assign(Object.create(null), {
+  "worker-src": ["script-src", "default-src"],
+  "frame-src": ["child-src", "default-src"],
+  "form-action": [], "base-uri": [],
+}));
+
+function governingDirective(tag, attrName, attributes) {
+  if (tag === "link" && attrName === "href") {
+    const rel = (attributes.find((a) => a.name === "rel")?.value ?? "").trim().toLowerCase();
+    if (rel === "preload" || rel === "prefetch") {
+      const as = (attributes.find((a) => a.name === "as")?.value ?? "").trim().toLowerCase();
+      // Unbekanntes `as` -> fail-closed auf default-src statt stiller Freigabe.
+      return PRELOAD_AS_DIRECTIVE[as] ?? "default-src";
+    }
+    if (rel in LINK_REL_DIRECTIVE) return LINK_REL_DIRECTIVE[rel];
+    return "default-src";
+  }
+  const byTag = RESOURCE_DIRECTIVE[`${tag}:${attrName}`];
+  if (byTag !== undefined) return byTag;
+  const byAttr = ATTRIBUTE_DIRECTIVE[attrName];
+  if (byAttr !== undefined) return byAttr;
+  if (NAVIGATION_ATTRIBUTES.includes(attrName)) return null;
+  return "default-src";
+}
+
+function effectiveDirective(name) {
+  for (const candidate of [name, ...(DIRECTIVE_FALLBACK[name] ?? ["default-src"])]) {
+    const tokens = directive(candidate);
+    if (tokens) return { name: candidate, tokens };
+  }
+  return null;
+}
+
+// Die Gestalt einer URL, soweit eine Quellliste sie braucht: relativ (und damit
+// gleiche Origin), Netzwerk-URL mit Host, oder undurchsichtig (data:, mailto:).
+// `//host/x` ist KEINE relative URL -- das ist die schema-relative Form und
+// zeigt auf eine fremde Origin.
+function urlShape(value) {
+  if (value.startsWith("//")) {
+    const authority = value.slice(2).split(/[/?#]/)[0];
+    return { kind: "network", scheme: null, host: authority.split(":")[0].toLowerCase() };
+  }
+  const head = value.split(/[/?#]/)[0];
+  const scheme = head.match(SCHEME_HEAD);
+  if (!scheme) return { kind: "relative", scheme: null, host: null };
+  const name = scheme[1].toLowerCase();
+  const rest = value.slice(scheme[0].length);
+  if (rest.startsWith("//")) {
+    const authority = rest.slice(2).split(/[/?#]/)[0];
+    return { kind: "network", scheme: name, host: authority.split(":")[0].toLowerCase() };
+  }
+  return { kind: "opaque", scheme: name, host: null };
+}
+
+// Eine einzelne Quell-Angabe gegen eine URL. Was diese Funktion nicht versteht,
+// erlaubt sie NICHT -- eine unverstandene Angabe ist keine Erlaubnis.
+//
+// `'self'` gilt hier nur fuer relative URLs. Die Auslieferungs-Origin steht
+// nirgends im Buendel, also kann der Waechter fuer eine absolute URL nicht
+// BEWEISEN, dass sie dieselbe ist. Fail-closed: er sagt es, statt zu raten.
+function sourceAllows(token, shape) {
+  const lower = token.trim().toLowerCase();
+  if (!lower) return false;
+  if (lower === "'none'") return false;
+  if (lower === "'self'") return shape.kind === "relative";
+  if (lower.startsWith("'")) return false; // nonce-/sha-/unsafe-* betreffen keine URL
+  if (lower === "*") return shape.kind === "network";
+  const schemeOnly = lower.match(/^([a-z][a-z0-9+.-]*):$/);
+  if (schemeOnly) return shape.scheme === schemeOnly[1];
+  const hostSource = lower.match(/^(?:([a-z][a-z0-9+.-]*):\/\/)?(\*\.[^/:*]+|\*|[^/:*]+)(?::(?:\d+|\*))?(?:\/.*)?$/);
+  if (!hostSource) return false;
+  if (shape.kind !== "network" || !shape.host) return false;
+  if (hostSource[1] && shape.scheme && hostSource[1] !== shape.scheme) return false;
+  const pattern = hostSource[2];
+  if (pattern === "*") return true;
+  if (pattern.startsWith("*.")) return shape.host.endsWith(pattern.slice(1));
+  return shape.host === pattern;
+}
+
+function describeShape(shape) {
+  if (shape.kind === "relative") return "the same-origin URL";
+  if (shape.kind === "network") return `origin ${shape.scheme ? `${shape.scheme}:` : "(scheme-relative)"}//${shape.host}`;
+  return `scheme "${shape.scheme}:"`;
+}
+
+function classifyUriAttribute(raw, tag, attrName, attributes) {
   const { decoded, unresolved } = decodeCharacterReferences(raw);
   const value = normalizeUriValue(decoded);
   // Alles vor dem ersten /, ? oder # -- nur dort kann noch ein Schema stehen.
@@ -239,11 +393,27 @@ function classifyUriAttribute(raw) {
     // dasselbe `&` ein gewoehnliches Argument-Trennzeichen und harmlos.
     return { verdict: "undecided", detail: "carries a character reference this guard cannot resolve" };
   }
-  const scheme = head.match(SCHEME_HEAD);
-  if (!scheme) return { verdict: "harmless", detail: "" };
-  const name = scheme[1].toLowerCase();
-  if (HARMLESS_SCHEMES.includes(name)) return { verdict: "harmless", detail: "" };
-  return { verdict: "violation", detail: `resolves to scheme "${name}:"` };
+  const shape = urlShape(value);
+  if (shape.scheme && SCRIPTING_SCHEMES.includes(shape.scheme)) {
+    return { verdict: "violation", detail: `resolves to scheme "${shape.scheme}:"` };
+  }
+  const governing = governingDirective(tag, attrName, attributes);
+  if (governing === null) {
+    // Keine Fetch-Direktive zustaendig. Dann bleibt es bei der Positivliste:
+    // ohne Schema harmlos, mit Schema nur die bekannten.
+    if (!shape.scheme && shape.kind !== "network") return { verdict: "harmless", detail: "" };
+    if (shape.scheme && HARMLESS_SCHEMES.includes(shape.scheme)) return { verdict: "harmless", detail: "" };
+    if (shape.kind === "network" && !shape.scheme) return { verdict: "harmless", detail: "" };
+    return { verdict: "violation", detail: `resolves to scheme "${shape.scheme}:"` };
+  }
+  const applicable = effectiveDirective(governing);
+  // Die Richtlinie regelt diese Art gar nicht -- dann schraenkt sie auch nichts ein.
+  if (!applicable) return { verdict: "harmless", detail: "" };
+  if (applicable.tokens.some((token) => sourceAllows(token, shape))) return { verdict: "harmless", detail: "" };
+  return {
+    verdict: "blocked",
+    detail: `${describeShape(shape)} is not allowed by ${applicable.name} ${applicable.tokens.join(" ")}`,
+  };
 }
 
 function executableSchemeIn(raw) {
@@ -277,6 +447,25 @@ function readRequired(path) {
     return null;
   }
   return readFileSync(path, "utf8");
+}
+
+// --- 0. Die ausgelieferte Richtlinie lesen -----------------------------------
+// Vorgezogen (Review #168, Runde 3, Befund N1). Punkt 3 unten kann eine
+// Ressourcen-URL ueberhaupt nur beurteilen, wenn er die Richtlinie kennt, die der
+// Browser auf sie anwendet -- "harmlos" ist keine Eigenschaft eines Schemas,
+// sondern eine Beziehung zwischen Ressource und zustaendiger Direktive.
+const headers = readRequired(resolve(dist, "_headers")) ?? "";
+const cspLine = headers.split("\n").map((l) => l.trim()).find((l) => l.toLowerCase().startsWith("content-security-policy:"));
+if (!cspLine) fail("dist/_headers carries no Content-Security-Policy line");
+
+function directive(name) {
+  if (!cspLine) return null;
+  const policy = cspLine.slice(cspLine.indexOf(":") + 1);
+  for (const part of policy.split(";")) {
+    const tokens = part.trim().split(/\s+/).filter(Boolean);
+    if (tokens.length && tokens[0].toLowerCase() === name) return tokens.slice(1);
+  }
+  return null;
 }
 
 // --- 1. Keine fremden Schrift-Origins in der Ausgabe -------------------------
@@ -407,18 +596,26 @@ const hasInlineStyleBlock = /<style\b[^>]*>[\s\S]*?\S[\s\S]*?<\/style\s*>/i.test
 // ihn in die externe Bundle-Datei oder entscheidet die Richtlinie bewusst neu.
 const scannedTags = markupTags(html);
 const inlineHandlers = [];
+const blockedResources = [];
 for (const { tag, attrs } of scannedTags) {
-  for (const { name, value } of parseAttributes(attrs)) {
+  const attributes = parseAttributes(attrs);
+  for (const { name, value } of attributes) {
     // Attribut-NAMEN werden vom Parser nicht dekodiert -- hier genuegt der Rohtext.
     if (INLINE_HANDLER_NAME.test(name)) {
       inlineHandlers.push(`<${tag} ${name}=...>`);
       continue;
     }
     // Attribut-WERTE dagegen schon. Deshalb wird ab hier der dekodierte und
-    // normalisierte Wert eingestuft, nicht der Rohtext (Befund N1).
+    // normalisierte Wert eingestuft, nicht der Rohtext (Runde 2, Befund N1).
     if (URI_ATTRIBUTES.includes(name)) {
-      const { verdict, detail } = classifyUriAttribute(value);
-      if (verdict !== "harmless") inlineHandlers.push(`<${tag} ${name}=...> ${detail}`);
+      const { verdict, detail } = classifyUriAttribute(value, tag, name, attributes);
+      // Zwei Klassen, zwei Meldungen -- und das ist kein Stil. Eine
+      // Ausfuehrungsstelle im Markup gehoert ins Buendel; eine Ressource, die
+      // ihre Direktive nicht erlaubt, ist entweder die falsche Ressource oder
+      // die falsche Richtlinie. Wer beides gleich meldet, schickt den Leser in
+      // die falsche Reparatur.
+      if (verdict === "blocked") blockedResources.push(`<${tag} ${name}="${value}"> ${detail}`);
+      else if (verdict !== "harmless") inlineHandlers.push(`<${tag} ${name}=...> ${detail}`);
       continue;
     }
     const scheme = executableSchemeIn(value);
@@ -433,21 +630,11 @@ if (html.trim().length > 0 && scannedTags.length === 0) {
 for (const hit of inlineHandlers) {
   fail(`inline script source ${hit} in dist/index.html -- script-src applies to it; move it into the bundle instead of widening the policy`);
 }
+for (const hit of blockedResources) {
+  fail(`blocked resource ${hit} in dist/index.html -- the browser will refuse to load it; ship it from the bundle or decide the policy change by name`);
+}
 
 // --- 4. Passt die ausgelieferte CSP zur Ausgabe? -----------------------------
-const headers = readRequired(resolve(dist, "_headers")) ?? "";
-const cspLine = headers.split("\n").map((l) => l.trim()).find((l) => l.toLowerCase().startsWith("content-security-policy:"));
-if (!cspLine) fail("dist/_headers carries no Content-Security-Policy line");
-
-function directive(name) {
-  if (!cspLine) return null;
-  const policy = cspLine.slice(cspLine.indexOf(":") + 1);
-  for (const part of policy.split(";")) {
-    const tokens = part.trim().split(/\s+/).filter(Boolean);
-    if (tokens.length && tokens[0].toLowerCase() === name) return tokens.slice(1);
-  }
-  return null;
-}
 
 const fontSrc = directive("font-src");
 if (!fontSrc) fail("CSP has no font-src directive -- it must stay explicitly self-only");
@@ -495,6 +682,7 @@ console.log(
   `[csp-contract] OK text-files=${scannedTextFiles} remote-font-refs=0 ` +
   `script-elements=${scriptElements.length}/${rawScriptOpeners} ` +
   `executable-inline-scripts=${executableInline.length} markup-tags=${scannedTags.length} ` +
-  `inline-script-sources=${inlineHandlers.length} inline-style-block=${hasInlineStyleBlock} ` +
+  `inline-script-sources=${inlineHandlers.length} blocked-resources=${blockedResources.length} ` +
+  `inline-style-block=${hasInlineStyleBlock} ` +
   `script-src-unsafe-inline=${(directive("script-src") ?? []).includes("'unsafe-inline'")}`,
 );
