@@ -34,6 +34,7 @@
 //
 // Punkt 3 ist bewusst in BEIDE Richtungen formuliert. Ein Waechter, der nur "zu
 // eng" faengt, haette den Ist-Befund aus #163 nicht gefunden.
+import { strict as assert } from "node:assert";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { resolve, relative, dirname, extname, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -180,7 +181,11 @@ if (!styleSrc) {
 
 if (failures.length > 0) {
   for (const message of failures) console.error(`[csp-contract] FAIL: ${message}`);
-  process.exit(1);
+  // `assert.fail` statt `process.exit(1)`: der Abbruch traegt damit die
+  // Standard-Marke AssertionError. Das ist nicht Kosmetik -- ein roter Exit-Code
+  // allein sagt nicht, ob der Waechter GEURTEILT hat oder unterwegs abgestuerzt
+  // ist, und genau diese beiden Faelle muss eine Umkehrprobe unterscheiden koennen.
+  assert.fail(`[csp-contract] ${failures.length} violation(s) -- see the lines above`);
 }
 
 console.log(
