@@ -613,7 +613,7 @@ Run one with `npm run test:e2e -- --project=mobile`.
 ```
 index.html         - Vite entry (loads /src/main.jsx)
 src/
-  App.tsx          - main React component (4574 lines, measured 2026-08-26)
+  App.tsx          - main React component (4577 lines, measured 2026-09-12)
   main.jsx         - React root mount
   worker/          - OffscreenCanvas render worker
   lib/             - 21 modules; the pure, unit-tested ones are listed below
