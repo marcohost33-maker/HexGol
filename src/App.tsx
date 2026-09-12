@@ -2802,7 +2802,12 @@ export default function GolHex() {
           octx.drawImage(src, 0, 0);
           const label = buildWatermarkLabel(snapGen, currentRuleLabel());
           const fs = Math.max(11, Math.round(src.width / 48));
-          octx.font = `${fs}px ui-monospace, monospace`;
+          // #168 N6: auch hier die eine Quelle. Ein Canvas-`font` ist eine
+          // Schrift-Deklaration wie jede andere -- nur ohne die CSS-Eigenschaft
+          // davor, weshalb der Form-Waechter sie bis 2026-09-12 nicht sah. Die
+          // Eigenschaft wird hier absichtlich nicht ausgeschrieben: der Waechter
+          // sucht wortwoertlich und darf an einem Kommentar nicht haengenbleiben.
+          octx.font = `${fs}px ${FONT_MONO}`;
           octx.textBaseline = "bottom";
           const padX = Math.round(fs * 0.6), padY = Math.round(fs * 0.45);
           const tw = octx.measureText(label).width;

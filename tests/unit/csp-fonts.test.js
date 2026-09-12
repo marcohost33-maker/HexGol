@@ -61,6 +61,19 @@ const FONT_TOKEN = "(?:var\\(--ghx-font-(?:sans|mono)\\)|\\$\\{\\s*(?:FONT_SANS|
 const ALLOWED_CSS_VALUE = new RegExp("^" + FONT_TOKEN + "\\s*(?:[;}'\"`]|$)");
 const ALLOWED_JS_VALUE = new RegExp("^" + FONT_TOKEN + "\\s*(?:[,;}]|$)");
 
+// Die DRITTE Schreibweise (Review #168, Runde 2, Befund N6). Ein Canvas traegt
+// seinen Schriftstapel in `ctx.font`, im CSS-`font`-Kurzformat und ohne ein
+// `font-family:` davor -- die beiden Muster oben sehen davon nichts. In
+// src/App.tsx stand deshalb bis 2026-09-12 ein dritter Stapel
+// (`${fs}px ui-monospace, monospace`), waehrend beide Waechter gruen waren und
+// der Text "eine Quelle" behauptete.
+//
+// Erlaubt ist nur eine Vorlagen-Zeichenkette, deren Familienteil ein geteiltes
+// Token IST und die davor weder Komma noch Anfuehrungszeichen traegt -- damit
+// faellt `${fs}px Arial, ${FONT_MONO}` genauso wie eine reine Zeichenkette.
+const CANVAS_FONT_DECLARATION = /\.font\s*=\s*([^\n]*)/g;
+const ALLOWED_CANVAS_FONT = new RegExp("^`[^`,\"']*\\$\\{\\s*(?:FONT_SANS|FONT_MONO|DISP|MONO)\\s*\\}`\\s*[;,)]?\\s*$");
+
 const BINARY_EXTENSIONS = Object.freeze([".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".woff", ".woff2", ".ttf", ".otf"]);
 
 function walkFiles(path) {
@@ -86,13 +99,24 @@ function productionTextFiles() {
 // Eine Sammelstelle fuer alle Schrift-Deklarationen. Vorher lag die Schleife in
 // der Verstoss-Zelle; damit konnte die Deckungs-Zelle nur eine Gesamtzahl sehen
 // und nicht, WO die Treffer herkamen -- genau die Blindheit, die N5 benannt hat.
+// Drei Schreibweisen, drei Grammatiken -- die Zuordnung steht an EINER Stelle,
+// damit eine vierte nicht still in den CSS-Zweig faellt.
+function allowedFormFor(spelling) {
+  if (spelling === "fontFamily") return ALLOWED_JS_VALUE;
+  if (spelling === "canvas.font") return ALLOWED_CANVAS_FONT;
+  return ALLOWED_CSS_VALUE;
+}
+
 function fontDeclarations() {
   const out = [];
   for (const { rel, text } of productionTextFiles()) {
     const lines = text.split("\n");
     for (let i = 0; i < lines.length; i += 1) {
       for (const match of lines[i].matchAll(FONT_DECLARATION)) {
-        out.push({ rel, text: "", spelling: match[1], value: match[2].trim(), line: i + 1 });
+        out.push({ rel, spelling: match[1], value: match[2].trim(), line: i + 1 });
+      }
+      for (const match of lines[i].matchAll(CANVAS_FONT_DECLARATION)) {
+        out.push({ rel, spelling: "canvas.font", value: match[1].trim(), line: i + 1 });
       }
     }
   }
@@ -177,10 +201,9 @@ describe("system font stacks are the single source (#163)", () => {
   // Formverbot faengt auch den vierten, den noch niemand eingesetzt hat.
   it("lets no production source declare its own font stack (#168 T1)", () => {
     const violations = [];
-    for (const { rel, text, spelling, value, line } of fontDeclarations()) {
-      const allowed = spelling === "fontFamily" ? ALLOWED_JS_VALUE : ALLOWED_CSS_VALUE;
-      if (!allowed.test(value)) violations.push(`${rel}:${line} -> ${value.slice(0, 60)}`);
-      void text;
+    for (const { rel, spelling, value, line } of fontDeclarations()) {
+      const allowed = allowedFormFor(spelling);
+      if (!allowed.test(value)) violations.push(`${rel}:${line} (${spelling}) -> ${value.slice(0, 60)}`);
     }
     expect(violations).toEqual([]);
   });
@@ -199,9 +222,14 @@ describe("system font stacks are the single source (#163)", () => {
       ["fontFamily", `MONO ?? "Arial"`],
       ["fontFamily", `FONT_SANS.replace("system-ui", "Space Grotesk")`],
       ["font-family", "MONO, monospace;"],
+      // N6: die Canvas-Form. Die ersten beiden sind die Stelle, die in App.tsx
+      // wirklich stand; die dritte schiebt einen Namen VOR das geteilte Token.
+      ["canvas.font", "`${fs}px ui-monospace, monospace`;"],
+      ["canvas.font", `"12px monospace";`],
+      ["canvas.font", "`${fs}px Arial, ${FONT_MONO}`;"],
     ];
     for (const [spelling, value] of rejected) {
-      const allowed = spelling === "fontFamily" ? ALLOWED_JS_VALUE : ALLOWED_CSS_VALUE;
+      const allowed = allowedFormFor(spelling);
       expect(allowed.test(value), `accepted a second stack: ${spelling}: ${value}`).toBe(false);
     }
   });
@@ -218,9 +246,10 @@ describe("system font stacks are the single source (#163)", () => {
       ["fontFamily", "MONO,"],
       ["fontFamily", "FONT_SANS,"],
       ["fontFamily", "MONO };"],
+      ["canvas.font", "`${fs}px ${FONT_MONO}`;"],
     ];
     for (const [spelling, value] of accepted) {
-      const allowed = spelling === "fontFamily" ? ALLOWED_JS_VALUE : ALLOWED_CSS_VALUE;
+      const allowed = allowedFormFor(spelling);
       expect(allowed.test(value), `rejected a form the tree uses: ${spelling}: ${value}`).toBe(true);
     }
   });
@@ -246,6 +275,9 @@ describe("system font stacks are the single source (#163)", () => {
 
     expect(spellings, "CSS spelling font-family: no longer matches").toContain("font-family");
     expect(spellings, "JS spelling fontFamily: no longer matches").toContain("fontFamily");
+    // N6: die Canvas-Form muss ebenfalls Treffer liefern, sonst ist sie stumm
+    // hinzugefuegt und faellt bei der naechsten Umbenennung lautlos wieder aus.
+    expect(spellings, "canvas ctx.font is no longer scanned").toContain("canvas.font");
     expect(files, "index.html contributes no declaration -- the walk misses the HTML entry").toContain("index.html");
     expect(
       withoutApp.size,
