@@ -6,7 +6,7 @@
   "description": "GolHex - Hexagonal Game of Life with real-valued physics + unitary HQST quantum mode",
   "scripts": {
     "dev": "vite",
-    "build": "vite build && node scripts/verify-pwa-build.mjs && node scripts/verify-csp-contract.mjs",
+    "build": "vite build && node scripts/verify-pwa-build.mjs && node scripts/verify-csp-dom-contract.mjs && node scripts/verify-csp-contract.mjs",
     "preview": "vite preview --port 4173",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
