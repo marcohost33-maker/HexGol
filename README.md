@@ -562,7 +562,7 @@ Three rule families, all defined in `src/lib/sim-engine.js` (not inline in
 - **One Watzlawick "communication band" rule** — `WATZ_RULE = B2,3 / S1-5`
   (`sim-engine.js:159`). It is **not** a 17th entry of the rule dropdown: it is a
   separate `watzOnly` toggle that replaces the selected rule's metadata
-  (`src/App.tsx:1165`).
+  (`src/App.tsx:1167`).
 
 The Watzlawick layer maps Paul Watzlawick's pragmatic axioms of communication onto
 the cell transition. Axioms A1–A4 (silence, relationship-over-content, punctuation
@@ -570,11 +570,19 @@ via cell age, analog "ghost" state) act on the transition; **A5** (symmetric vs.
 complementary — count only same-coloured resp. differently-coloured neighbours) is a
 separate opt-in mode (`sim-engine.js:548-549`, UI toggle `src/App.tsx:3700`).
 
-> **Known drift (open, issue #147):** the `AXIOMS` metadata array that feeds the UI
-> list contains only **four** entries, a1–a4 (`sim-engine.js:185-190`), while
-> `docs/watzlawick-rule.md` specifies A1–A5. The A5 *mechanism* exists; the exported
-> axiom *list* does not name it. Until that is reconciled, do not read this section as
-> "the exported axiom list covers all five axioms".
+The canonical axiom registry is
+[`src/lib/watzlawick-axioms.js`](src/lib/watzlawick-axioms.js). `WATZLAWICK_AXIOMS`
+exports all five and types the difference between them: A1-A4 carry
+`control: { kind: "boolean" }`, A5 carries
+`control: { kind: "mode", options: ["off", "sym", "komp"] }`.
+
+The separate `AXIOMS` array in `sim-engine.js:185-190` is the **UI adapter for the
+four Boolean toggles** and holds only a1-a4 on purpose. It is not a second axiom
+list: the registry *derives* those four from it instead of restating their labels,
+so there is one source and not two. `tests/unit/watzlawick-axioms.test.js` goes red
+if the two drift apart, if the exported list is not exactly A1-A5, or if A5 is ever
+remodelled as a fifth Boolean -- that last one is issue #147, closed by commit
+b855a45.
 
 Full derivation: [`docs/watzlawick-rule.md`](docs/watzlawick-rule.md).
 
@@ -608,7 +616,7 @@ src/
   App.tsx          - main React component (4574 lines, measured 2026-08-26)
   main.jsx         - React root mount
   worker/          - OffscreenCanvas render worker
-  lib/             - 19 modules; the pure, unit-tested ones are listed below
+  lib/             - 21 modules; the pure, unit-tested ones are listed below
   lib/sim-engine.js- rule tables (RULES / INT_RULES / WATZ_RULE), grid sizes, cell caps, step kernel
   lib/sim-core.js  - pure HQST core (applyH, solveCN — Crank-Nicolson); unit-tested
   lib/hex-geom.js  - pure hex cube-coord geometry (oddRToCube/cubeToOddR/hexDist/CUBE_DIRS); unit-tested
@@ -618,7 +626,7 @@ src/
   lib/recorder.js  - pure recorder state machine + codec negotiation + mockable captureStream/MediaRecorder controller (Feature 2 video); unit-tested
   (further modules: cell-style, golhex-lab-core, golhex-nine-rules-adapter,
    hex-render, hexforge-2d, nine-rules, raster-render, savestate, ui-gestures,
-   worker-support, ConwayIntro.jsx, Splash.jsx)
+   worker-support, watzlawick-axioms, typography, ConwayIntro.jsx, Splash.jsx)
 tests/
   unit/            - Vitest: sim-core.test.js (CN norm conservation + convergence flag),
                      hex-geom.test.js (hexagon frame == mask, centered-hex number)
