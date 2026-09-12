@@ -14,6 +14,18 @@
 // eigenen Ergebnis: die Haertung gegen T4 war gruen und liess `javascript:`-URIs
 // weiter durch -- dieselbe Klasse, eine Ebene hoeher.
 //
+// RUNDE 2 (#168, 2026-09-12) brachte dieselbe Klasse ein drittes und viertes Mal:
+//
+//   N2  <script>window.__boot=1 OHNE </script> lief mit Exit 0 durch. Der Parser
+//       nimmt den Rest der Datei als Rumpf und fuehrt ihn aus; die Paar-Suche des
+//       Waechters konnte das unpaarige Auf-Tag prinzipiell nicht sehen.
+//   N1  href="&#106;avascript:..." lief mit Exit 0 durch. Der Parser dekodiert die
+//       Zeichenreferenz VOR der Navigation, der Waechter verglich den Rohtext.
+//
+// Beide Male war nicht das Muster zu eng, sondern die Bauform falsch. Deshalb
+// pruefen die Zellen unten nicht Varianten derselben Schreibweise, sondern die
+// beiden Stellen, an denen der Waechter dem Parser folgen muss.
+//
 // Geprueft wird hier der Waechter so, WIE ER LAEUFT -- als Prozess, mit echtem
 // Exit-Code -- und nicht eine herausgeloeste Hilfsfunktion. Das Skript loest sein
 // dist/ ueber die EIGENE Position auf (`resolve(here, "..")`), also genuegt eine
@@ -79,6 +91,10 @@ describe("CSP output guard (#168 review)", () => {
     expect(run.status).toBe(0);
     expect(run.stdout).toContain("executable-inline-scripts=0");
     expect(run.stdout).toContain("inline-script-sources=0");
+    // Runde 2: der Script-Zerleger muss JEDES `<script` verbucht haben. Steht hier
+    // 0/1 oder 1/2, hat er weggesehen -- und "null Inline-Scripts" waere dann keine
+    // Aussage ueber die Ausgabe, sondern eine ueber den kaputten Zerleger.
+    expect(run.stdout).toContain("script-elements=1/1");
   });
 
   it("rejects an inline bootstrap whose only src-like attribute is data-src (T2)", () => {
@@ -111,6 +127,31 @@ describe("CSP output guard (#168 review)", () => {
     const run = runGuard(baselineHtml('<script src="/assets/late.js"></script>'));
     expect(run.status).toBe(0);
     expect(run.stdout).toContain("executable-inline-scripts=0");
+  });
+
+  it("rejects an unterminated inline script at the end of the file (N2)", () => {
+    // Der schwerste Befund der zweiten Runde. Kein Attribut, sondern ein
+    // ausfuehrbarer RUMPF: alles ab dem Auf-Tag bis EOF laeuft im Browser.
+    const run = runGuard(`${baselineHtml()}<script>window.__boot=1`);
+    expect(run.status).not.toBe(0);
+    expect(run.stderr).toMatch(/unterminated <script> in dist\/index\.html/);
+  });
+
+  it("rejects an unterminated inline script in the middle of the document (N2)", () => {
+    // Die Stellung ist egal -- wer nur das Dateiende prueft, hat die Klasse nicht
+    // verstanden, sondern nur den vorgefuehrten Fall.
+    const run = runGuard(baselineHtml("<script>window.__boot=1"));
+    expect(run.status).not.toBe(0);
+    expect(run.stderr).toMatch(/unterminated <script> in dist\/index\.html/);
+  });
+
+  it("treats a half-written opening script tag as undecided, not as absent (N2)", () => {
+    // `<script src=x` ohne schliessende spitze Klammer passt auf kein Auf-Tag-Muster.
+    // Genau dann darf der Waechter nicht schweigen: was er nicht eindeutig als
+    // Element erkennt, ist ein Verstoss und keine Abwesenheit.
+    const run = runGuard(`${baselineHtml()}<script src=x`);
+    expect(run.status).not.toBe(0);
+    expect(run.stderr).toMatch(/script scan accounted for 1 of 2 "<script" occurrences/);
   });
 
   it("reports how many tags it scanned, so an empty result cannot pass as absence", () => {
