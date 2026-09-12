@@ -3,14 +3,17 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-// Runtime half of issue #176.
+// Runtime layer of issue #176.
 //
-// `vite preview` does not apply Cloudflare Pages' `public/_headers`, so the normal
-// e2e suite previously exercised the production bundle without the production CSP.
-// This test injects the exact proposed production CSP into the top-level document
-// response and lets Chromium enforce it. It is deliberately an integration oracle,
-// not a completeness proof: it covers the startup/navigation path exercised below;
-// the static contract/parser layer remains separately necessary.
+// The whole Playwright suite is now served by scripts/serve-dist-with-headers.mjs,
+// which applies the repository's production `/*` headers to every dist response.
+// This spec adds two security-specific witnesses on top of the normal functional
+// e2e suite: document CSP violations and a successfully activated service worker.
+// Existing worker specs therefore run behind the same production-header server.
+//
+// This remains an integration oracle, not a completeness proof: only executed
+// application paths can emit runtime evidence. Static parser/policy layers remain
+// separately necessary.
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, "../..");
@@ -20,16 +23,11 @@ const cspLine = headersText
   .map((line) => line.trim())
   .find((line) => line.toLowerCase().startsWith("content-security-policy:"));
 
-if (!cspLine) {
-  throw new Error("public/_headers has no Content-Security-Policy line");
-}
-
+if (!cspLine) throw new Error("public/_headers has no Content-Security-Policy line");
 const productionCsp = cspLine.slice(cspLine.indexOf(":") + 1).trim();
 
 test.describe("production CSP runtime oracle (#176)", () => {
-  test("Chromium reports no CSP violation on the production startup path", async ({ page }) => {
-    // Register before navigation. The listener is installed in every new document
-    // before application scripts run, so startup-time violations are retained.
+  test("Chromium starts the app and service worker under the production wildcard headers", async ({ page }) => {
     await page.addInitScript(() => {
       const globalWithEvidence = globalThis as typeof globalThis & {
         __golhexCspViolations?: Array<Record<string, unknown>>;
@@ -49,32 +47,45 @@ test.describe("production CSP runtime oracle (#176)", () => {
       });
     });
 
-    // Apply the checked-in production policy to the real preview document.
-    // `route.fetch()` obtains the Vite response; `route.fulfill()` preserves it
-    // while adding the header Chromium will actually enforce.
-    await page.route("**/*", async (route) => {
-      const request = route.request();
-      if (request.resourceType() !== "document") {
-        await route.continue();
-        return;
-      }
-      const response = await route.fetch();
-      await route.fulfill({
-        response,
-        headers: {
-          ...response.headers(),
-          "content-security-policy": productionCsp,
-        },
-      });
-    });
-
     const response = await page.goto("/", { waitUntil: "networkidle" });
     expect(response?.ok(), "production document did not load successfully").toBe(true);
+    expect(response?.headers()["content-security-policy"]).toBe(productionCsp);
 
-    // Prove this is not merely "no report because nothing ran". The production
-    // application must have mounted while the policy was active.
+    // Counter-witness against a vacuous "zero violations" result: the app really
+    // mounted under the policy.
     await expect(page.locator("#root")).toBeAttached();
     await expect(page.locator("#root")).not.toBeEmpty();
+
+    const sw = await page.evaluate(async () => {
+      if (!("serviceWorker" in navigator)) return { supported: false };
+      const result = await Promise.race([
+        navigator.serviceWorker.ready.then((registration) => ({
+          supported: true,
+          active: Boolean(registration.active),
+          scriptURL: registration.active?.scriptURL ?? "",
+          state: registration.active?.state ?? "",
+        })),
+        new Promise<{ supported: true; timeout: true }>((resolveTimeout) =>
+          setTimeout(() => resolveTimeout({ supported: true, timeout: true }), 10_000),
+        ),
+      ]);
+      return result;
+    });
+
+    expect(sw.supported).toBe(true);
+    expect("timeout" in sw ? sw.timeout : false, "service worker did not become ready under production CSP").toBe(false);
+    if (!("timeout" in sw)) {
+      expect(sw.active).toBe(true);
+      expect(sw.state).toBe("activated");
+      expect(sw.scriptURL).toMatch(/\/sw\.js$/);
+    }
+
+    // The same wildcard header must be present on the actual worker script bytes.
+    // The successful registration above is the browser-side enforcement witness;
+    // this request is the transport witness that the worker resource carries CSP.
+    const swResponse = await page.request.get("/sw.js");
+    expect(swResponse.ok()).toBe(true);
+    expect(swResponse.headers()["content-security-policy"]).toBe(productionCsp);
 
     const violations = await page.evaluate(() => {
       const globalWithEvidence = globalThis as typeof globalThis & {
@@ -85,7 +96,7 @@ test.describe("production CSP runtime oracle (#176)", () => {
 
     expect(
       violations,
-      `Chromium emitted CSP violations under production policy: ${JSON.stringify(violations)}`,
+      `Chromium emitted document CSP violations under production policy: ${JSON.stringify(violations)}`,
     ).toEqual([]);
   });
 });
