@@ -8,9 +8,19 @@
   # Kein fremder Rahmen: die App ist eine Vollbild-Leinwand mit Zeichen-Gesten --
   # in einem fremden iframe waeren Klicks fuer den Nutzer nicht mehr zuzuordnen.
   X-Frame-Options: DENY
-  Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; worker-src 'self' blob:; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'; frame-ancestors 'none'
-  # 'unsafe-inline' fuer script-src ist noetig, solange Vite den Bootstrap inline
-  # legt; 'self' allein wuerde die App brechen. Bewusst benannt statt verschwiegen.
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; worker-src 'self' blob:; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'; frame-ancestors 'none'
+  # script-src traegt KEIN 'unsafe-inline' mehr (#163). Hier stand bis 2026-09-12,
+  # das sei noetig, "solange Vite den Bootstrap inline legt". Das war eine Annahme,
+  # keine Messung: das erzeugte dist/index.html enthaelt genau ein <script>, und das
+  # ist ein externes `<script type="module" crossorigin src="/assets/index-*.js">`
+  # ohne Rumpf. Kein Inline-Skript, also auch keine Erlaubnis dafuer.
+  # Nachgeprueft wird das bei JEDEM Build: `npm run build` faehrt
+  # scripts/verify-csp-contract.mjs, und der Waechter schlaegt in BEIDE Richtungen
+  # fehl -- wenn die Ausgabe ein Inline-Skript bekommt (Richtlinie zu eng, App
+  # braeche live) ebenso wie wenn die Erlaubnis ohne Inline-Skript wiederkehrt.
+  # style-src behaelt 'unsafe-inline': React setzt style-Attribute und index.html
+  # traegt einen Inline-<style>-Block. Das ist eine eigene Migration (#163 Punkt 7),
+  # nicht Teil dieses Schritts -- derselbe Waechter haelt auch diese Seite fest.
   # blob: bei worker-src/img-src traegt den Render-Worker und die Snapshot-Ausgabe.
   Strict-Transport-Security: max-age=31536000; includeSubDomains
   X-Content-Type-Options: nosniff
