@@ -212,9 +212,46 @@ function normalizeUriValue(value) {
 // strenge Einstufung unten; ein `style="background:url(x)"` traegt sonst ein
 // vermeintliches Schema "background:" und waere ein Fehlalarm.
 const URI_ATTRIBUTES = Object.freeze([
-  "href", "src", "action", "formaction", "data", "poster", "cite", "ping",
-  "background", "longdesc", "usemap", "manifest", "icon", "codebase", "xlink:href",
+  "href", "src", "srcset", "imagesrcset", "action", "formaction", "data", "poster",
+  "cite", "ping", "background", "longdesc", "usemap", "manifest", "icon",
+  "codebase", "xlink:href",
 ]);
+
+// EIN ATTRIBUT, MEHRERE URLS. Selbstprobe an der eigenen Fassung, bevor sie
+// jemand anders fuehrt: die N1-Haertung ordnete `img:srcset` brav einer
+// Direktive zu -- und `srcset` stand gar nicht in URI_ATTRIBUTES, erreichte die
+// Einstufung also nie. Eine Zuordnungstabelle, die sich wie Deckung liest und
+// keine ist. Gemessen am echten dist/ auf dieser Fassung, alle drei Exit 0:
+//
+//   <img srcset="/a.png 1x, https://cdn.example/b.png 2x">   fremde Origin
+//   <img srcset="https://cdn.example/b.png 2x">              fremde Origin
+//   <a ping="/beacon https://cdn.example/beacon">            fremde Origin
+//
+// Wer gegen eine Fehlerklasse baut, hat deren eben erlebte ERSCHEINUNGSFORM vor
+// Augen -- hier war es "ein Schema statt einer Direktive", und die Umsetzung
+// wiederholte dieselbe Klasse eine Ebene hoeher als "eine URL statt aller".
+//
+// srcset trennt mit Komma und haengt je Eintrag einen Deskriptor an; ping trennt
+// mit Leerzeichen. GRENZE, benannt statt verschwiegen: eine `data:`-URL darf
+// selbst Kommas tragen, und dieser Zerleger schneidet sie dann auf. Die Teile
+// werden weiter geprueft (der erste traegt das data:-Schema, die Reste gelten als
+// relativ), es entsteht also keine stille Freigabe einer fremden Origin -- aber
+// eine zweite URL hinter einem zerschnittenen data:-Eintrag kann als Bruchstueck
+// ankommen. Die vollstaendige srcset-Grammatik zu bauen waere die naechste
+// Parser-Aufgabe mit Kanten; diese Grenze steht hier, damit sie beim naechsten
+// Befund nicht als Ueberraschung gilt.
+const URI_LIST_SEPARATOR = Object.freeze(Object.assign(Object.create(null), {
+  srcset: ",", imagesrcset: ",", ping: " ",
+}));
+
+function uriCandidates(attrName, value) {
+  const separator = URI_LIST_SEPARATOR[attrName];
+  if (!separator) return [value];
+  return String(value)
+    .split(separator === "," ? "," : /\s+/)
+    .map((entry) => entry.trim().split(/\s+/)[0])
+    .filter((entry) => entry.length > 0);
+}
 
 // POSITIV-Liste statt Sperrliste -- fuer die Attribute, auf die KEINE
 // Fetch-Direktive wirkt (Navigation, Metadaten). Eine Sperrliste faengt die
@@ -628,14 +665,25 @@ for (const { tag, attrs } of scannedTags) {
     // Attribut-WERTE dagegen schon. Deshalb wird ab hier der dekodierte und
     // normalisierte Wert eingestuft, nicht der Rohtext (Runde 2, Befund N1).
     if (URI_ATTRIBUTES.includes(name)) {
-      const { verdict, detail } = classifyUriAttribute(value, tag, name, attributes);
-      // Zwei Klassen, zwei Meldungen -- und das ist kein Stil. Eine
-      // Ausfuehrungsstelle im Markup gehoert ins Buendel; eine Ressource, die
-      // ihre Direktive nicht erlaubt, ist entweder die falsche Ressource oder
-      // die falsche Richtlinie. Wer beides gleich meldet, schickt den Leser in
-      // die falsche Reparatur.
-      if (verdict === "blocked") blockedResources.push(`<${tag} ${name}="${value}"> ${detail}`);
-      else if (verdict !== "harmless") inlineHandlers.push(`<${tag} ${name}=...> ${detail}`);
+      // JEDE URL des Attributs, nicht nur die erste (Selbstprobe, siehe
+      // URI_LIST_SEPARATOR). Fail-closed: ein Listen-Attribut ohne einen
+      // einzigen brauchbaren Eintrag ist kein leeres Attribut, sondern eines,
+      // das dieser Zerleger nicht gelesen hat.
+      const candidates = uriCandidates(name, value);
+      if (candidates.length === 0 && value.trim().length > 0) {
+        blockedResources.push(`<${tag} ${name}="${value}"> carries a URL list this guard could not split`);
+        continue;
+      }
+      for (const candidate of candidates) {
+        const { verdict, detail } = classifyUriAttribute(candidate, tag, name, attributes);
+        // Zwei Klassen, zwei Meldungen -- und das ist kein Stil. Eine
+        // Ausfuehrungsstelle im Markup gehoert ins Buendel; eine Ressource, die
+        // ihre Direktive nicht erlaubt, ist entweder die falsche Ressource oder
+        // die falsche Richtlinie. Wer beides gleich meldet, schickt den Leser in
+        // die falsche Reparatur.
+        if (verdict === "blocked") blockedResources.push(`<${tag} ${name}="${candidate}"> ${detail}`);
+        else if (verdict !== "harmless") inlineHandlers.push(`<${tag} ${name}=...> ${detail}`);
+      }
       continue;
     }
     const scheme = executableSchemeIn(value);

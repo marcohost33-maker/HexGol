@@ -342,6 +342,31 @@ describe("CSP output guard (#168 review)", () => {
     expect(permitted.stdout).toContain("inline-style-attributes=1");
   });
 
+  it("checks every URL of a list attribute, not only the first (N1, self-check)", () => {
+    // NICHT aus dem Review, sondern aus der Probe der eigenen Haertung: die
+    // Direktiven-Tabelle ordnete `img:srcset` zu, und `srcset` stand gar nicht in
+    // URI_ATTRIBUTES -- die Zuordnung las sich wie Deckung und war keine. Alle
+    // drei Faelle liefen auf der ersten Fassung dieser Runde mit Exit 0 durch.
+    const zweiter = runGuard(baselineHtml('<img src="/icon-192.png" srcset="/icon-192.png 1x, https://cdn.example/b.png 2x" alt="" />'));
+    expect(zweiter.status, "the second srcset entry is still unchecked").not.toBe(0);
+    expect(zweiter.stderr).toMatch(/is not allowed by img-src/);
+
+    const einzeln = runGuard(baselineHtml('<img srcset="https://cdn.example/b.png 2x" alt="" />'));
+    expect(einzeln.status).not.toBe(0);
+
+    // ping ist Leerzeichen-getrennt und faellt unter connect-src.
+    const beacon = runGuard(baselineHtml('<a href="/x" ping="/beacon https://cdn.example/beacon">x</a>'));
+    expect(beacon.status, "the second ping URL is still unchecked").not.toBe(0);
+  });
+
+  it("leaves a well-formed list attribute alone (self-check counter-direction)", () => {
+    // Sonst waere die Zelle darueber mit einem Waechter gruen, der jedes
+    // srcset rot faerbt -- und der waere nach einer Woche abgeschaltet.
+    const run = runGuard(baselineHtml('<img src="/icon-192.png" srcset="/icon-192.png 1x, /icon-384.png 2x" alt="" />'));
+    expect(run.status, run.stderr).toBe(0);
+    expect(run.stdout).toContain("blocked-resources=0");
+  });
+
   it("reports how many tags it scanned, so an empty result cannot pass as absence", () => {
     // Ohne diese Zahl waere "null Handler" auch dann gruen, wenn der Tag-Zerleger
     // gar nichts mehr faende -- genau die Klasse, gegen die dieser Waechter baut.
