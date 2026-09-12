@@ -1,13 +1,25 @@
 # zizmor-Konfiguration (docs.zizmor.sh/configuration)
-# [2026-06-06] NUR impostor-commit deaktiviert (Praezisierung des Vormittags-
-# Fixes "online-audits: false"): das Audit crasht hart am privaten Cross-Repo-
-# Pin coworkerz-ci, weil der repo-scoped GITHUB_TOKEN designbedingt keine
-# fremden privaten Repos lesen kann. SHA-Echtheit des Pins wird bei jedem Bump
-# via gh api Pre/Post verifiziert. Alle uebrigen Online-Audits (known-
-# vulnerable-actions, stale-action-refs) bleiben AKTIV.
+#
+# [2026-09-12] impostor-commit ist WIEDER AKTIV.
+# Vorher stand hier `impostor-commit: disable: true` mit der Begruendung, das Audit
+# stuerze an mobile-render.yml ab. Die Diagnose stimmte, die Gegenmassnahme war zu
+# breit: der globale Schalter nahm den Schutz allen 16 SHA-gepinnten Actions des
+# Repos weg, um EINER Referenz willen.
+#
+# Gemessen am 2026-09-12 (zizmor 1.30.0, lokal): mit dem globalen `disable` meldete
+# zizmor fuer `actions/checkout@deadbeef...deadbeef` (frei erfundener SHA, ohne
+# Versions-Kommentar) "No findings to report. Good job!" und Exit 0. Das Pinnen hatte
+# also seine Kosten, aber nicht mehr seinen Nutzen.
+#
+# WICHTIG -- warum hier KEINE `ignore`-Ausnahme steht:
+# `rules.<audit>.ignore` filtert FUNDE, es verhindert nicht, dass das Audit laeuft.
+# Gegen einen ABSTURZ des Audits ist es wirkungslos (lokal geprueft: mit
+# `stale-action-refs`/`impostor-commit` auf `ignore: [mobile-render.yml]` brach zizmor
+# unveraendert mit "fatal: no audit was performed" ab).
+# Die Ausnahme sitzt deshalb dort, wo sie wirken kann: in
+# `.github/workflows/zizmor.yml` laeuft mobile-render.yml in einem eigenen Durchgang
+# OHNE Online-Audits. Dort steht auch, was sie kostet und wann sie wegfaellt.
 rules:
-  impostor-commit:
-    disable: true
   # [2026-06-29] artipacked intentionally accepted for update-snapshots.yml:
   # that job pushes refreshed visual baselines back to the branch and therefore
   # MUST keep persist-credentials TRUE (the in-step comment documents the WHY).

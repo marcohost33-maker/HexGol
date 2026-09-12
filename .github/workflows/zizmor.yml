@@ -37,17 +37,115 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Run zizmor
+      # ------------------------------------------------------------------
+      # Warum ZWEI Durchgaenge?
+      #
+      # Die Online-Audits (impostor-commit, stale-action-refs,
+      # known-vulnerable-actions) loesen jede Action-Referenz gegen die GitHub-API
+      # auf. `mobile-render.yml` bindet einen Reusable Workflow aus dem PRIVATEN
+      # Fremd-Repo `marcohost33-maker/coworkerz-ci` ein. Der repo-scoped
+      # GITHUB_TOKEN kann fremde private Repos designbedingt nicht lesen; zizmor
+      # bricht dann HART ab -- nicht mit einem Fund, sondern mit
+      #   fatal: no audit was performed
+      #   Caused by: couldn't list tags for marcohost33-maker/coworkerz-ci
+      #              can't access ...: missing or you have no access
+      # Das ist ein WERKZEUG-AUSFALL, kein Sicherheitsbefund. Ein Gate, das beides
+      # nicht unterscheidet, ist defekt -- und genau das war der alte Zustand: der
+      # Ausfall wurde wie ein Fund behandelt und das Audit deshalb GLOBAL
+      # abgeschaltet, fuer alle 16 SHA-Pins des Repos.
+      #
+      # Eine `ignore`-Ausnahme in .github/zizmor.yml hilft hier NICHT: sie filtert
+      # FUNDE, sie verhindert nicht den LAUF des Audits. Lokal geprueft (zizmor
+      # 1.30.0): mit `ignore: [mobile-render.yml]` bricht zizmor unveraendert mit
+      # "fatal: no audit was performed" ab. Die Ausnahme muss auf der Ebene der
+      # Aufrufe sitzen -- hier.
+      #
+      # Durchgang 1 faehrt ALLE Dateien mit zizmors eigener Sammlung, aber ohne
+      # Online-Audits. Er kann an einer fremden Referenz gar nicht scheitern und
+      # deckt per Konstruktion jede sammelbare Datei ab -- auch kuenftige, die eine
+      # handgepflegte Liste uebersehen wuerde.
+      # Durchgang 2 legt die Online-Audits obendrauf, fuer alle Dateien AUSSER der
+      # ausgenommenen. Eine Datei, die Durchgang 2 verfehlt, ist damit nie
+      # ungeprueft -- sie verliert nur die Online-Ebene, und der Deckungs-Test
+      # unten macht selbst das sichtbar.
+      #
+      # WAS DIE AUSNAHME KOSTET: genau eine Referenz verliert die Online-Pruefung --
+      # der coworkerz-ci-Pin in mobile-render.yml (die einzige `uses:`-Zeile dieser
+      # Datei). Die uebrigen 15 SHA-Pins des Repos werden online geprueft. Der
+      # ausgenommene Pin ist ohne Cross-Repo-Leserecht ohnehin nicht pruefbar; seine
+      # Echtheit wird bei jedem Bump per `gh api` von Hand verifiziert.
+      #
+      # WANN SIE WEGFAELLT: sobald mobile-render.yml keinen privaten Cross-Repo-Pin
+      # mehr enthaelt (coworkerz-ci oeffentlich, Reusable inlined, oder ein Token mit
+      # Leserecht auf coworkerz-ci steht als Secret bereit und wird unten als
+      # `token:` durchgereicht). Der Schritt "Ausnahme-Ablaufbedingung pruefen"
+      # erzwingt das: er faellt rot aus, sobald der Grund entfallen ist, statt die
+      # Ausnahme still weiterleben zu lassen.
+      # ------------------------------------------------------------------
+
+      - name: Ausnahme-Ablaufbedingung pruefen
+        shell: bash
+        env:
+          EXCLUDED: .github/workflows/mobile-render.yml
+          REASON_REF: marcohost33-maker/coworkerz-ci/
+        run: |
+          set -euo pipefail
+          if [ ! -f "$EXCLUDED" ]; then
+            echo "::error::Die Online-Audit-Ausnahme zeigt auf '$EXCLUDED' -- diese Datei existiert nicht mehr. Ausnahme in .github/workflows/zizmor.yml entfernen."
+            exit 1
+          fi
+          if ! grep -qF "$REASON_REF" "$EXCLUDED"; then
+            echo "::error::'$EXCLUDED' referenziert '$REASON_REF' nicht mehr. Der Grund fuer die Online-Audit-Ausnahme ist entfallen -- Ausnahme entfernen, damit die Datei wieder online auditiert wird."
+            exit 1
+          fi
+          echo "Ausnahme weiterhin begruendet: $EXCLUDED haengt an $REASON_REF"
+
+      - name: Online-Liste bestimmen und Deckung pruefen
+        id: online-inputs
+        shell: bash
+        env:
+          EXCLUDED: .github/workflows/mobile-render.yml
+        run: |
+          set -euo pipefail
+          workflows=$(git ls-files -- '.github/workflows/*.yml' '.github/workflows/*.yaml')
+          all=$(printf '%s' "$workflows"; echo; git ls-files -- '.github/dependabot.yml')
+          files=$(echo "$all" | { grep -vxF "$EXCLUDED" || true; } | { grep -v '^$' || true; })
+          # unquoted: Zeilenumbrueche werden zu Leerzeichen (GITHUB_OUTPUT ist einzeilig)
+          joined=$(echo $files)
+          if [ -z "$joined" ]; then
+            echo "::error::Keine online-auditierbaren Dateien gesammelt. Das ist fast sicher ein Defekt dieses Schritts, nicht ein leeres Repo -- das Gate faellt absichtlich rot aus, statt still nichts zu pruefen."
+            exit 1
+          fi
+          # Deckungs-Invariante: von den Workflow-Dateien darf GENAU EINE
+          # (die ausgenommene) aus der Online-Ebene fehlen. Waechst die Zahl der
+          # Ausnahmen unbemerkt, faellt dieser Schritt rot aus.
+          wf_total=$(echo "$workflows" | grep -c . || true)
+          wf_online=$(echo $files | tr ' ' '\n' | { grep -c '^\.github/workflows/' || true; })
+          if [ "$((wf_total - wf_online))" -ne 1 ]; then
+            echo "::error::Deckungs-Test fehlgeschlagen: $wf_total Workflow-Dateien getrackt, $wf_online davon online auditiert. Erwartet ist genau EINE Ausnahme ($EXCLUDED). Liste oder Ausnahme pruefen."
+            exit 1
+          fi
+          echo "Online-Ebene deckt $wf_online von $wf_total Workflow-Dateien (1 Ausnahme: $EXCLUDED)"
+          echo "Inputs: $joined"
+          echo "files=$joined" >> "$GITHUB_OUTPUT"
+
+      - name: Run zizmor (Durchgang 1 -- ALLE Dateien, nur Offline-Audits)
         # zizmor exits non-zero bei Findings -> dieser Step GATET die CI (rot = blockt merge).
-        uses: zizmorcore/zizmor-action@3dc1ecc9bcb9e94e9b2c709687979e1298497054  # v0.6.2
+        uses: zizmorcore/zizmor-action@70fb788f84895a7701f5643d103d587e460b5c99  # v0.6.3
         with:
+          inputs: "."
           persona: regular
-          # [2026-06-06] Online-Audits AKTIV; nur impostor-commit ist per
-          # .github/zizmor.yml deaktiviert (crasht am privaten Cross-Repo-Pin
-          # coworkerz-ci - repo-scoped GITHUB_TOKEN, docs.zizmor.sh). Praeziser
-          # als online-audits:false: known-vulnerable-actions + stale-refs aktiv.
+          online-audits: false
           # privates Repo ohne GHAS: kein Action-internes Code-Scanning-Upload (wirft sonst
           # "Resource not accessible"). Stattdessen Findings als inline-Annotationen.
           advanced-security: false
           annotations: true
 
+      - name: Run zizmor (Durchgang 2 -- Online-Audits, ohne mobile-render.yml)
+        uses: zizmorcore/zizmor-action@70fb788f84895a7701f5643d103d587e460b5c99  # v0.6.3
+        with:
+          inputs: ${{ steps.online-inputs.outputs.files }}
+          persona: regular
+          online-audits: true
+          advanced-security: false
+          annotations: true
