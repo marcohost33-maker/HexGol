@@ -35,7 +35,21 @@ const PRODUCTION_SOURCES = Object.freeze(["index.html", "src", "public"]);
 // Jede Schrift-Deklaration in der Produktionsquelle -- CSS (`font-family:`) wie
 // JSX (`fontFamily:`). Die SCHREIBWEISE wird mitgelesen, weil sie entscheidet,
 // wo die Deklaration endet (siehe unten).
-const FONT_DECLARATION = /(font-family|fontFamily)\s*:\s*([^\n]*)/g;
+//
+// GESUCHT WIRD NUR DER KOPF (Review #168, Runde 3, Befund N2). Bis 2026-09-12
+// stand hier `([^\n]*)` -- der Wert verschlang also den ganzen Zeilenrest, und
+// `matchAll` fand je Zeile genau EINE Deklaration. Nachgemessen an
+// `body { font-family: var(--ghx-font-sans); } .x { font-family: Arial; }`:
+// 1 Treffer statt 2, und weil `ALLOWED_CSS_VALUE` am ersten Semikolon schon
+// zufrieden ist, galt die Zeile als in Ordnung. Der zweite Stapel wurde nie
+// angesehen. Einzeiliges oder minifiziertes CSS konnte damit eine
+// umgebungsabhaengige Schrift zurueckholen, waehrend dieser Waechter gruen blieb.
+//
+// Das ist wieder die Bauform und nicht das Muster: ein Ausdruck, der bis zum
+// Zeilenende frisst, macht jede weitere Deklaration derselben Zeile unsichtbar.
+// Ab hier passt das Muster nur auf den KOPF, und der Wert wird danach bis zu
+// seiner eigenen Grenze gelesen -- die Suche laeuft also hinter der Grenze weiter.
+const FONT_DECLARATION = /(font-family|fontFamily)\s*:\s*/g;
 
 // Die einzigen erlaubten Namen:
 //   var(--ghx-font-sans|mono)   die index.html-Spiegelung, zeichengleich geprueft
@@ -71,7 +85,7 @@ const ALLOWED_JS_VALUE = new RegExp("^" + FONT_TOKEN + "\\s*(?:[,;}]|$)");
 // Erlaubt ist nur eine Vorlagen-Zeichenkette, deren Familienteil ein geteiltes
 // Token IST und die davor weder Komma noch Anfuehrungszeichen traegt -- damit
 // faellt `${fs}px Arial, ${FONT_MONO}` genauso wie eine reine Zeichenkette.
-const CANVAS_FONT_DECLARATION = /\.font\s*=\s*([^\n]*)/g;
+const CANVAS_FONT_DECLARATION = /\.font\s*=\s*/g;
 const ALLOWED_CANVAS_FONT = new RegExp("^`[^`,\"']*\\$\\{\\s*(?:FONT_SANS|FONT_MONO|DISP|MONO)\\s*\\}`\\s*[;,)]?\\s*$");
 
 const BINARY_EXTENSIONS = Object.freeze([".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".woff", ".woff2", ".ttf", ".otf"]);
@@ -107,20 +121,65 @@ function allowedFormFor(spelling) {
   return ALLOWED_CSS_VALUE;
 }
 
-function fontDeclarations() {
+// Wo eine Deklaration endet -- drei Sprachen, drei Grenzen. Dieselbe Zuordnung
+// wie bei den erlaubten Formen, und aus demselben Grund an EINER Stelle.
+const DECLARATION_END = Object.freeze(Object.assign(Object.create(null), {
+  "font-family": /[;}]/,      // NICHT das Komma: dort geht der Stapel weiter (N3)
+  fontFamily: /[,;}]/,        // hier trennt das Komma Objekt-Eigenschaften
+  "canvas.font": /[;,)]/,
+}));
+
+// Das Ende der Deklaration bestimmen, OHNE auf ein Trennzeichen in einer
+// Zeichenkette hereinzufallen. `ctx.font = ${"`"}${Math.round(fs)}px ${"${"}FONT_MONO}${"`"};`
+// traegt eine Klammer INNERHALB der Vorlage; wer dort abschneidet, verwirft eine
+// Form, die der Baum wirklich benutzt -- und ein Waechter, der Korrektes rot
+// faerbt, wird abgeschaltet. Deshalb zaehlt diese Schleife Anfuehrungszeichen und
+// die ${"${"}...}-Tiefe mit. Das Trennzeichen selbst bleibt am Wert: die erlaubten
+// Formen oben pruefen ausdruecklich darauf.
+function declarationValue(rest, spelling) {
+  const end = DECLARATION_END[spelling] ?? DECLARATION_END["font-family"];
+  let quote = null;
+  let depth = 0;
+  for (let i = 0; i < rest.length; i += 1) {
+    const c = rest[i];
+    if (quote) {
+      if (c === "\\") { i += 1; continue; }
+      if (quote === "`" && c === "$" && rest[i + 1] === "{") { depth += 1; i += 1; continue; }
+      if (depth > 0 && c === "}") { depth -= 1; continue; }
+      if (depth === 0 && c === quote) { quote = null; }
+      continue;
+    }
+    if (c === "'" || c === '"' || c === "`") { quote = c; continue; }
+    if (end.test(c)) return rest.slice(0, i + 1);
+  }
+  return rest;
+}
+
+// Die Dateiliste ist ein PARAMETER (wie bei remoteFontHits). Innerhalb der Zelle
+// konnte diese Sammlung nur ueber den heutigen Baum urteilen -- und der traegt
+// keine zwei Deklarationen auf einer Zeile. Genau darum war sie gegen N2 blind.
+function fontDeclarations(files = productionTextFiles()) {
   const out = [];
-  for (const { rel, text } of productionTextFiles()) {
+  for (const { rel, text } of files) {
     const lines = text.split("\n");
     for (let i = 0; i < lines.length; i += 1) {
       for (const match of lines[i].matchAll(FONT_DECLARATION)) {
-        out.push({ rel, spelling: match[1], value: match[2].trim(), line: i + 1 });
+        const rest = lines[i].slice(match.index + match[0].length);
+        out.push({ rel, spelling: match[1], value: declarationValue(rest, match[1]).trim(), line: i + 1 });
       }
       for (const match of lines[i].matchAll(CANVAS_FONT_DECLARATION)) {
-        out.push({ rel, spelling: "canvas.font", value: match[1].trim(), line: i + 1 });
+        const rest = lines[i].slice(match.index + match[0].length);
+        out.push({ rel, spelling: "canvas.font", value: declarationValue(rest, "canvas.font").trim(), line: i + 1 });
       }
     }
   }
   return out;
+}
+
+function fontViolations(files) {
+  return fontDeclarations(files)
+    .filter(({ spelling, value }) => !allowedFormFor(spelling).test(value))
+    .map(({ rel, spelling, value, line }) => `${rel}:${line} (${spelling}) -> ${value.slice(0, 60)}`);
 }
 
 const html = readFileSync(resolve(root, "index.html"), "utf8");
@@ -237,12 +296,49 @@ describe("system font stacks are the single source (#163)", () => {
   // Ein Namensverbot faengt nur die drei Namen, die man schon kennt; ein
   // Formverbot faengt auch den vierten, den noch niemand eingesetzt hat.
   it("lets no production source declare its own font stack (#168 T1)", () => {
-    const violations = [];
-    for (const { rel, spelling, value, line } of fontDeclarations()) {
-      const allowed = allowedFormFor(spelling);
-      if (!allowed.test(value)) violations.push(`${rel}:${line} (${spelling}) -> ${value.slice(0, 60)}`);
+    expect(fontViolations(productionTextFiles())).toEqual([]);
+  });
+
+  it("scans every declaration on a line, not only the first (#168 N2)", () => {
+    // Der Befund, wortwoertlich nachgestellt. Die zweite Deklaration steht hinter
+    // der ersten auf DERSELBEN Zeile -- fuer den alten Ausdruck existierte sie
+    // nicht, und weil die erste erlaubt ist, war die Verstossliste leer.
+    const line = 'body { font-family: var(--ghx-font-sans); } .x { font-family: Arial; }';
+    const found = fontDeclarations([{ rel: "probe.css", text: line }]);
+    expect(found, "the second declaration on the line is still invisible").toHaveLength(2);
+    expect(fontViolations([{ rel: "probe.css", text: line }])).toHaveLength(1);
+
+    // Minifiziertes CSS -- dieselbe Sache ohne Leerzeichen, und der zweite Stapel
+    // ist diesmal ein echter Webfont-Name.
+    const min = 'a{font-family:var(--ghx-font-mono)}b{font-family:"Space Grotesk",sans-serif}';
+    expect(fontDeclarations([{ rel: "m.css", text: min }])).toHaveLength(2);
+    expect(fontViolations([{ rel: "m.css", text: min }])).toHaveLength(1);
+
+    // Und die JS-Schreibweise, wo das Komma ein echtes Ende ist.
+    const js = '{ fontFamily: MONO, color: "red" }, { fontFamily: "\'Space Grotesk\', sans-serif" }';
+    expect(fontDeclarations([{ rel: "a.tsx", text: js }])).toHaveLength(2);
+    expect(fontViolations([{ rel: "a.tsx", text: js }])).toHaveLength(1);
+
+    // Die Canvas-Form ebenfalls: zwei Zuweisungen, eine davon mit eigenem Stapel.
+    const canvas = "ctx.font = `${fs}px ${FONT_MONO}`; ctx.font = `${fs}px Arial`;";
+    expect(fontDeclarations([{ rel: "c.ts", text: canvas }])).toHaveLength(2);
+    expect(fontViolations([{ rel: "c.ts", text: canvas }])).toHaveLength(1);
+  });
+
+  it("does not cut a declaration short at a separator inside a string (#168 N2 counter-direction)", () => {
+    // Die Gefahr der Verschaerfung. Wer stumpf am ersten `;`, `,` oder `)`
+    // abschneidet, zerhackt Formen, die der Baum wirklich benutzt -- und ein
+    // Waechter, der Korrektes rot faerbt, wird abgeschaltet.
+    const gutFormen = [
+      { rel: "c.ts", text: "ctx.font = `${Math.round(fs)}px ${FONT_MONO}`;", erwartet: 1 },
+      { rel: "x.css", text: 'body{font-family:var(--ghx-font-sans)}', erwartet: 1 },
+      { rel: "y.tsx", text: "  style={{ fontFamily: MONO, fontSize: 11.5 }}", erwartet: 1 },
+      { rel: "z.tsx", text: "`<div style='font-family:${FONT_SANS};text-align:center'>`", erwartet: 1 },
+    ];
+    for (const { rel, text, erwartet } of gutFormen) {
+      expect(fontDeclarations([{ rel, text }]), `declaration count changed for ${rel}`).toHaveLength(erwartet);
+      expect(fontViolations([{ rel, text }]), `rejected a form the tree uses: ${text}`).toEqual([]);
     }
-    expect(violations).toEqual([]);
   });
 
   it("rejects a stack that continues past the shared token (#168 N3)", () => {
