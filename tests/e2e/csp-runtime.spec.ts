@@ -1,17 +1,19 @@
 import { expect, test } from "@playwright/test";
 import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 // Runtime half of issue #176.
 //
 // `vite preview` does not apply Cloudflare Pages' `public/_headers`, so the normal
 // e2e suite previously exercised the production bundle without the production CSP.
-// This test injects the exact repository CSP into the top-level document response
-// and lets Chromium enforce it. It is deliberately an integration oracle, not a
-// completeness proof: it covers the startup/navigation path exercised below; the
-// static contract/parser layer remains separately necessary.
+// This test injects the exact proposed production CSP into the top-level document
+// response and lets Chromium enforce it. It is deliberately an integration oracle,
+// not a completeness proof: it covers the startup/navigation path exercised below;
+// the static contract/parser layer remains separately necessary.
 
-const root = resolve(import.meta.dirname, "../..");
+const here = dirname(fileURLToPath(import.meta.url));
+const root = resolve(here, "../..");
 const headersText = readFileSync(resolve(root, "public/_headers"), "utf8");
 const cspLine = headersText
   .split(/\r?\n/)
@@ -47,10 +49,9 @@ test.describe("production CSP runtime oracle (#176)", () => {
       });
     });
 
-    // Apply the production policy to the real preview document. `route.fetch()`
-    // obtains the Vite response; `route.fulfill()` preserves it while adding the
-    // header Chromium will actually enforce. PR code is not involved in deciding
-    // the policy: this test reads the checked-in Cloudflare header declaration.
+    // Apply the checked-in production policy to the real preview document.
+    // `route.fetch()` obtains the Vite response; `route.fulfill()` preserves it
+    // while adding the header Chromium will actually enforce.
     await page.route("**/*", async (route) => {
       const request = route.request();
       if (request.resourceType() !== "document") {
