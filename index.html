@@ -13,15 +13,26 @@
     <link rel="manifest" href="%BASE_URL%manifest.webmanifest" />
     <meta name="apple-mobile-web-app-title" content="GolHex" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      rel="stylesheet"
-      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700&family=JetBrains+Mono:wght@400;600;700;800&display=swap"
-    />
     <style>
+      /*
+        Typografie (#163): system-first, kein Schrift-Download, keine fremde
+        Herkunft. Hier standen bis 2026-09-12 zwei Preconnects und ein
+        Stylesheet-Link auf die Google-Fonts-Origins -- die Produktions-CSP
+        (`font-src 'self'` in public/_headers) blockierte sie, lokal luden sie
+        durch, und die Schrift wich live von der Entwicklung ab. Die Hostnamen
+        stehen hier absichtlich NICHT ausgeschrieben: der Quell-Waechter sucht
+        wortwoertlich und darf an einem Kommentar nicht vorbeisehen muessen.
+        Diese beiden Custom-Properties sind die Spiegelung von
+        src/lib/typography.js (FONT_SANS/FONT_MONO); sie stehen hier, damit der
+        erste Frame vor dem React-Mount schon richtig setzt. Zeichengleichheit
+        beider Stellen prueft tests/unit/csp-fonts.test.js.
+      */
+      :root {
+        --ghx-font-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+        --ghx-font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+      }
       html, body, #root { height: 100%; margin: 0; }
-      body { background: #000; color: #E8F5F2; overscroll-behavior: none; }
+      body { background: #000; color: #E8F5F2; overscroll-behavior: none; font-family: var(--ghx-font-sans); }
     </style>
   </head>
   <body>
