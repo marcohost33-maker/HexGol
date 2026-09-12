@@ -24,7 +24,10 @@
 // -------------
 //   1. Null Referenzen auf fremde Schrift-Origins in irgendeiner Textdatei in dist/.
 //   2. dist/index.html enthaelt kein ausfuehrbares Inline-<script>.
-//   3. Die CSP in dist/_headers passt zu 1. und 2.:
+//   3. dist/index.html traegt kein Inline-Event-Handler-Attribut (onload, onerror,
+//      onclick ...). Der Browser wendet script-src AUCH auf diese an -- unabhaengig
+//      davon, ob irgendwo ein Inline-<script>-Rumpf steht.
+//   4. Die CSP in dist/_headers passt zu 1. und 2.:
 //        - font-src bleibt ausschliesslich 'self'
 //        - script-src traegt 'unsafe-inline' GENAU DANN, wenn die Ausgabe ein
 //          ausfuehrbares Inline-<script> enthaelt
@@ -32,8 +35,15 @@
 //          Inline-<style>-Block enthaelt (heute: ja -- #163 Punkt 7 laesst die
 //          Stil-Migration ausdruecklich aus diesem Schritt heraus)
 //
-// Punkt 3 ist bewusst in BEIDE Richtungen formuliert. Ein Waechter, der nur "zu
+// Punkt 4 ist bewusst in BEIDE Richtungen formuliert. Ein Waechter, der nur "zu
 // eng" faengt, haette den Ist-Befund aus #163 nicht gefunden.
+//
+// Punkt 3 faellt dagegen NUR in eine Richtung: ein gefundener Inline-Handler ist
+// immer ein roter Build, nie eine Erlaubnis. Die Alternative waere, Handler wie
+// einen Inline-Rumpf zu zaehlen und daraufhin script-src 'unsafe-inline' zu
+// VERLANGEN -- dann zoege ein einziges nachlaessig erzeugtes onerror= die Erlaubnis
+// wieder auf, die #163 gerade geschlossen hat. Der Waechter darf die Richtlinie
+// nicht selbsttaetig weiten; er darf nur haltmachen.
 import { strict as assert } from "node:assert";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { resolve, relative, dirname, extname, sep } from "node:path";
@@ -61,6 +71,45 @@ const EXECUTABLE_SCRIPT_TYPES = Object.freeze([
   "", "module", "text/javascript", "application/javascript", "text/ecmascript",
   "application/ecmascript", "importmap", "speculationrules",
 ]);
+
+// Inline-Event-Handler-Attribute. Der Browser behandelt ihren Inhalt als Skript und
+// unterwirft ihn script-src -- ein <img onerror="..."> bricht unter script-src 'self'
+// genauso wie ein Inline-<script>. Das Muster ist bewusst leicht zu weit: HTML kennt
+// kein nicht-ausfuehrbares Attribut, das mit "on" beginnt, und ein falsch gemeldetes
+// Attribut kostet eine benannte Nachfrage, ein uebersehenes einen stillen Bruch live.
+const INLINE_HANDLER_NAME = /^on[a-z]+$/;
+
+// Ein Attribut-Name ist ein TOKEN, kein Teilstring. Die alte Fassung fragte hier
+// /\bsrc\s*=/ -- und weil \b auch zwischen "-" und "s" liegt, galt
+// <script data-src="..."> als externes Skript, obwohl sein Rumpf ausgefuehrt wird.
+// Deshalb wird die Attributliste zerlegt und der Name verglichen, nicht gesucht.
+const ATTRIBUTE_TOKEN = /([^\s"'>/=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]*)))?/g;
+
+function parseAttributes(attrs) {
+  const out = [];
+  for (const match of String(attrs).matchAll(ATTRIBUTE_TOKEN)) {
+    out.push({ name: match[1].toLowerCase(), value: match[2] ?? match[3] ?? match[4] ?? "" });
+  }
+  return out;
+}
+
+function hasAttribute(attrs, name) {
+  return parseAttributes(attrs).some((attribute) => attribute.name === name);
+}
+
+// Alle oeffnenden Tags mit ihrer Attributliste. Kommentare und die RUMPFE von
+// <script>/<style> werden vorher entfernt: dort steht kein Markup, aber sehr wohl
+// Zeichen wie `a<b`, die sonst als Tag durchgingen. Die Tags selbst bleiben stehen.
+function markupTags(html) {
+  const scrubbed = String(html)
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .replace(/(<(script|style)\b[^>]*>)[\s\S]*?(<\/\2\s*>)/gi, "$1$3");
+  const out = [];
+  for (const match of scrubbed.matchAll(/<([a-zA-Z][^\s/>]*)((?:"[^"]*"|'[^']*'|[^>"'])*)>/g)) {
+    out.push({ tag: match[1].toLowerCase(), attrs: match[2] });
+  }
+  return out;
+}
 
 const failures = [];
 function fail(message) {
@@ -113,7 +162,7 @@ const html = readRequired(resolve(dist, "index.html")) ?? "";
 // erste schliessende Marke immer die richtige.
 const inlineScripts = [...html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script\s*>/gi)]
   .map(([, attrs, body]) => ({ attrs, body }))
-  .filter(({ attrs }) => !/\bsrc\s*=/i.test(attrs))   // externes Skript: faellt nicht unter 'unsafe-inline'
+  .filter(({ attrs }) => !hasAttribute(attrs, "src"))  // externes Skript: faellt nicht unter 'unsafe-inline'
   .filter(({ body }) => body.trim().length > 0);       // leerer Rumpf fuehrt nichts aus
 
 const executableInline = [];
@@ -131,7 +180,28 @@ for (const { attrs, body } of inlineScripts) {
 const needsScriptUnsafeInline = executableInline.length > 0;
 const hasInlineStyleBlock = /<style\b[^>]*>[\s\S]*?\S[\s\S]*?<\/style\s*>/i.test(html);
 
-// --- 3. Passt die ausgelieferte CSP zur Ausgabe? -----------------------------
+// --- 3. Inline-Event-Handler in dist/index.html? ----------------------------
+// Diese Pruefung ist von Punkt 2 UNABHAENGIG. Ein Markup ohne jeden Inline-Rumpf,
+// aber mit <img onerror="..."> laesst executableInline leer -- der Handler wird
+// live trotzdem von script-src geblockt. Wer den Handler wirklich braucht, hebt
+// ihn in die externe Bundle-Datei oder entscheidet die Richtlinie bewusst neu.
+const scannedTags = markupTags(html);
+const inlineHandlers = [];
+for (const { tag, attrs } of scannedTags) {
+  for (const { name } of parseAttributes(attrs)) {
+    if (INLINE_HANDLER_NAME.test(name)) inlineHandlers.push(`<${tag} ${name}=...>`);
+  }
+}
+// Eine blinde Suche liest sich wie eine Abwesenheit: findet der Tag-Zerleger gar
+// nichts, ist "null Handler" keine Aussage, sondern ein kaputter Waechter.
+if (html.trim().length > 0 && scannedTags.length === 0) {
+  fail("markup scan found zero tags in dist/index.html -- the scanner is broken, not the output clean");
+}
+for (const hit of inlineHandlers) {
+  fail(`inline event handler ${hit} in dist/index.html -- script-src applies to it; move it into the bundle instead of widening the policy`);
+}
+
+// --- 4. Passt die ausgelieferte CSP zur Ausgabe? -----------------------------
 const headers = readRequired(resolve(dist, "_headers")) ?? "";
 const cspLine = headers.split("\n").map((l) => l.trim()).find((l) => l.toLowerCase().startsWith("content-security-policy:"));
 if (!cspLine) fail("dist/_headers carries no Content-Security-Policy line");
@@ -190,6 +260,7 @@ if (failures.length > 0) {
 
 console.log(
   `[csp-contract] OK text-files=${scannedTextFiles} remote-font-refs=0 ` +
-  `executable-inline-scripts=${executableInline.length} inline-style-block=${hasInlineStyleBlock} ` +
+  `executable-inline-scripts=${executableInline.length} markup-tags=${scannedTags.length} ` +
+  `inline-event-handlers=${inlineHandlers.length} inline-style-block=${hasInlineStyleBlock} ` +
   `script-src-unsafe-inline=${(directive("script-src") ?? []).includes("'unsafe-inline'")}`,
 );
