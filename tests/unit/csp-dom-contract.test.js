@@ -111,6 +111,7 @@ describe("standards-based CSP DOM structure contract (#176)", () => {
       '<area href="javascript:alert(1)" />',
       '<form action="javascript:alert(1)"><button>go</button></form>',
       '<iframe src="javascript:alert(1)"></iframe>',
+      '<frameset><frame src="javascript:alert(1)"></frameset>',
       '<button formaction="javascript:alert(1)">go</button>',
       '<svg><a href="javascript:alert(1)"><text>x</text></a></svg>',
     ]) {
@@ -147,6 +148,18 @@ describe("standards-based CSP DOM structure contract (#176)", () => {
     expect(run.stdout).toContain("srcdoc-documents=1");
   });
 
+  it("rejects executable inline scripts in entity-decoded srcdoc documents", () => {
+    const run = runGuard(
+      baselineHtml(
+        '<iframe srcdoc="&lt;script&gt;window.__boot=1&lt;/script&gt;"></iframe>',
+      ),
+    );
+    expect(run.status).not.toBe(0);
+    expect(run.stdout).toContain("srcdoc-documents=1");
+    expect(run.stdout).toContain("executable-inline-scripts=1");
+    expect(run.stderr).toMatch(/iframe\[srcdoc\].*not authorized by the deployed script-src 'self'/);
+  });
+
   it("fails closed on excessive srcdoc nesting", () => {
     let nested = '<img src="/x.png" alt="" />';
     for (let i = 0; i < 10; i += 1) {
@@ -172,6 +185,12 @@ describe("standards-based CSP DOM structure contract (#176)", () => {
     const run = runGuard(baselineHtml("<svg><script /></svg>"));
     expect(run.status).toBe(0);
     expect(run.stdout).toContain("unterminated-scripts=0");
+  });
+
+  it("rejects genuinely unterminated SVG script elements", () => {
+    const run = runGuard(`${baselineHtml()}<svg><script>window.__boot=1`);
+    expect(run.status).not.toBe(0);
+    expect(run.stderr).toMatch(/unterminated SVG <script>/);
   });
 
   it("classifies every JavaScript MIME essence as executable inline script content", () => {
