@@ -31,6 +31,7 @@
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path, { dirname, join, resolve } from "node:path";
+import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import playwrightConfig from "../../playwright.config.ts";
@@ -41,23 +42,127 @@ const configPath = resolve(root, "playwright.config.ts");
 const configSrc = readFileSync(configPath, "utf8");
 const snapshotRoot = resolve(root, "tests/e2e/__snapshots__");
 
-// B1-STAND (bewusst unvollstaendig, damit die Gegenproben ihr Rot zeigen):
-// liest nur die Top-Level-`snapshotPathTemplate`, wie der Waechter vor #182.
+// ---- Welches Template benutzt Playwright fuer toHaveScreenshot? (Issue #182) ----
+//
+// Bis #182 las dieser Waechter per Regex die Top-Level-`snapshotPathTemplate`.
+// Playwright nimmt aber, JE PROJEKT, zuerst `expect.toHaveScreenshot.pathTemplate`
+// und erst danach `snapshotPathTemplate`. Ein pathTemplate ohne `{platform}` liess
+// den Waechter gruen, waehrend die Screenshots wieder plattformlos landeten.
+//
+// Die Konfiguration wird deshalb nicht mehr als TEXT gelesen, sondern als das
+// Objekt importiert, das Playwright selbst laedt. Die Aufloesung darauf ist ein
+// NACHBAU, keine Abfrage: Playwright bietet sie nur ueber `testInfo.snapshotPath()`
+// in einem laufenden Test an, und ein Playwright-Lauf braucht den webServer, also
+// einen Build -- nicht in einer Unit-Suite. Gemessen an der Quelle von
+// playwright 1.62.1 (installiert) und 1.63.0 (npm pack, Dependabot #173), in beiden
+// wortgleich:
+//   lib/common/index.js            projectConfigs = CLI || userConfig.projects || [{ ...userConfig }]
+//                                  snapshotPathTemplate = takeFirst(project, config)
+//                                  expect               = takeFirst(project, config, {})
+//   lib/worker/workerProcessEntry  expect?.toHaveScreenshot?.pathTemplate
+//                                  || snapshotPathTemplate || legacyTemplate
+// `takeFirst` prueft auf `undefined`: ein Projekt mit EIGENEM `expect` verdeckt das
+// Top-Level-`expect` ganz, es wird nicht zusammengefuehrt. Die Kette danach prueft
+// mit `||`: ein leerer String faellt durch.
+//
+// Ein Nachbau veraltet still, wenn Playwright die Aufloesung aendert. Dagegen steht
+// der Kanarien-Test weiter unten: er sucht genau diese Ausdruecke in der
+// INSTALLIERTEN Playwright-Quelle und schlaegt laut fehl, wenn einer fehlt.
+const LEGACY_SCREENSHOT_TEMPLATE =
+  "{snapshotDir}/{testFileDir}/{testFileName}-snapshots/{arg}{-projectName}{-snapshotSuffix}{ext}";
+
+function takeFirst(...args) {
+  for (const arg of args) {
+    if (arg !== undefined) return arg;
+  }
+  return undefined;
+}
+
 function effectiveScreenshotTemplates(config) {
-  return (config.projects || [config]).map((project, i) => ({
-    project: project.name ?? `#${i}`,
-    template: config.snapshotPathTemplate,
-    source: "snapshotPathTemplate",
-  }));
+  const projects = config.projects || [{ ...config }];
+  if (!Array.isArray(projects) || projects.length === 0) {
+    // Null Projekte heisst: nichts wird aufgeloest, also auch nichts geprueft.
+    // Eine leere Luecken-Liste waere dann ein gruener Befund ueber nichts.
+    throw new Error("playwright.config.ts hat keine Projekte — der Waechter hat nichts zu pruefen.");
+  }
+  return projects.map((project, i) => {
+    const expectConfig = takeFirst(project.expect, config.expect, {});
+    const snapshotPathTemplate = takeFirst(project.snapshotPathTemplate, config.snapshotPathTemplate);
+    const fromExpect = expectConfig?.toHaveScreenshot?.pathTemplate;
+    if (fromExpect) return { project: project.name ?? `#${i}`, template: fromExpect, source: "expect.toHaveScreenshot.pathTemplate" };
+    if (snapshotPathTemplate) return { project: project.name ?? `#${i}`, template: snapshotPathTemplate, source: "snapshotPathTemplate" };
+    return { project: project.name ?? `#${i}`, template: LEGACY_SCREENSHOT_TEMPLATE, source: "legacyTemplate" };
+  });
 }
 
+// Verlangt wird das woertliche `{platform}`. Das Legacy-Template trennt die
+// Plattform zwar ueber `{-snapshotSuffix}` (Default: process.platform), aber nur,
+// solange niemand `snapshotSuffix` setzt -- der Kommentar in der Konfiguration
+// sagt "spells out explicitly", und genau das wird hier gehalten.
 function platformGaps(config) {
-  return effectiveScreenshotTemplates(config).filter((e) => !String(e.template).includes("{platform}"));
+  return effectiveScreenshotTemplates(config).filter((e) => !e.template.includes("{platform}"));
 }
 
-function snapshotPathTemplate() {
-  return effectiveScreenshotTemplates(playwrightConfig)[0].template;
+// Die Namensmuster aller effektiven Templates: eine Baseline ist in Ordnung, wenn
+// sie zu MINDESTENS EINEM Projekt passt. Jedes Muster verlangt fuer sich die
+// Plattform, die Vereinigung also auch.
+function screenshotTemplates() {
+  return [...new Set(effectiveScreenshotTemplates(playwrightConfig).map((e) => e.template))];
 }
+
+// Die Stellen in Playwrights eigener Quelle, auf denen der Nachbau oben beruht.
+// Je Gruppe muessen ALLE Anker in DERSELBEN Datei stehen: `takeFirst` gibt es in
+// 1.62.1 zweimal (common/index.js und util.js), ein Treffer irgendwo waere kein
+// Beleg dafuer, dass die Konfigurations-Zusammenfuehrung ihn benutzt.
+const RESOLUTION_ANCHORS = [
+  {
+    group: "Projekt-Zusammenfuehrung",
+    anchors: [
+      "userConfig.projects || [{ ...userConfig",
+      "this.snapshotPathTemplate = takeFirst(projectConfig.snapshotPathTemplate, config.snapshotPathTemplate);",
+      "this.expect = takeFirst(projectConfig.expect, config.expect, {});",
+      /function takeFirst\(\.\.\.args\) \{\s*for \(const arg of args\) \{\s*if \(arg !== void 0\)\s*return arg;\s*\}\s*return void 0;\s*\}/,
+    ],
+  },
+  {
+    group: "Screenshot-Praezedenz",
+    anchors: [
+      "template = this._projectInternal.expect?.toHaveScreenshot?.pathTemplate || this._projectInternal.snapshotPathTemplate || legacyTemplate;",
+      `const legacyTemplate = "${LEGACY_SCREENSHOT_TEMPLATE}";`,
+    ],
+  },
+];
+
+function jsFiles(dir) {
+  const out = [];
+  for (const entry of readdirSync(dir)) {
+    const full = join(dir, entry);
+    if (statSync(full).isDirectory()) out.push(...jsFiles(full));
+    else if (entry.endsWith(".js")) out.push(full);
+  }
+  return out;
+}
+
+const hit = (src, anchor) => (typeof anchor === "string" ? src.includes(anchor) : anchor.test(src));
+
+// Liefert die Gruppen, fuer die KEINE Datei alle Anker enthaelt, mit den Ankern,
+// die in der bestpassenden Datei fehlen.
+function missingResolutionAnchors(libDir) {
+  const sources = jsFiles(libDir).map((f) => readFileSync(f, "utf8"));
+  const missing = [];
+  for (const { group, anchors } of RESOLUTION_ANCHORS) {
+    let best = anchors;
+    for (const src of sources) {
+      const absent = anchors.filter((a) => !hit(src, a));
+      if (absent.length < best.length) best = absent;
+    }
+    if (best.length > 0) missing.push({ group, anchors: best.map(String) });
+  }
+  return missing;
+}
+
+const require = createRequire(import.meta.url);
+const playwrightDir = dirname(require.resolve("playwright/package.json"));
 
 function mobileTestMatch() {
   const all = [...configSrc.matchAll(/^\s*testMatch:\s*\/(.+?)\/\s*,/gm)];
@@ -128,14 +233,68 @@ function specFiles(dir = resolve(root, "tests/e2e")) {
 }
 
 describe("visual baselines: Plattform-Trennung (Issue #167)", () => {
+  const nameMatches = (name) => screenshotTemplates().some((t) => baselineNamePattern(t).test(name));
+
   it("das Template trennt die Plattform, statt es nur zu behaupten", () => {
-    expect(snapshotPathTemplate()).toContain("{platform}");
+    // Geprueft wird das Template, das Playwright je Projekt fuer toHaveScreenshot
+    // TATSAECHLICH nimmt (#182), nicht nur die Top-Level-snapshotPathTemplate.
+    const gaps = platformGaps(playwrightConfig);
+    expect(
+      gaps,
+      `Screenshot-Templates ohne {platform}: ${gaps.map((g) => `${g.project} (${g.source}): ${g.template}`).join("; ")}`,
+    ).toEqual([]);
+    // Positiv-Kontrolle: jedes Projekt wurde aufgeloest, nicht keines.
+    expect(effectiveScreenshotTemplates(playwrightConfig).length).toBe(playwrightConfig.projects.length);
+  });
+
+  it("KANARIE: Playwrights Aufloesungsweg ist in der installierten Version noch derselbe", () => {
+    // Versionsfragil mit Absicht, und laut: aendert ein Playwright-Update die
+    // Praezedenz, wird hier rot -- nicht still der Nachbau falsch.
+    const { version } = JSON.parse(readFileSync(join(playwrightDir, "package.json"), "utf8"));
+    const missing = missingResolutionAnchors(join(playwrightDir, "lib"));
+    expect(
+      missing,
+      `playwright@${version}: die Aufloesung des Screenshot-Templates sieht nicht mehr aus wie in ` +
+        "1.62.1/1.63.0. effectiveScreenshotTemplates() gegen die neue Quelle nachmessen und die " +
+        `Anker anpassen. Fehlend: ${JSON.stringify(missing)}`,
+    ).toEqual([]);
+  });
+
+  it("GEGENPROBE: die Kanarie wird rot, wenn ein Anker fehlt oder gar keine Quelle da ist", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "hexgol-pwlib-"));
+    try {
+      mkdirSync(join(tmp, "worker"), { recursive: true });
+      // Leeres Verzeichnis: alle Gruppen fehlen, kein gruener Befund ueber nichts.
+      expect(missingResolutionAnchors(tmp).map((m) => m.group)).toEqual([
+        "Projekt-Zusammenfuehrung",
+        "Screenshot-Praezedenz",
+      ]);
+      // Die echte Quelle, mit genau einer Aenderung: `??` statt `||` in der
+      // Praezedenz-Zeile. Die Gruppe davor muss weiter gefunden werden.
+      // Die Dateien werden ueber ihre Anker gefunden, nicht ueber interne Pfade.
+      const sources = jsFiles(join(playwrightDir, "lib")).map((f) => readFileSync(f, "utf8"));
+      const holding = ({ anchors }) => sources.find((src) => anchors.every((a) => hit(src, a)));
+      const common = holding(RESOLUTION_ANCHORS[0]);
+      const worker = holding(RESOLUTION_ANCHORS[1]);
+      expect(common, "Quelle der Projekt-Zusammenfuehrung nicht gefunden").toBeTypeOf("string");
+      expect(worker, "Quelle der Screenshot-Praezedenz nicht gefunden").toBeTypeOf("string");
+      const line = RESOLUTION_ANCHORS[1].anchors[0];
+      writeFileSync(join(tmp, "index.js"), common);
+      writeFileSync(join(tmp, "worker", "entry.js"), worker.replace(line, line.replaceAll(" || ", " ?? ")));
+      expect(missingResolutionAnchors(tmp)).toEqual([{ group: "Screenshot-Praezedenz", anchors: [line] }]);
+      // Und die Anker einer Gruppe muessen in DERSELBEN Datei stehen.
+      const [a, b] = RESOLUTION_ANCHORS[1].anchors;
+      writeFileSync(join(tmp, "worker", "entry.js"), a);
+      writeFileSync(join(tmp, "worker", "other.js"), String(b));
+      expect(missingResolutionAnchors(tmp).map((m) => m.group)).toEqual(["Screenshot-Praezedenz"]);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
   });
 
   it("keine Baseline liegt ohne Plattform-Kennung auf der Platte", () => {
-    const pattern = baselineNamePattern(snapshotPathTemplate());
     const offenders = baselineFiles()
-      .filter((f) => !pattern.test(baselineName(f)))
+      .filter((f) => !nameMatches(baselineName(f)))
       .map((f) => f.slice(snapshotRoot.length + 1));
     expect(offenders, `Baselines ohne Plattform-Kennung: ${offenders.join(", ")}`).toEqual([]);
     // Positiv-Kontrolle: der Lauf darf nicht deshalb gruen sein, weil gar nichts
@@ -145,13 +304,12 @@ describe("visual baselines: Plattform-Trennung (Issue #167)", () => {
 
   it("GEGENPROBE: dieselbe Pruefung faellt ueber die alten Namen", () => {
     // Die Namen VOR #167. Ein Matcher, der auch die durchlaesst, pruefte nichts.
-    const pattern = baselineNamePattern(snapshotPathTemplate());
-    expect(pattern.test("life-random-default.png")).toBe(false);
-    expect(pattern.test("worker-overlay-outline.png")).toBe(false);
-    expect(pattern.test("life-random-default-linux.png")).toBe(true);
-    expect(pattern.test("life-random-default-darwin.png")).toBe(true);
+    expect(nameMatches("life-random-default.png")).toBe(false);
+    expect(nameMatches("worker-overlay-outline.png")).toBe(false);
+    expect(nameMatches("life-random-default-linux.png")).toBe(true);
+    expect(nameMatches("life-random-default-darwin.png")).toBe(true);
     // Eine erfundene Plattform ist keine Plattform.
-    expect(pattern.test("life-random-default-solaris.png")).toBe(false);
+    expect(nameMatches("life-random-default-solaris.png")).toBe(false);
     // Und die Namensgewinnung muss den Trenner DIESER Plattform abraeumen:
     // `join` schreibt ihn, `basename` nimmt ihn wieder weg, auf beiden
     // Systemen. Die alte "/"-Variante faellt hier auf Windows durch --
