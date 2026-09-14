@@ -27,6 +27,17 @@ function baselineHtml(extraBodyMarkup = "") {
   ].join("\n");
 }
 
+function framesetHtml(frameMarkup) {
+  return [
+    "<!doctype html>",
+    '<html lang="de">',
+    "  <head><meta charset=\"UTF-8\" /></head>",
+    `  <frameset>${frameMarkup}</frameset>`,
+    "</html>",
+    "",
+  ].join("\n");
+}
+
 function runGuard(html) {
   const base = mkdtempSync(join(tmpdir(), "ghx-csp-dom-"));
   mkdirSync(join(base, "dist"));
@@ -111,7 +122,6 @@ describe("standards-based CSP DOM structure contract (#176)", () => {
       '<area href="javascript:alert(1)" />',
       '<form action="javascript:alert(1)"><button>go</button></form>',
       '<iframe src="javascript:alert(1)"></iframe>',
-      '<frameset><frame src="javascript:alert(1)"></frameset>',
       '<button formaction="javascript:alert(1)">go</button>',
       '<svg><a href="javascript:alert(1)"><text>x</text></a></svg>',
     ]) {
@@ -127,6 +137,12 @@ describe("standards-based CSP DOM structure contract (#176)", () => {
       const run = runGuard(baselineHtml(markup));
       expect(run.status, `guard rejected non-navigation resource ${markup}`).toBe(0);
     }
+  });
+
+  it("rejects javascript navigation from legacy frame elements", () => {
+    const run = runGuard(framesetHtml('<frame src="javascript:alert(1)">'));
+    expect(run.status).not.toBe(0);
+    expect(run.stderr).toMatch(/<frame src=\.\.\.> is a javascript: navigation target/);
   });
 
   it("traverses template contents", () => {
