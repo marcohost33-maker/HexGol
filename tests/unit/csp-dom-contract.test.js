@@ -201,6 +201,28 @@ describe("standards-based CSP DOM structure contract (#176)", () => {
     }
   });
 
+  it("implements the legacy language fallback only when type is absent", () => {
+    const classic = runGuard(
+      baselineHtml('<script language="JavaScript1.5">window.__boot=1</script>'),
+    );
+    expect(classic.status).toBe(0);
+    expect(classic.stdout).toContain("executable-inline-scripts=1");
+
+    const dataBlock = runGuard(
+      baselineHtml('<script language="python">print("not browser JS")</script>'),
+    );
+    expect(dataBlock.status).toBe(0);
+    expect(dataBlock.stdout).toContain("executable-inline-scripts=0");
+
+    const typeWins = runGuard(
+      baselineHtml(
+        '<script type="application/json" language="JavaScript">{"not":"code"}</script>',
+      ),
+    );
+    expect(typeWins.status).toBe(0);
+    expect(typeWins.stdout).toContain("executable-inline-scripts=0");
+  });
+
   it("classifies non-JavaScript script types as data blocks", () => {
     const run = runGuard(
       baselineHtml('<script type="application/json">{"not":"code"}</script>'),
