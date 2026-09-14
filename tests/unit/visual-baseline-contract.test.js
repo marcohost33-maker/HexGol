@@ -161,8 +161,12 @@ function missingResolutionAnchors(libDir) {
   return missing;
 }
 
-const require = createRequire(import.meta.url);
-const playwrightDir = dirname(require.resolve("playwright/package.json"));
+// Aufgeloest VON @playwright/test aus, nicht von dieser Datei: die Kanarie soll
+// genau das `playwright` lesen, das der Test-Runner laedt -- auch wenn npm eines
+// Tages eine zweite Version darunter verschachtelt.
+const playwrightDir = dirname(
+  createRequire(createRequire(import.meta.url).resolve("@playwright/test")).resolve("playwright/package.json"),
+);
 
 function mobileTestMatch() {
   const all = [...configSrc.matchAll(/^\s*testMatch:\s*\/(.+?)\/\s*,/gm)];
