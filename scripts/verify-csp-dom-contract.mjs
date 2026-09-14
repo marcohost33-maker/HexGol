@@ -76,15 +76,24 @@ function nodeText(node) {
   return defaultTreeAdapter.getChildNodes(node).map(nodeText).join("");
 }
 
-function isExecutableInlineScriptType(rawType) {
-  const type = rawType.trim().toLowerCase();
-  return (
-    type === "" ||
-    type === "module" ||
-    type === "importmap" ||
-    type === "speculationrules" ||
-    JAVASCRIPT_MIME_ESSENCES.has(type)
-  );
+function isExecutableInlineScriptType(attrs) {
+  // HTML's script-type algorithm gives `type` precedence. If `type` is absent,
+  // the obsolete `language` attribute still participates as `text/<language>`.
+  // Missing/empty type+language is the classic-JavaScript default.
+  if (attrs.has("type")) {
+    const type = attrs.get("type").trim().toLowerCase();
+    return (
+      type === "" ||
+      type === "module" ||
+      type === "importmap" ||
+      type === "speculationrules" ||
+      JAVASCRIPT_MIME_ESSENCES.has(type)
+    );
+  }
+
+  const language = (attrs.get("language") ?? "").trim().toLowerCase();
+  if (language === "") return true;
+  return JAVASCRIPT_MIME_ESSENCES.has(`text/${language}`);
 }
 
 function parsedProtocol(raw) {
@@ -182,7 +191,7 @@ function inspectDocument(source, depth = 0, label = "dist/index.html") {
 
       if (!attrs.has("src")) {
         const body = nodeText(element);
-        if (body.trim().length > 0 && isExecutableInlineScriptType(attrs.get("type") ?? "")) {
+        if (body.trim().length > 0 && isExecutableInlineScriptType(attrs)) {
           metrics.executableInlineScripts += 1;
         }
       }
