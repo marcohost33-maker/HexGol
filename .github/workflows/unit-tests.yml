@@ -55,6 +55,30 @@ jobs:
       - name: Build production bundle (smoke check)
         run: npm run build
 
+  # package.json promises Node >=20. Keep the required `unit` context stable on
+  # Node 22, but exercise the declared minimum separately so dependency/runtime
+  # drift cannot silently make manual snapshot/build workflows fail on Node 20.
+  node20-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies at the declared minimum Node version
+        run: npm ci
+
+      - name: Build production bundle at the declared minimum Node version
+        run: npm run build
+
   # Coverage is MEASURE-FIRST (Test-Center T4): it reports the number but does
   # NOT gate the build. This job is intentionally not a required check and sets
   # no threshold, so a low/regressing number cannot block a merge yet. Marco/Vero
