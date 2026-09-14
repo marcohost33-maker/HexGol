@@ -33,6 +33,7 @@ import { tmpdir } from "node:os";
 import path, { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import playwrightConfig from "../../playwright.config.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, "../..");
@@ -40,17 +41,22 @@ const configPath = resolve(root, "playwright.config.ts");
 const configSrc = readFileSync(configPath, "utf8");
 const snapshotRoot = resolve(root, "tests/e2e/__snapshots__");
 
-// Aus der Konfiguration GELESEN, nicht hier wiederholt: ein Waechter, der seine
-// eigene Erwartung mitbringt, prueft sich selbst statt die Konfiguration.
+// B1-STAND (bewusst unvollstaendig, damit die Gegenproben ihr Rot zeigen):
+// liest nur die Top-Level-`snapshotPathTemplate`, wie der Waechter vor #182.
+function effectiveScreenshotTemplates(config) {
+  return (config.projects || [config]).map((project, i) => ({
+    project: project.name ?? `#${i}`,
+    template: config.snapshotPathTemplate,
+    source: "snapshotPathTemplate",
+  }));
+}
+
+function platformGaps(config) {
+  return effectiveScreenshotTemplates(config).filter((e) => !String(e.template).includes("{platform}"));
+}
+
 function snapshotPathTemplate() {
-  const m = configSrc.match(/^\s*snapshotPathTemplate:\s*"([^"]+)"\s*,/m);
-  if (!m) {
-    throw new Error(
-      "snapshotPathTemplate nicht in playwright.config.ts gefunden — der Waechter " +
-        "kann den Vertrag nicht mehr lesen und meldet das, statt gruen zu bleiben.",
-    );
-  }
-  return m[1];
+  return effectiveScreenshotTemplates(playwrightConfig)[0].template;
 }
 
 function mobileTestMatch() {
@@ -191,5 +197,102 @@ describe("visual baselines: Plattform-Trennung (Issue #167)", () => {
     // Positiv-Kontrolle: der Matcher trifft ueberhaupt Specs. Ein Matcher, der
     // nichts trifft, liefert ebenfalls die leere Liste oben.
     expect(specFiles().filter((f) => matcher.test(f)).length).toBeGreaterThan(0);
+  });
+});
+
+describe("visual baselines: effektives Screenshot-Template (Issue #182)", () => {
+  // Alle Zellen arbeiten auf FIXTURE-Objekten, die aus der echten Konfiguration
+  // abgeleitet sind (Spread, keine Mutation). playwright.config.ts bleibt unberuehrt;
+  // die letzte Zelle prueft das ausdruecklich.
+  const withoutPlatform = "{testDir}/__snapshots__/{testFilePath}/{arg}{ext}";
+  const gapsOf = (config) => platformGaps(config).map((g) => `${g.project}:${g.source}`);
+  const fingerprint = (c) =>
+    JSON.stringify({
+      snapshotPathTemplate: c.snapshotPathTemplate,
+      expect: c.expect,
+      projects: c.projects.map((p) => ({ name: p.name, snapshotPathTemplate: p.snapshotPathTemplate, expect: p.expect })),
+    });
+  // Beim Einsammeln festgehalten, also bevor irgendeine Zelle laeuft.
+  const pristine = fingerprint(playwrightConfig);
+
+  it("GEGENPROBE (a): expect.toHaveScreenshot.pathTemplate ohne {platform} schlaegt snapshotPathTemplate", () => {
+    const config = {
+      ...playwrightConfig,
+      expect: {
+        ...playwrightConfig.expect,
+        toHaveScreenshot: { ...playwrightConfig.expect.toHaveScreenshot, pathTemplate: withoutPlatform },
+      },
+    };
+    // Die Top-Level-snapshotPathTemplate enthaelt {platform} weiterhin -- genau
+    // deshalb blieb der alte Waechter hier gruen.
+    expect(config.snapshotPathTemplate).toContain("{platform}");
+    expect(gapsOf(config)).toEqual([
+      "chromium:expect.toHaveScreenshot.pathTemplate",
+      "mobile:expect.toHaveScreenshot.pathTemplate",
+    ]);
+  });
+
+  it("GEGENPROBE (b): Projekt-Override von snapshotPathTemplate ohne {platform}", () => {
+    const config = {
+      ...playwrightConfig,
+      projects: playwrightConfig.projects.map((p) =>
+        p.name === "mobile" ? { ...p, snapshotPathTemplate: withoutPlatform } : p,
+      ),
+    };
+    expect(gapsOf(config)).toEqual(["mobile:snapshotPathTemplate"]);
+  });
+
+  it("GEGENPROBE (b2): Projekt-Override von expect.toHaveScreenshot.pathTemplate ohne {platform}", () => {
+    const config = {
+      ...playwrightConfig,
+      projects: playwrightConfig.projects.map((p) =>
+        p.name === "chromium" ? { ...p, expect: { toHaveScreenshot: { pathTemplate: withoutPlatform } } } : p,
+      ),
+    };
+    expect(gapsOf(config)).toEqual(["chromium:expect.toHaveScreenshot.pathTemplate"]);
+  });
+
+  it("GEGENPROBE (b3): ein Projekt-expect VERDECKT das Top-Level-expect ganz (kein Deep-Merge)", () => {
+    // Oben traegt expect.toHaveScreenshot.pathTemplate die Plattform, die
+    // snapshotPathTemplate nicht. Ein Projekt mit eigenem `expect` (hier nur ein
+    // Timeout) verliert das Top-Level-pathTemplate und faellt auf die
+    // plattformlose snapshotPathTemplate zurueck. Ein Nachbau mit Deep-Merge
+    // bliebe hier gruen.
+    const config = {
+      ...playwrightConfig,
+      snapshotPathTemplate: withoutPlatform,
+      expect: { toHaveScreenshot: { pathTemplate: "{testDir}/{arg}-{platform}{ext}" } },
+      projects: playwrightConfig.projects.map((p) => (p.name === "mobile" ? { ...p, expect: { timeout: 1000 } } : p)),
+    };
+    expect(gapsOf(config)).toEqual(["mobile:snapshotPathTemplate"]);
+  });
+
+  it("GEGENPROBE (b4): ein leeres pathTemplate faellt durch (Playwright prueft mit ||)", () => {
+    const config = {
+      ...playwrightConfig,
+      snapshotPathTemplate: withoutPlatform,
+      expect: { toHaveScreenshot: { pathTemplate: "" } },
+    };
+    expect(gapsOf(config)).toEqual(["chromium:snapshotPathTemplate", "mobile:snapshotPathTemplate"]);
+  });
+
+  it("GEGENPROBE (b5): ohne jedes Template greift Playwrights Legacy-Default -- der ist NICHT ausdruecklich", () => {
+    const { snapshotPathTemplate: _drop, ...rest } = playwrightConfig;
+    const config = { ...rest, expect: {} };
+    expect(gapsOf(config)).toEqual(["chromium:legacyTemplate", "mobile:legacyTemplate"]);
+  });
+
+  it("GEGENPROBE (b6): eine leere Projektliste ist kein gruener Befund", () => {
+    expect(() => platformGaps({ ...playwrightConfig, projects: [] })).toThrow(/keine Projekte/);
+  });
+
+  it("GEGENPROBE (c): der heutige Stand ist gruen, und die Zellen haben die Konfiguration nicht veraendert", () => {
+    const effective = effectiveScreenshotTemplates(playwrightConfig);
+    expect(effective.map((e) => `${e.project}:${e.source}`)).toEqual([
+      "chromium:snapshotPathTemplate",
+      "mobile:snapshotPathTemplate",
+    ]);
+    expect(platformGaps(playwrightConfig)).toEqual([]);
+    expect(fingerprint(playwrightConfig)).toBe(pristine);
   });
 });
