@@ -39,13 +39,15 @@ function runGuard(html) {
   return { status: run.status, stdout: run.stdout ?? "", stderr: run.stderr ?? "" };
 }
 
-describe("standards-based CSP DOM contract (#176)", () => {
+describe("standards-based CSP DOM structure contract (#176)", () => {
   it("stays green on the shipped output shape", () => {
     const run = runGuard(baselineHtml());
     expect(run.status).toBe(0);
     expect(run.stdout).toContain("script-elements=1");
     expect(run.stdout).toContain("executable-inline-scripts=0");
     expect(run.stdout).toContain("inline-script-sources=0");
+    expect(run.stdout).toContain("CSP DOM structure OK:");
+    expect(run.stdout).toContain("authorization remains the responsibility of the CSP policy layer");
   });
 
   it("does not confuse data-src with the real src attribute", () => {
@@ -54,9 +56,10 @@ describe("standards-based CSP DOM contract (#176)", () => {
     );
     expect(run.status).toBe(0);
     expect(run.stdout).toContain("executable-inline-scripts=1");
+    expect(run.stdout).toContain("authorization remains the responsibility of the CSP policy layer");
   });
 
-  it("rejects inline event handlers from parsed DOM attributes", () => {
+  it("rejects inline event handlers from parsed attributes", () => {
     const run = runGuard(
       baselineHtml('<img src="/icon.png" onerror="window.__f()" alt="" />'),
     );
@@ -64,7 +67,7 @@ describe("standards-based CSP DOM contract (#176)", () => {
     expect(run.stderr).toMatch(/inline event handler/);
   });
 
-  it("uses parser-decoded entities before URL semantics", () => {
+  it("uses parser-decoded entities before javascript navigation semantics", () => {
     for (const href of [
       "&#106;avascript:window.__boot()",
       "&#x6A;avascript:x()",
@@ -73,14 +76,11 @@ describe("standards-based CSP DOM contract (#176)", () => {
     ]) {
       const run = runGuard(baselineHtml(`<a href="${href}">start</a>`));
       expect(run.status, `guard accepted ${href}`).not.toBe(0);
-      expect(run.stderr).toMatch(/javascript:/);
+      expect(run.stderr).toMatch(/javascript: navigation target/);
     }
   });
 
-  it("does not invent named references that the HTML parser does not recognize", () => {
-    // The legacy partial entity table had to special-case Object.prototype names.
-    // A standards parser leaves these unknown references literal, so they are not
-    // silently transformed into JavaScript schemes and need no handwritten table.
+  it("does not invent named references the HTML parser does not recognize", () => {
     for (const href of [
       "&constructor;javascript:alert(1)",
       "&toString;javascript:alert(1)",
@@ -92,7 +92,7 @@ describe("standards-based CSP DOM contract (#176)", () => {
     }
   });
 
-  it("accepts ordinary relative and absolute non-script URLs", () => {
+  it("accepts ordinary relative and absolute non-script navigation URLs", () => {
     for (const href of [
       "/icon.svg",
       "https://example.org/x",
@@ -105,17 +105,100 @@ describe("standards-based CSP DOM contract (#176)", () => {
     }
   });
 
-  it("does not treat non-URL CSS attribute text as an executable scheme", () => {
-    const run = runGuard(
-      baselineHtml('<div style="background:url(/x.png); color:red">x</div>'),
-    );
-    expect(run.status).toBe(0);
+  it("rejects javascript URLs only in navigation-capable element contexts", () => {
+    for (const markup of [
+      '<a href="javascript:alert(1)">x</a>',
+      '<area href="javascript:alert(1)" />',
+      '<form action="javascript:alert(1)"><button>go</button></form>',
+      '<iframe src="javascript:alert(1)"></iframe>',
+      '<button formaction="javascript:alert(1)">go</button>',
+      '<svg><a href="javascript:alert(1)"><text>x</text></a></svg>',
+    ]) {
+      const run = runGuard(baselineHtml(markup));
+      expect(run.status, `guard accepted navigation sink ${markup}`).not.toBe(0);
+    }
+
+    for (const markup of [
+      '<img src="javascript:alert(1)" alt="" />',
+      '<link href="javascript:alert(1)" rel="stylesheet" />',
+      '<script src="javascript:alert(1)"></script>',
+    ]) {
+      const run = runGuard(baselineHtml(markup));
+      expect(run.status, `guard rejected non-navigation resource ${markup}`).toBe(0);
+    }
   });
 
-  it("detects unterminated script elements using parser source locations", () => {
+  it("traverses template contents", () => {
+    const run = runGuard(
+      baselineHtml('<template><img src="/x.png" onerror="boot()" alt="" /></template>'),
+    );
+    expect(run.status).not.toBe(0);
+    expect(run.stderr).toMatch(/<template>.*inline event handler/);
+  });
+
+  it("recursively parses iframe srcdoc documents", () => {
+    const run = runGuard(
+      baselineHtml(
+        '<iframe srcdoc="&lt;img src=&quot;/x.png&quot; onerror=&quot;boot()&quot; alt=&quot;&quot;&gt;"></iframe>',
+      ),
+    );
+    expect(run.status).not.toBe(0);
+    expect(run.stderr).toMatch(/iframe\[srcdoc\].*inline event handler/);
+    expect(run.stdout).toContain("srcdoc-documents=1");
+  });
+
+  it("fails closed on excessive srcdoc nesting", () => {
+    let nested = '<img src="/x.png" alt="" />';
+    for (let i = 0; i < 10; i += 1) {
+      const escaped = nested
+        .replaceAll("&", "&amp;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;");
+      nested = `<iframe srcdoc="${escaped}"></iframe>`;
+    }
+    const run = runGuard(baselineHtml(nested));
+    expect(run.status).not.toBe(0);
+    expect(run.stderr).toMatch(/srcdoc depth exceeds/);
+  });
+
+  it("detects unterminated HTML script elements using parser source locations", () => {
     const run = runGuard(`${baselineHtml()}<script>window.__boot=1`);
     expect(run.status).not.toBe(0);
-    expect(run.stderr).toMatch(/unterminated <script>/);
+    expect(run.stderr).toMatch(/unterminated HTML <script>/);
+  });
+
+  it("accepts self-closed SVG script elements as terminated foreign content", () => {
+    const run = runGuard(baselineHtml("<svg><script /></svg>"));
+    expect(run.status).toBe(0);
+    expect(run.stdout).toContain("unterminated-scripts=0");
+  });
+
+  it("classifies every JavaScript MIME essence as executable inline script content", () => {
+    for (const type of [
+      "application/ecmascript",
+      "application/javascript",
+      "application/x-ecmascript",
+      "application/x-javascript",
+      "text/ecmascript",
+      "text/javascript",
+      "text/javascript1.0",
+      "text/javascript1.1",
+      "text/javascript1.2",
+      "text/javascript1.3",
+      "text/javascript1.4",
+      "text/javascript1.5",
+      "text/jscript",
+      "text/livescript",
+      "text/x-ecmascript",
+      "text/x-javascript",
+    ]) {
+      const run = runGuard(baselineHtml(`<script type="${type}">window.__boot=1</script>`));
+      expect(run.status, `guard rejected valid structure for ${type}`).toBe(0);
+      expect(run.stdout, `guard failed to classify ${type}`).toContain(
+        "executable-inline-scripts=1",
+      );
+    }
   });
 
   it("classifies non-JavaScript script types as data blocks", () => {
