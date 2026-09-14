@@ -29,7 +29,7 @@
 // Plattform TRENNT -- ob die Trennung noetig ist, entscheidet die Physik der
 // Rasterung, nicht dieser Test.
 import { readFileSync, readdirSync, statSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
@@ -76,6 +76,22 @@ function baselineNamePattern(template) {
   return new RegExp(`^${source}$`);
 }
 
+// Der Dateiname wird der Plattform ueberlassen. Die frueherere Form
+// `rel.slice(rel.lastIndexOf("/") + 1)` traf auf Windows ins Leere
+// (`join` liefert dort "\\"), gab den GANZEN Pfad zurueck und liess damit
+// das Verzeichnis mitpruefen. Gemessen: kaputt ging davon nichts, weil
+// `{arg}` als `(?:.+)` uebersetzt wird und ein "\\" mitfrisst -- alle neun
+// Baselines galten auch auf Windows als in Ordnung. Der Fehler lag nicht
+// im Ergebnis, sondern darin, WORUEBER geurteilt wurde, und genau da faellt
+// er auseinander: eine Baseline namens "-linux.png" (leeres {arg}) ist auf
+// Linux ein offender und wurde auf Windows durchgewunken, weil "visual.spec.ts\\" dort
+// die `.+`-Bedingung vor dem Bindestrich bereits erfuellte. Zwei Urteile
+// ueber denselben Stand, je nach Betriebssystem des Entwicklers -- dieselbe
+// Fehlerklasse, gegen die dieser Waechter ueberhaupt antritt.
+function baselineName(fullPath) {
+  return basename(fullPath);
+}
+
 function baselineFiles(dir = snapshotRoot) {
   const out = [];
   for (const entry of readdirSync(dir)) {
@@ -101,8 +117,8 @@ describe("visual baselines: Plattform-Trennung (Issue #167)", () => {
   it("keine Baseline liegt ohne Plattform-Kennung auf der Platte", () => {
     const pattern = baselineNamePattern(snapshotPathTemplate());
     const offenders = baselineFiles()
-      .map((f) => f.slice(snapshotRoot.length + 1))
-      .filter((rel) => !pattern.test(rel.slice(rel.lastIndexOf("/") + 1)));
+      .filter((f) => !pattern.test(baselineName(f)))
+      .map((f) => f.slice(snapshotRoot.length + 1));
     expect(offenders, `Baselines ohne Plattform-Kennung: ${offenders.join(", ")}`).toEqual([]);
     // Positiv-Kontrolle: der Lauf darf nicht deshalb gruen sein, weil gar nichts
     // gefunden wurde. Ein leeres Verzeichnis wuerde dieselbe leere Liste liefern.
@@ -118,6 +134,13 @@ describe("visual baselines: Plattform-Trennung (Issue #167)", () => {
     expect(pattern.test("life-random-default-darwin.png")).toBe(true);
     // Eine erfundene Plattform ist keine Plattform.
     expect(pattern.test("life-random-default-solaris.png")).toBe(false);
+    // Und die Namensgewinnung muss den Trenner DIESER Plattform abraeumen:
+    // `join` schreibt ihn, `basename` nimmt ihn wieder weg, auf beiden
+    // Systemen. Die alte "/"-Variante faellt hier auf Windows durch --
+    // deshalb steht die Zusicherung hier und nicht im Kommentar.
+    expect(baselineName(join("visual.spec.ts", "life-random-default-linux.png"))).toBe(
+      "life-random-default-linux.png",
+    );
   });
 
   it("kein mobile-Spec fotografiert — deshalb fehlt {projectName} zu Recht", () => {
