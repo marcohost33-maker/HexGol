@@ -7,8 +7,8 @@
 //
 // NOTE: parse5@8.0.1 is currently present in package-lock.json through jsdom.
 // This gate imports parse5 directly so Node 20 builds do not load jsdom@30's
-// Node-22-only runtime. A future dependency refresh should promote parse5 to an
-// explicit direct devDependency and regenerate the lockfile in one atomic change.
+// Node-22-only runtime. Issue #181 tracks promotion to an explicit direct
+// devDependency with a real npm-regenerated lockfile; do not hand-edit the lock.
 import { strict as assert } from "node:assert";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
@@ -112,7 +112,7 @@ function isJavaScriptNavigationSink(namespace, tag, attribute) {
 
   if ((tag === "a" || tag === "area") && attribute === "href") return true;
   if (tag === "form" && attribute === "action") return true;
-  if (tag === "iframe" && attribute === "src") return true;
+  if ((tag === "iframe" || tag === "frame") && attribute === "src") return true;
   if ((tag === "button" || tag === "input") && attribute === "formaction") return true;
   return false;
 }
@@ -150,6 +150,18 @@ function inspectDocument(source, depth = 0, label = "dist/index.html") {
     }
   }
 
+  function sourceStartTagIsSelfClosing(location) {
+    const startTag = location?.startTag;
+    if (
+      !startTag ||
+      !Number.isInteger(startTag.startOffset) ||
+      !Number.isInteger(startTag.endOffset)
+    ) {
+      return false;
+    }
+    return /\/\s*>$/.test(source.slice(startTag.startOffset, startTag.endOffset));
+  }
+
   function inspectElement(element, currentDepth, currentLabel) {
     metrics.elements += 1;
     const tag = defaultTreeAdapter.getTagName(element).toLowerCase();
@@ -178,21 +190,40 @@ function inspectDocument(source, depth = 0, label = "dist/index.html") {
       metrics.scripts += 1;
       const location = defaultTreeAdapter.getNodeSourceCodeLocation(element);
 
-      // HTML <script/> is not self-closing; if the HTML parser has no end tag,
-      // the raw-text element consumed input until EOF. SVG foreign-content
-      // <script/> is legitimately self-closed and must not be misclassified.
-      if (namespace === HTML_NS && location?.startTag && !location.endTag) {
-        metrics.unterminatedScripts += 1;
-        fail(
-          `${currentLabel}: unterminated HTML <script>; production markup must not consume ` +
-            "the remaining document as script text",
-        );
+      // HTML <script/> is not self-closing. SVG foreign-content <script/> is,
+      // but an SVG <script> whose source has no `/>` and no parsed end tag is
+      // genuinely unterminated. Check the actual start-tag slice so fixing the
+      // self-closing false positive cannot create the opposite false negative.
+      if (location?.startTag && !location.endTag) {
+        const isTerminatedForeignSelfClose =
+          namespace === SVG_NS && sourceStartTagIsSelfClosing(location);
+        if (namespace === HTML_NS || (namespace === SVG_NS && !isTerminatedForeignSelfClose)) {
+          metrics.unterminatedScripts += 1;
+          fail(
+            `${currentLabel}: unterminated ${namespace === SVG_NS ? "SVG" : "HTML"} <script>; ` +
+              "production markup must not consume input until EOF",
+          );
+        }
       }
 
       if (!attrs.has("src")) {
         const body = nodeText(element);
         if (body.trim().length > 0 && isExecutableInlineScriptType(attrs)) {
           metrics.executableInlineScripts += 1;
+
+          // The legacy top-document policy scanner cannot see entity-decoded
+          // markup embedded in iframe[srcdoc]. The deployed contract is
+          // `script-src 'self'`, so an executable inline script in a recursively
+          // parsed child document is a real production CSP violation, not merely
+          // a metric. Fail here rather than reporting a count that no later gate
+          // can authorize or reject.
+          if (currentDepth > 0) {
+            metrics.inlineScriptSources += 1;
+            fail(
+              `${currentLabel}: executable inline <script> in iframe[srcdoc] is not ` +
+                "authorized by the deployed script-src 'self' contract",
+            );
+          }
         }
       }
     }
@@ -231,8 +262,8 @@ if (failures.length > 0) {
   process.exitCode = 1;
 } else {
   console.log(
-    "CSP DOM structure OK: no inline event handlers, unterminated HTML scripts, " +
-      "or javascript: navigation sinks found; inline script/style authorization remains " +
-      "the responsibility of the CSP policy layer.",
+    "CSP DOM structure OK: no inline event handlers, unterminated HTML/SVG scripts, " +
+      "javascript: navigation sinks, or unauthorized nested srcdoc scripts found; " +
+      "top-document inline script/style authorization remains the responsibility of the CSP policy layer.",
   );
 }
