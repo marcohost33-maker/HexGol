@@ -28,8 +28,9 @@
 // Suite laeuft auf einer. Geprueft wird ausschliesslich, dass der Pfad die
 // Plattform TRENNT -- ob die Trennung noetig ist, entscheidet die Physik der
 // Rasterung, nicht dieser Test.
-import { readFileSync, readdirSync, statSync } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path, { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
@@ -88,8 +89,13 @@ function baselineNamePattern(template) {
 // die `.+`-Bedingung vor dem Bindestrich bereits erfuellte. Zwei Urteile
 // ueber denselben Stand, je nach Betriebssystem des Entwicklers -- dieselbe
 // Fehlerklasse, gegen die dieser Waechter ueberhaupt antritt.
-function baselineName(fullPath) {
-  return basename(fullPath);
+//
+// Das Pfad-Flavour ist ein Parameter, damit die Gegenprobe BEIDE Trenner auf
+// JEDER Maschine fahren kann: der Pflicht-Job `unit` laeuft auf Ubuntu, wo
+// `join` nur "/" schreibt -- eine Zelle mit dem nativen `join` kann die
+// Windows-Regression dort nicht rot machen (Codex-Review auf e1c6c95).
+function baselineName(fullPath, flavour = path) {
+  return flavour.basename(fullPath);
 }
 
 function baselineFiles(dir = snapshotRoot) {
@@ -102,11 +108,17 @@ function baselineFiles(dir = snapshotRoot) {
   return out;
 }
 
-function specFiles() {
-  const dir = resolve(root, "tests/e2e");
-  return readdirSync(dir)
-    .filter((f) => f.endsWith(".spec.ts"))
-    .map((f) => join(dir, f));
+// Rekursiv, wie Playwright `testDir` durchsucht: ein kuenftiger Spec in einem
+// Unterordner (z. B. tests/e2e/mobile/...) darf dem Waechter nicht entgehen,
+// waehrend die Positiv-Kontrolle an den heutigen Top-Level-Specs gruen bleibt.
+function specFiles(dir = resolve(root, "tests/e2e")) {
+  const out = [];
+  for (const entry of readdirSync(dir)) {
+    const full = join(dir, entry);
+    if (statSync(full).isDirectory()) out.push(...specFiles(full));
+    else if (entry.endsWith(".spec.ts")) out.push(full);
+  }
+  return out;
 }
 
 describe("visual baselines: Plattform-Trennung (Issue #167)", () => {
@@ -138,9 +150,26 @@ describe("visual baselines: Plattform-Trennung (Issue #167)", () => {
     // `join` schreibt ihn, `basename` nimmt ihn wieder weg, auf beiden
     // Systemen. Die alte "/"-Variante faellt hier auf Windows durch --
     // deshalb steht die Zusicherung hier und nicht im Kommentar.
-    expect(baselineName(join("visual.spec.ts", "life-random-default-linux.png"))).toBe(
-      "life-random-default-linux.png",
-    );
+    for (const flavour of [path.posix, path.win32]) {
+      expect(
+        baselineName(flavour.join("visual.spec.ts", "life-random-default-linux.png"), flavour),
+        `Trenner ${JSON.stringify(flavour.sep)}`,
+      ).toBe("life-random-default-linux.png");
+    }
+  });
+
+  it("GEGENPROBE: die Spec-Aufzaehlung findet auch verschachtelte Specs", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "hexgol-specs-"));
+    try {
+      mkdirSync(join(tmp, "mobile"), { recursive: true });
+      writeFileSync(join(tmp, "top.spec.ts"), "");
+      writeFileSync(join(tmp, "mobile", "mobile-layout.spec.ts"), "");
+      writeFileSync(join(tmp, "mobile", "helper.ts"), "");
+      const found = specFiles(tmp).map((f) => path.relative(tmp, f).split(path.sep).join("/")).sort();
+      expect(found).toEqual(["mobile/mobile-layout.spec.ts", "top.spec.ts"]);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
   });
 
   it("kein mobile-Spec fotografiert — deshalb fehlt {projectName} zu Recht", () => {
