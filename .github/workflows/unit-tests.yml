@@ -81,10 +81,56 @@ jobs:
       - name: Install isolated dependency graph (phantom-dependency gate)
         run: npm ci --install-strategy=linked
 
-      - name: Verify npm-normalized manifest and lockfile are stable
+      # Do NOT run npm install --package-lock-only here as a whole-lock normalizer:
+      # npm 10.8.2 removes unrelated `libc` metadata from optional platform
+      # packages written by newer npm versions. That makes an otherwise-correct
+      # lockfile red for package-manager-version drift rather than for #181.
+      # Instead verify exactly the dependency contract this lane is responsible
+      # for; the linked install above is the behavioral phantom-dependency gate.
+      - name: Verify direct parser dependency contract
         run: |
-          npm install --package-lock-only --ignore-scripts
-          git diff --exit-code -- package.json package-lock.json
+          node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs";
+
+          const pkg = JSON.parse(readFileSync("package.json", "utf8"));
+          const lock = JSON.parse(readFileSync("package-lock.json", "utf8"));
+          const expected = "8.0.1";
+          const root = lock.packages?.[""];
+          const parse5 = lock.packages?.["node_modules/parse5"];
+
+          const assert = (condition, message) => {
+            if (!condition) throw new Error(message);
+          };
+
+          assert(
+            pkg.devDependencies?.parse5 === expected,
+            `package.json must declare parse5@${expected} directly`,
+          );
+          assert(
+            root?.devDependencies?.parse5 === expected,
+            `package-lock root must declare parse5@${expected} directly`,
+          );
+          assert(
+            parse5?.version === expected,
+            `package-lock must contain node_modules/parse5@${expected}`,
+          );
+          assert(
+            typeof parse5?.resolved === "string" && parse5.resolved.length > 0,
+            "parse5 lock entry must retain a resolved registry artifact",
+          );
+          assert(
+            typeof parse5?.integrity === "string" && parse5.integrity.startsWith("sha512-"),
+            "parse5 lock entry must retain sha512 integrity metadata",
+          );
+          assert(
+            root?.engines?.node === pkg.engines?.node,
+            "package-lock root Node engine must match package.json",
+          );
+
+          console.log(
+            `direct dependency contract OK: parse5@${expected}; node ${pkg.engines.node}`,
+          );
+          NODE
 
       - name: Build production bundle at the declared minimum Node version
         run: npm run build
