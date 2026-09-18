@@ -158,7 +158,26 @@ function inspectDocument(source, depth = 0, label = "dist/index.html") {
     ) {
       return false;
     }
-    return /\/\s*>$/.test(source.slice(startTag.startOffset, startTag.endOffset));
+
+    // Find the final solidus immediately before ">" while allowing whitespace.
+    // Crucially, do NOT classify it as the self-closing marker when parse5's
+    // attribute source location says that solidus belongs to an unquoted value
+    // (e.g. data=x/> is tokenized as data="x/", NOT as a self-closing tag).
+    let pos = startTag.endOffset - 2; // char before ">"
+    while (pos >= startTag.startOffset && /\s/.test(source[pos] ?? "")) pos -= 1;
+    if (source[pos] !== "/") return false;
+
+    for (const attrLocation of Object.values(location?.attrs ?? {})) {
+      if (
+        Number.isInteger(attrLocation?.startOffset) &&
+        Number.isInteger(attrLocation?.endOffset) &&
+        pos >= attrLocation.startOffset &&
+        pos < attrLocation.endOffset
+      ) {
+        return false;
+      }
+    }
+    return true;
   }
 
   function inspectElement(element, currentDepth, currentLabel) {
@@ -205,7 +224,30 @@ function inspectDocument(source, depth = 0, label = "dist/index.html") {
         }
       }
 
-      if (!attrs.has("src")) {
+      if (attrs.has("src")) {
+        // srcdoc creates a child document that inherits the embedding CSP.
+        // The deployed script-src contract is 'self', and the legacy raw-markup
+        // scanner cannot see entity-decoded child markup. Enforce the currently
+        // inherited source boundary here for nested documents instead of letting
+        // a cross-origin external script escape both static layers.
+        if (currentDepth > 0) {
+          const rawSrc = attrs.get("src");
+          let allowed = false;
+          try {
+            const resolved = new URL(rawSrc, BASE_URL);
+            allowed = resolved.origin === new URL(BASE_URL).origin;
+          } catch {
+            allowed = false;
+          }
+          if (!allowed) {
+            metrics.inlineScriptSources += 1;
+            fail(
+              `${currentLabel}: external <script src=...> in iframe[srcdoc] violates ` +
+                "the inherited script-src 'self' contract",
+            );
+          }
+        }
+      } else {
         const body = nodeText(element);
         if (body.trim().length > 0 && isExecutableInlineScriptType(attrs)) {
           metrics.executableInlineScripts += 1;
