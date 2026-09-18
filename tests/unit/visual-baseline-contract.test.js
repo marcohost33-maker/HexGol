@@ -43,18 +43,31 @@ const snapshotRoot = resolve(root, "tests/e2e/__snapshots__");
 
 // Aus der Konfiguration GELESEN, nicht hier wiederholt: ein Waechter, der seine
 // eigene Erwartung mitbringt, prueft sich selbst statt die Konfiguration.
-function effectiveScreenshotPathTemplate(config = playwrightConfig) {
-  const assertionSpecific = config?.expect?.toHaveScreenshot?.pathTemplate;
+function effectiveScreenshotPathTemplate(config = playwrightConfig, project = null) {
+  // Playwright loest zuerst die Projekt-Konfiguration gegen die Root-Konfiguration
+  // auf. Wichtig: project.expect ersetzt config.expect als GANZES (kein Deep-Merge).
+  // Erst auf diesem aufgeloesten Projekt wird der assertionsspezifische
+  // toHaveScreenshot.pathTemplate vor snapshotPathTemplate gewaehlt.
+  const resolvedExpect =
+    project && project.expect !== undefined
+      ? project.expect
+      : (config?.expect ?? {});
+  const resolvedSnapshotTemplate =
+    project && project.snapshotPathTemplate !== undefined
+      ? project.snapshotPathTemplate
+      : config?.snapshotPathTemplate;
+
+  const assertionSpecific = resolvedExpect?.toHaveScreenshot?.pathTemplate;
   if (typeof assertionSpecific === "string" && assertionSpecific.length > 0) {
     return assertionSpecific;
   }
-  const globalTemplate = config?.snapshotPathTemplate;
-  if (typeof globalTemplate === "string" && globalTemplate.length > 0) {
-    return globalTemplate;
+  if (typeof resolvedSnapshotTemplate === "string" && resolvedSnapshotTemplate.length > 0) {
+    return resolvedSnapshotTemplate;
   }
+  const label = project?.name ? ` fuer Projekt '${project.name}'` : "";
   throw new Error(
-    "kein wirksames Screenshot-Pfadtemplate in playwright.config.ts gefunden — " +
-      "der Waechter meldet die unbekannte Konfiguration statt gruen zu bleiben.",
+    "kein wirksames Screenshot-Pfadtemplate" + label +
+      " gefunden — der Waechter meldet die unbekannte Konfiguration statt gruen zu bleiben.",
   );
 }
 
@@ -131,7 +144,21 @@ describe("visual baselines: Plattform-Trennung (Issue #167)", () => {
     expect(effectiveScreenshotPathTemplate()).toContain("{platform}");
   });
 
-  it("GEGENPROBE: assertionsspezifischer Screenshot-Pfad hat Vorrang", () => {
+  it("jedes konfigurierte Projekt behaelt den Plattform-Token im wirksamen Screenshot-Pfad", () => {
+    const offenders = (playwrightConfig.projects ?? [])
+      .map((project) => ({
+        name: project.name ?? "<unnamed>",
+        template: effectiveScreenshotPathTemplate(playwrightConfig, project),
+      }))
+      .filter(({ template }) => !template.includes("{platform}"));
+
+    expect(
+      offenders,
+      "Projekt-Overrides duerfen den {platform}-Schutz nicht aushebeln",
+    ).toEqual([]);
+  });
+
+  it("GEGENPROBE: Root-assertion-specific path hat Vorrang vor Root-snapshotPathTemplate", () => {
     const synthetic = {
       ...playwrightConfig,
       snapshotPathTemplate: "{testDir}/global/{arg}-{platform}{ext}",
@@ -146,6 +173,51 @@ describe("visual baselines: Plattform-Trennung (Issue #167)", () => {
 
     expect(effectiveScreenshotPathTemplate(synthetic)).toBe("{testDir}/override/{arg}{ext}");
     expect(effectiveScreenshotPathTemplate(synthetic)).not.toContain("{platform}");
+  });
+
+  it("GEGENPROBE: project.expect ersetzt Root-expect und kann einen unsicheren Pfad einfuehren", () => {
+    const synthetic = {
+      ...playwrightConfig,
+      snapshotPathTemplate: "{testDir}/root/{arg}-{platform}{ext}",
+      expect: {
+        toHaveScreenshot: {
+          pathTemplate: "{testDir}/root-shot/{arg}-{platform}{ext}",
+        },
+      },
+    };
+    const unsafeProject = {
+      name: "unsafe-project",
+      expect: {
+        toHaveScreenshot: {
+          pathTemplate: "{testDir}/project/{arg}{ext}",
+        },
+      },
+    };
+
+    expect(effectiveScreenshotPathTemplate(synthetic, unsafeProject))
+      .toBe("{testDir}/project/{arg}{ext}");
+    expect(effectiveScreenshotPathTemplate(synthetic, unsafeProject))
+      .not.toContain("{platform}");
+  });
+
+  it("GEGENPROBE: project.expect ohne Screenshot-Pfad verwirft Root-expect und faellt auf den Projekt-/Root-Snapshotpfad zurueck", () => {
+    const synthetic = {
+      ...playwrightConfig,
+      snapshotPathTemplate: "{testDir}/root/{arg}-{platform}{ext}",
+      expect: {
+        toHaveScreenshot: {
+          pathTemplate: "{testDir}/root-shot/{arg}{ext}",
+        },
+      },
+    };
+    const project = {
+      name: "project-expect-replaces-root",
+      expect: { timeout: 1234 },
+      snapshotPathTemplate: "{testDir}/project/{arg}-{platform}{ext}",
+    };
+
+    expect(effectiveScreenshotPathTemplate(synthetic, project))
+      .toBe("{testDir}/project/{arg}-{platform}{ext}");
   });
 
   it("keine Baseline liegt ohne Plattform-Kennung auf der Platte", () => {
