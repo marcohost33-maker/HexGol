@@ -81,6 +81,11 @@ jobs:
       - name: Install isolated dependency graph (phantom-dependency gate)
         run: npm ci --install-strategy=linked
 
+      - name: Verify npm-normalized manifest and lockfile are stable
+        run: |
+          npm install --package-lock-only --ignore-scripts
+          git diff --exit-code -- package.json package-lock.json
+
       - name: Build production bundle at the declared minimum Node version
         run: npm run build
 
