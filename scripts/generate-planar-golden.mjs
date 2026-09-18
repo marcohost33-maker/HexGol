@@ -6,6 +6,7 @@ import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { buildNeighbors, RMETA, stepLife } from "../src/lib/sim-engine.js";
 
 export const SCHEMA = "golhex-planar-golden-v1";
@@ -109,7 +110,7 @@ export function canonicalJson(value) {
   return JSON.stringify(value, null, 2) + "\n";
 }
 
-if (import.meta.url === new URL(`file://${process.argv[1]}`).href) {
+if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
   const current = currentEngineBlob();
   if (current && current !== SOURCE_ENGINE_BLOB) {
     throw new Error(
