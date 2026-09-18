@@ -31,9 +31,12 @@ concurrency:
 permissions: {}
 
 jobs:
+  # Required context `unit`: both the declared minimum runtime and the normal
+  # Node-22 test/build lane live in ONE required job. A Node-20-only regression
+  # therefore cannot leave the required `unit` context green.
   unit:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 18
     permissions:
       contents: read
     steps:
@@ -41,52 +44,19 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
-        with:
-          node-version: 22
-          cache: npm
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Run Vitest
-        run: npm test -- --reporter=verbose
-
-      - name: Build production bundle (smoke check)
-        run: npm run build
-
-  # Vite 8 requires Node ^20.19.0 or >=22.12.0, and package.json now declares
-  # exactly that range. Keep the required `unit` context stable on Node 22, but
-  # exercise the earliest actually supported Node release separately so a green
-  # job proves the lower bound rather than merely "some Node 20".
-  node20-build:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-        with:
-          persist-credentials: false
-
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
+      # Vite 8 supports ^20.19.0 || >=22.12.0. Exercise the exact lower edge,
+      # not a moving "20" alias.
+      - name: Set up declared minimum Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
         with:
           node-version: 20.19.0
           cache: npm
 
-      # npm's linked layout intentionally avoids top-level hoisting of undeclared
-      # packages. This makes a direct import that is missing from package.json fail
-      # here instead of succeeding accidentally through a transitive dependency
-      # (#181). The normal unit lane above still exercises the default layout.
-      - name: Install isolated dependency graph (phantom-dependency gate)
+      # npm's linked layout is intentionally unhoisted. npm recommends it for
+      # catching undeclared/phantom imports in package-author workflows (#181).
+      - name: Install isolated dependency graph at minimum Node
         run: npm ci --install-strategy=linked
 
-      # Do NOT run npm install --package-lock-only here as a whole-lock normalizer:
-      # npm 10.8.2 removes unrelated `libc` metadata from optional platform
-      # packages written by newer npm versions. That makes an otherwise-correct
-      # lockfile red for package-manager-version drift rather than for #181.
-      # Instead verify exactly the dependency contract this lane is responsible
-      # for; the linked install above is the behavioral phantom-dependency gate.
       - name: Verify direct parser dependency contract
         run: |
           node --input-type=module <<'NODE'
@@ -132,7 +102,24 @@ jobs:
           );
           NODE
 
-      - name: Build production bundle at the declared minimum Node version
+      - name: Build production bundle at declared minimum Node
+        run: npm run build
+
+      # Switch the same required job to the normal CI runtime. npm ci removes
+      # the linked node_modules tree before installing the standard layout.
+      - name: Set up Node 22 test runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies for tests
+        run: npm ci
+
+      - name: Run Vitest
+        run: npm test -- --reporter=verbose
+
+      - name: Build production bundle on normal CI runtime
         run: npm run build
 
   # Coverage is MEASURE-FIRST (Test-Center T4): it reports the number but does
