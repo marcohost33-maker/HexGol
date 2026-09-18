@@ -4,7 +4,7 @@
 // no duplicate CA implementation lives in this file.
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { realpathSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildNeighbors, RMETA, stepLife } from "../src/lib/sim-engine.js";
@@ -18,14 +18,12 @@ const STEPS = 5;
 const LIVE_COORDINATES = Object.freeze([[1,2],[1,3],[2,2],[2,3],[3,2]]);
 
 function currentEngineBlob() {
-  try {
-    return execFileSync("git", ["hash-object", "src/lib/sim-engine.js"], {
-      encoding: "utf8",
-      cwd: fileURLToPath(new URL("..", import.meta.url)),
-    }).trim();
-  } catch {
-    return null;
-  }
+  // Fail closed: an unreadable provenance source is not permission to emit a
+  // fixture that still advertises the old engine blob.
+  return execFileSync("git", ["hash-object", "src/lib/sim-engine.js"], {
+    encoding: "utf8",
+    cwd: fileURLToPath(new URL("..", import.meta.url)),
+  }).trim();
 }
 
 export function buildPlanarGoldenV1() {
@@ -110,9 +108,12 @@ export function canonicalJson(value) {
   return JSON.stringify(value, null, 2) + "\n";
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+if (
+  process.argv[1] &&
+  realpathSync(fileURLToPath(import.meta.url)) === realpathSync(resolve(process.argv[1]))
+) {
   const current = currentEngineBlob();
-  if (current && current !== SOURCE_ENGINE_BLOB) {
+  if (current !== SOURCE_ENGINE_BLOB) {
     throw new Error(
       `sim-engine.js changed: expected blob ${SOURCE_ENGINE_BLOB}, got ${current}. ` +
       "Generate a new contract version/provenance record instead of silently refreshing v1.",
