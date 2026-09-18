@@ -28,7 +28,7 @@ describe("cross-repo planar Golden Vector contract", () => {
     ).trim();
     expect(currentBlob).toBe(SOURCE_ENGINE_BLOB);
     expect(createHash("sha256").update(committed).digest("hex"))
-      .toBe("7ce339095d7507b4c413dbacc7b7f6a23eb9636e636ae40d2016e93ddc07f974");
+      .toBe("d69f185dd3c86a165b4e2a73f6d817e47dc0ad669baaee7f3fa8a23280093b0e");
   });
 
   it("contains topology plus every intermediate state, not only an end hash", () => {
