@@ -176,6 +176,26 @@ describe("standards-based CSP DOM structure contract (#176)", () => {
     expect(run.stderr).toMatch(/iframe\[srcdoc\].*not authorized by the deployed script-src 'self'/);
   });
 
+  it("enforces inherited script-src self for external scripts in srcdoc", () => {
+    const blocked = runGuard(
+      baselineHtml(
+        '<iframe srcdoc="&lt;script src=&quot;https://cdn.example/boot.js&quot;&gt;&lt;/script&gt;"></iframe>',
+      ),
+    );
+    expect(blocked.status).not.toBe(0);
+    expect(blocked.stdout).toContain("srcdoc-documents=1");
+    expect(blocked.stderr).toMatch(/iframe\[srcdoc\].*inherited script-src 'self'/);
+
+    const allowed = runGuard(
+      baselineHtml(
+        '<iframe srcdoc="&lt;script src=&quot;/assets/boot.js&quot;&gt;&lt;/script&gt;"></iframe>',
+      ),
+    );
+    expect(allowed.status).toBe(0);
+    expect(allowed.stdout).toContain("srcdoc-documents=1");
+  });
+
+
   it("fails closed on excessive srcdoc nesting", () => {
     let nested = '<img src="/x.png" alt="" />';
     for (let i = 0; i < 10; i += 1) {
@@ -201,6 +221,17 @@ describe("standards-based CSP DOM structure contract (#176)", () => {
     const run = runGuard(baselineHtml("<svg><script /></svg>"));
     expect(run.status).toBe(0);
     expect(run.stdout).toContain("unterminated-scripts=0");
+  });
+
+  it("does not mistake a slash inside an unquoted SVG-script attribute for self-closing syntax", () => {
+    const run = runGuard(
+      baselineHtml(
+        '<iframe srcdoc="&lt;svg&gt;&lt;script type=&quot;application/json&quot; data=x/&gt;payload"></iframe>',
+      ),
+    );
+    expect(run.status).not.toBe(0);
+    expect(run.stdout).toContain("srcdoc-documents=1");
+    expect(run.stderr).toMatch(/unterminated SVG <script>/);
   });
 
   it("rejects genuinely unterminated SVG script elements", () => {
