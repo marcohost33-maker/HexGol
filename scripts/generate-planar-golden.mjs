@@ -26,6 +26,16 @@ function currentEngineBlob() {
   }).trim();
 }
 
+function checkpointStateSha256(checkpoint) {
+  const canonicalState = JSON.stringify({
+    tick: checkpoint.tick,
+    col: checkpoint.col,
+    age: checkpoint.age,
+    ghost: checkpoint.ghost,
+  });
+  return createHash("sha256").update(canonicalState, "utf8").digest("hex");
+}
+
 export function buildPlanarGoldenV1() {
   const { edge, mask } = buildNeighbors(ROWS, COLS, "box");
   const n = ROWS * COLS;
@@ -78,6 +88,30 @@ export function buildPlanarGoldenV1() {
       enginePath: "src/lib/sim-engine.js",
       engineBlobSha: SOURCE_ENGINE_BLOB,
       engineFunction: "stepLife",
+      workerTransition: "src/worker/render-worker.js -> shared stepLife core",
+    },
+    provenance: {
+      reproducibilityLevel: "R3-within-nodejs-backend",
+      canonicalReferenceBackend: {
+        runtime: "Node.js",
+        version: "22.23.2",
+        npm: "10.9.8",
+        language: "ECMAScript modules",
+      },
+      precision: {
+        col: "uint8",
+        age: "uint16",
+        ghost: "uint8",
+        neighborCounts: "integer",
+      },
+      seed: null,
+      initialStateSource: "explicit five-cell fixture; no PRNG",
+      tickSequence: checkpoints.map(({ tick }) => tick),
+      checkpointStateEncoding: "canonical-json-v1:{tick,col,age,ghost}",
+      checkpointStateSha256: checkpoints.map((checkpoint) => ({
+        tick: checkpoint.tick,
+        sha256: checkpointStateSha256(checkpoint),
+      })),
     },
     topology: {
       layout: "pointy-top-odd-r",
