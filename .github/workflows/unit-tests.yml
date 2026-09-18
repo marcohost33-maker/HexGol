@@ -74,8 +74,12 @@ jobs:
           node-version: 20.19.0
           cache: npm
 
-      - name: Install dependencies at the declared minimum Node version
-        run: npm ci
+      # npm's linked layout intentionally avoids top-level hoisting of undeclared
+      # packages. This makes a direct import that is missing from package.json fail
+      # here instead of succeeding accidentally through a transitive dependency
+      # (#181). The normal unit lane above still exercises the default layout.
+      - name: Install isolated dependency graph (phantom-dependency gate)
+        run: npm ci --install-strategy=linked
 
       - name: Build production bundle at the declared minimum Node version
         run: npm run build
