@@ -5,7 +5,60 @@
     "commit": "15a1be0396ac72f754d8804220bb3f25d7b4a1c1",
     "enginePath": "src/lib/sim-engine.js",
     "engineBlobSha": "631c07d4713922ad0f433ba408e36609dc148517",
-    "engineFunction": "stepLife"
+    "engineFunction": "stepLife",
+    "workerTransition": "src/worker/render-worker.js -> shared stepLife core"
+  },
+  "provenance": {
+    "reproducibilityLevel": "R3-within-nodejs-backend",
+    "canonicalReferenceBackend": {
+      "runtime": "Node.js",
+      "version": "22.23.2",
+      "npm": "10.9.8",
+      "language": "ECMAScript modules"
+    },
+    "precision": {
+      "col": "uint8",
+      "age": "uint16",
+      "ghost": "uint8",
+      "neighborCounts": "integer"
+    },
+    "seed": null,
+    "initialStateSource": "explicit five-cell fixture; no PRNG",
+    "tickSequence": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "checkpointStateEncoding": "canonical-json-v1:{tick,col,age,ghost}",
+    "checkpointStateSha256": [
+      {
+        "tick": 0,
+        "sha256": "0a85d2f987a40d433d5c38c5e06f8a2ca3bc80771c722197205a2270fe1cfebc"
+      },
+      {
+        "tick": 1,
+        "sha256": "44cc2fbaf51a8c843de55168436ca213a2891688493a4600c6983203bf429631"
+      },
+      {
+        "tick": 2,
+        "sha256": "fa3627e9ffae56aa11607812005c90f0f2a12a3147efed551c95ff893456ee76"
+      },
+      {
+        "tick": 3,
+        "sha256": "8b83a19fc482bae94a824b1783045d5601e7df844d078a9d67b735f698d66454"
+      },
+      {
+        "tick": 4,
+        "sha256": "fc1eef3431ae17ba6ad2aaaf07fedb01c7e158c76962c2ca65a5f237332affec"
+      },
+      {
+        "tick": 5,
+        "sha256": "2626d4f12568a0fa346b28088ad7d06f6a5f0e22758ac6f2f0c9e1cd7ae1d2bc"
+      }
+    ]
   },
   "topology": {
     "layout": "pointy-top-odd-r",
