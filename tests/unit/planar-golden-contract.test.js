@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -20,6 +21,12 @@ describe("cross-repo planar Golden Vector contract", () => {
   it("pins exact engine provenance and a stable contract checksum", () => {
     expect(parsed.schema).toBe("golhex-planar-golden-v1");
     expect(parsed.source.engineBlobSha).toBe(SOURCE_ENGINE_BLOB);
+    const currentBlob = execFileSync(
+      "git",
+      ["hash-object", "src/lib/sim-engine.js"],
+      { encoding: "utf8", cwd: resolve(".") },
+    ).trim();
+    expect(currentBlob).toBe(SOURCE_ENGINE_BLOB);
     expect(createHash("sha256").update(committed).digest("hex"))
       .toBe("7ce339095d7507b4c413dbacc7b7f6a23eb9636e636ae40d2016e93ddc07f974");
   });
