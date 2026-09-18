@@ -21,7 +21,7 @@ function currentEngineBlob() {
   try {
     return execFileSync("git", ["hash-object", "src/lib/sim-engine.js"], {
       encoding: "utf8",
-      cwd: resolve(new URL("..", import.meta.url).pathname),
+      cwd: fileURLToPath(new URL("..", import.meta.url)),
     }).trim();
   } catch {
     return null;
