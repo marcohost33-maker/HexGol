@@ -5,10 +5,9 @@
 // browser parsing with regexes. It intentionally answers DOM-structure questions
 // only; directive-specific CSP source-list semantics stay in the policy layer.
 //
-// NOTE: parse5@8.0.1 is currently present in package-lock.json through jsdom.
-// This gate imports parse5 directly so Node 20 builds do not load jsdom@30's
-// Node-22-only runtime. Issue #181 tracks promotion to an explicit direct
-// devDependency with a real npm-regenerated lockfile; do not hand-edit the lock.
+// parse5@8.0.1 is an explicit direct devDependency. The Node-20 CI lane installs
+// with npm's linked strategy so an undeclared direct import cannot succeed merely
+// because another dependency happened to hoist the package (#181).
 import { strict as assert } from "node:assert";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
