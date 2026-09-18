@@ -47,3 +47,5 @@ are:
 1. make the existing TS/TSX surface clean under this compiler contract;
 2. enable stricter flags incrementally with measured error counts;
 3. turn on `checkJs` per module/subtree, not globally in one unreviewable jump.
+
+The staged strict/checkJs follow-up is tracked in **Issue #189**.
