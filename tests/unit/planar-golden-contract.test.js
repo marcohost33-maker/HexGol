@@ -31,6 +31,13 @@ describe("cross-repo planar Golden Vector contract", () => {
       .toBe("d69f185dd3c86a165b4e2a73f6d817e47dc0ad669baaee7f3fa8a23280093b0e");
   });
 
+  it("keeps the Offscreen worker on the same production transition core", () => {
+    const worker = readFileSync("src/worker/render-worker.js", "utf8");
+    expect(worker).toContain("stepLife as stepLifeCore");
+    expect(worker).toMatch(/stepLifeCore\(\{/);
+    expect(worker).not.toMatch(/function\s+stepLife\s*\(/);
+  });
+
   it("contains topology plus every intermediate state, not only an end hash", () => {
     expect(parsed.topology.neighborTable).toHaveLength(5 * 6 * 6);
     expect(parsed.checkpoints.map((x) => x.tick)).toEqual([0,1,2,3,4,5]);
