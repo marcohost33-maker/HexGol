@@ -28,7 +28,7 @@ describe("cross-repo planar Golden Vector contract", () => {
     ).trim();
     expect(currentBlob).toBe(SOURCE_ENGINE_BLOB);
     expect(createHash("sha256").update(committed).digest("hex"))
-      .toBe("d69f185dd3c86a165b4e2a73f6d817e47dc0ad669baaee7f3fa8a23280093b0e");
+      .toBe("c4c3b1d9ae0d25bddcbce8e41f666e1f4814a9be33fea0bee96f3a2954a7b5b1");
   });
 
   it("keeps the Offscreen worker on the same production transition core", () => {
@@ -36,6 +36,27 @@ describe("cross-repo planar Golden Vector contract", () => {
     expect(worker).toContain("stepLife as stepLifeCore");
     expect(worker).toMatch(/stepLifeCore\(\{/);
     expect(worker).not.toMatch(/function\s+stepLife\s*\(/);
+  });
+
+  it("records ADR-001-style R3 provenance for every checkpoint", () => {
+    expect(parsed.provenance.reproducibilityLevel).toBe("R3-within-nodejs-backend");
+    expect(parsed.provenance.canonicalReferenceBackend).toMatchObject({
+      runtime: "Node.js",
+      version: "22.23.2",
+      npm: "10.9.8",
+    });
+    expect(parsed.provenance.precision).toEqual({
+      col: "uint8",
+      age: "uint16",
+      ghost: "uint8",
+      neighborCounts: "integer",
+    });
+    expect(parsed.provenance.seed).toBeNull();
+    expect(parsed.provenance.tickSequence).toEqual([0,1,2,3,4,5]);
+    expect(parsed.provenance.checkpointStateSha256).toHaveLength(6);
+    for (const entry of parsed.provenance.checkpointStateSha256) {
+      expect(entry.sha256).toMatch(/^[0-9a-f]{64}$/);
+    }
   });
 
   it("contains topology plus every intermediate state, not only an end hash", () => {
