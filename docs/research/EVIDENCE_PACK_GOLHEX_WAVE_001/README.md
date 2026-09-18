@@ -52,11 +52,25 @@ eigenmode phase, and both falsification gates) inside the required `unit` check.
 
 ## Reproduce
 
+This directory is a **frozen historical evidence pack** bound to commit
+`62a565f316f74ac6057135ab36046a7710c62745`. The reproduction script now
+fails closed when run on a different revision or a dirty worktree; this prevents
+new solver results from being silently mixed with an old claim decision.
+
 ```bash
+git worktree add ../hexgol-wave-001 62a565f316f74ac6057135ab36046a7710c62745
+cd ../hexgol-wave-001
 bash docs/research/EVIDENCE_PACK_GOLHEX_WAVE_001/commands.sh
 ```
 
+The script uses `npm ci` against the committed lockfile and writes
+`logs/reproduction_context.json` with commit/runtime/oracle versions before
+recomputing the checksums. Compare that context with `environment.lock` when
+assessing reproducibility across environments.
+
 Add `--full` to the `node` step for the extended local grid (24×24 torus, dt=0.20, V=0.1).
+A run on current `main` is a **new experiment** and must use a new evidence-pack
+identifier instead of overwriting WAVE_001.
 
 ## Bounds (see negative_results.md)
 
