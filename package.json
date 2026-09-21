@@ -31,8 +31,8 @@
     "@vitest/coverage-v8": "^4.1.11",
     "fake-indexeddb": "^6.2.5",
     "jsdom": "^30.0.1",
-    "vite": "^8.2.2",
-    "vitest": "^4.1.10"
+    "vite": "^8.3.0",
+    "vitest": "^5.0.0"
   },
   "engines": {
     "node": ">=20"
