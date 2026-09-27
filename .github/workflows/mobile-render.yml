@@ -5,9 +5,10 @@
 name: mobile-render
 
 on:
-  # Kein push:main mehr (2026-08-11) -- Begruendung siehe deploy-pages.yml Kopf.
+  # Kein push:main mehr (2026-08-11) -- Begruendung siehe unit-tests.yml Kopf.
+  # Kein `branches:`-Filter (2026-09-27): auch gestapelte PRs auf Zwischenbranches
+  # werden geprueft, siehe unit-tests.yml.
   pull_request:
-    branches: [main]
 
 concurrency:
   group: mobile-render-${{ github.ref }}
