@@ -203,9 +203,9 @@ describe("toolchain contract: Dependabot vs. private reusable workflows", () => 
 });
 
 describe("toolchain contract: test gates also run for stacked PRs", () => {
-  // #185 zielte auf einen ungeschuetzten Zwischenbranch und lief ohne `unit`/`e2e`,
+  // #185 zielte auf einen ungeschuetzten Zwischenbranch und lief ohne `unit`/`e2e`/`mobile-render`,
   // weil `pull_request: branches: [ main ]` fuer ihn keinen Lauf ausloeste.
-  for (const file of ["unit-tests.yml", "visual-regression.yml"]) {
+  for (const file of ["unit-tests.yml", "visual-regression.yml", "mobile-render.yml"]) {
     it(`${file}: pull_request has no branches filter`, () => {
       const src = readFileSync(join(workflowDir, file), "utf8");
       const on = src.match(/^on:\s*\n([\s\S]*?)^\S/m)?.[1] ?? "";
