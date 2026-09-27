@@ -33,7 +33,8 @@
 // Das zeigt sich nur auf GitHub; hier wird nur die Konfiguration geprueft, die ihn
 // steuert (Pfad-Semantik gegen dependabot-core `FileFiltering.exclude_path?`
 // nachgelesen: exakter Repo-Pfad ohne fuehrenden Slash trifft).
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import semver from "semver";
@@ -256,10 +257,27 @@ describe("toolchain contract: lockfile keeps platform metadata (libc)", () => {
   });
 
   it("discriminates: an npm-10-style lockfile without libc is caught", () => {
-    const stripped = structuredClone(lock);
-    for (const meta of Object.values(stripped.packages)) delete meta.libc;
-    const hasLibc = Object.values(lock.packages).some((m) => m.libc);
-    expect(hasLibc).toBe(true);
-    expect(platformDrift(stripped, root).drift.length).toBeGreaterThan(0);
+    // Synthetische Fixture statt der installierten Pakete dieses Rechners: unter
+    // Windows/macOS sind nur win32-/darwin-Bindings installiert, die kein `libc`
+    // tragen -- eine Gegenprobe am echten node_modules waere dort rot, obwohl die
+    // Lockdatei stimmt (Codex-Review P2 auf 9784ba4). Den ECHTEN Abgleich oben fuehrt
+    // die Linux-CI mit Biss; auf anderen Plattformen ist er schwaecher, aber korrekt.
+    const dir = mkdtempSync(join(tmpdir(), "toolchain-libc-"));
+    try {
+      const key = "node_modules/@fixture/binding-linux-x64-gnu";
+      const platform = { os: ["linux"], cpu: ["x64"], libc: ["glibc"] };
+      mkdirSync(join(dir, key), { recursive: true });
+      writeFileSync(join(dir, key, "package.json"), JSON.stringify({ name: "@fixture/binding-linux-x64-gnu", ...platform }));
+      const intact = { packages: { "": {}, [key]: { version: "1.0.0", ...platform } } };
+      const stripped = structuredClone(intact);
+      delete stripped.packages[key].libc;
+
+      expect(platformDrift(intact, dir)).toEqual({ checked: 1, drift: [] });
+      const caught = platformDrift(stripped, dir);
+      expect(caught.checked).toBe(1);
+      expect(caught.drift).toEqual([`${key}: libc lock=undefined installiert=["glibc"]`]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
