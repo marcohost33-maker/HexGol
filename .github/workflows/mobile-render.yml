@@ -21,4 +21,8 @@ jobs:
   mobile-render:
     uses: marcohost33-maker/coworkerz-ci/.github/workflows/mobile-render-verify.yml@40104a8cc2772b8563107c510660c51e12e2d367 # coworkerz-ci main (mobile-render-verify reusable)
     with:
+      # Explizit statt Reusable-Default (dort ebenfalls "22"): so sieht der Waechter
+      # tests/unit/toolchain-contract.test.js diese Version und prueft sie gegen
+      # engines.node. Der Default eines privaten Repos ist von hier aus unsichtbar.
+      node-version: "22"
       render-test-command: "npx playwright test --project=mobile tests/e2e/mobile-hexshape.spec.ts tests/e2e/mobile-perf-budget.spec.ts"

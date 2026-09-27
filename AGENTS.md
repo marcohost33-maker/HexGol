@@ -169,7 +169,13 @@ undici 8, jest-dom 7). The range is the one every `engines.node` in
 `package-lock.json` accepts; `tests/unit/toolchain-contract.test.js` fails if the
 promise and the lockfile drift apart, or if a CI `setup-node` leaves the range.
 Regenerate the lockfile with **npm ≥ 11** (`npx npm@11 install …`): npm 10 strips
-the `libc` fields from `package-lock.json` and produces a spurious diff.
+the `libc` fields from `package-lock.json`, and npm 11 `--package-lock-only` does
+**not** restore them once lost (measured 2026-09-27). The same test compares
+`os`/`cpu`/`libc` of every installed package against its lock entry, so a stripped
+lockfile turns `unit` red. Dependabot itself runs npm 11 and keeps the fields.
+Packages that pin each other exactly via `peerDependencies` (today
+`vitest` ↔ `@vitest/coverage-v8`) must share one Dependabot group; the test derives
+those pairs from the lockfile.
 
 ```bash
 npm install

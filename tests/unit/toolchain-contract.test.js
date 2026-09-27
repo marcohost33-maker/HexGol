@@ -1,6 +1,6 @@
 // Waechter fuer den Toolchain-Vertrag (2026-09-27, Session-Bericht 2026-09-21).
 //
-// Drei Behauptungen, die das Repo ueber sich selbst macht, und die bis heute
+// Fuenf Behauptungen, die das Repo ueber sich selbst macht, und die bis heute
 // niemand pruefte:
 //
 // 1. `package.json` -> `engines.node` versprach ">=20". Gemessen an der Lockdatei
@@ -18,6 +18,16 @@
 //    die es aufruft, muss in `exclude-paths` stehen -- und jede Ausnahme muss noch
 //    eine existierende Datei mit genau so einem Aufruf sein (keine Leiche, die
 //    still eine ganz normale Workflow-Datei von Updates ausnimmt).
+// 4. Direkte Abhaengigkeiten, die einander per peerDependency EXAKT pinnen
+//    (heute @vitest/coverage-v8 <-> vitest), muessen in derselben Dependabot-Gruppe
+//    stehen. Sonst bumpt Dependabot sie in getrennten PRs, von denen jeder fuer sich
+//    ERESOLVE ist -- so geschehen mit #180 und #191. Die Paare werden aus der
+//    Lockdatei ABGELEITET, nicht hier aufgezaehlt: ein neues Paar ist sofort erfasst.
+// 5. Plattform-Metadaten (`os`/`cpu`/`libc`) jedes installierten Pakets stehen
+//    unveraendert in der Lockdatei. npm 10 streicht `libc` beim Neuschreiben, und
+//    `npm install --package-lock-only` mit npm 11 stellt es NICHT wieder her
+//    (gemessen 2026-09-27: 0 -> 0 Felder). Ein Normalisierungs-Diff kann die Drift
+//    also nicht fangen; der Abgleich gegen das installierte Manifest kann es.
 //
 // Was hier NICHT geprueft wird: ob der echte Dependabot-Lauf danach gruen endet.
 // Das zeigt sich nur auf GitHub; hier wird nur die Konfiguration geprueft, die ihn
@@ -64,6 +74,77 @@ function githubActionsExcludePaths(src) {
   const m = block.match(/^(\s*)exclude-paths:\s*\n((?:\1\s+-\s*.+\n?)+)/m);
   if (!m) return [];
   return [...m[2].matchAll(/-\s*["']?([^"'\n]+?)["']?\s*$/gm)].map((x) => x[1]);
+}
+
+/** Gruppen des npm-Blocks von dependabot.yml: { name: [pattern, ...] }. */
+function npmGroups(src) {
+  const block = src.split(/^\s*-\s*package-ecosystem:\s*/m).find((b) => b.startsWith("npm"));
+  if (!block) return null;
+  const lines = block.split("\n");
+  const start = lines.findIndex((l) => /^\s*groups:\s*$/.test(l));
+  if (start < 0) return {};
+  const base = lines[start].search(/\S/);
+  const groups = {};
+  let current = null;
+  for (const line of lines.slice(start + 1)) {
+    if (!line.trim() || line.trim().startsWith("#")) continue;
+    const indent = line.search(/\S/);
+    if (indent <= base) break;
+    const name = line.match(/^\s*([\w@./-]+):\s*$/);
+    if (name && indent === base + 2) {
+      current = groups[name[1]] = [];
+      continue;
+    }
+    const item = line.match(/^\s*-\s*["']?([^"'#\s]+)["']?/);
+    if (item && current) current.push(item[1]);
+  }
+  return groups;
+}
+
+/** Dependabot-Muster: `*` passt auf beliebige Zeichen. */
+function matches(pattern, name) {
+  const re = new RegExp(`^${pattern.split("*").map((s) => s.replace(/[.+?^${}()|[\]\\/]/g, "\\$&")).join(".*")}$`);
+  return re.test(name);
+}
+
+function groupOf(groups, name) {
+  const hits = Object.entries(groups).filter(([, pats]) => pats.some((p) => matches(p, name)));
+  return hits.length ? hits[0][0] : null; // Dependabot: erste passende Gruppe gewinnt
+}
+
+/** Paare direkter Abhaengigkeiten, die einander per peerDependency exakt pinnen. */
+function exactPeerPins(manifest, lockfile) {
+  const direct = { ...manifest.dependencies, ...manifest.devDependencies };
+  const pairs = [];
+  for (const dep of Object.keys(direct)) {
+    const peers = lockfile.packages?.[`node_modules/${dep}`]?.peerDependencies ?? {};
+    for (const [peer, range] of Object.entries(peers)) {
+      if (peer in direct && semver.valid(range)) pairs.push([dep, peer, range]);
+    }
+  }
+  return pairs;
+}
+
+const PLATFORM_KEYS = ["os", "cpu", "libc"];
+
+/** Lock-Eintraege, deren os/cpu/libc vom installierten Manifest abweichen. */
+function platformDrift(lockfile, projectRoot) {
+  const drift = [];
+  let checked = 0;
+  for (const [key, meta] of Object.entries(lockfile.packages ?? {})) {
+    if (!key.startsWith("node_modules/")) continue;
+    const manifestPath = join(projectRoot, key, "package.json");
+    if (!existsSync(manifestPath)) continue; // fremde Plattform: nicht installiert
+    const installed = JSON.parse(readFileSync(manifestPath, "utf8"));
+    if (!PLATFORM_KEYS.some((k) => installed[k] || meta[k])) continue;
+    checked++;
+    for (const k of PLATFORM_KEYS) {
+      if (JSON.stringify(installed[k]) !== JSON.stringify(meta[k])) {
+        drift.push(`${key}: ${k} lock=${JSON.stringify(meta[k])} installiert=${JSON.stringify(installed[k])}`);
+      }
+    }
+  }
+  return { checked, drift };
 }
 
 describe("toolchain contract: engines.node", () => {
@@ -133,4 +214,52 @@ describe("toolchain contract: test gates also run for stacked PRs", () => {
       expect(pr).not.toMatch(/^\s+branches(-ignore)?:/m);
     });
   }
+});
+
+describe("toolchain contract: exact peer pins share a Dependabot group", () => {
+  const groups = npmGroups(readFileSync(join(root, ".github/dependabot.yml"), "utf8"));
+  const pairs = exactPeerPins(pkg, lock);
+
+  it("reads the npm groups", () => {
+    expect(groups).not.toBeNull();
+    expect(Object.keys(groups).length).toBeGreaterThan(0);
+  });
+
+  it("finds the exact peer pins (derived from the lockfile, not listed here)", () => {
+    // Nicht leer: sonst waere der naechste Test vakuos gruen.
+    expect(pairs.length).toBeGreaterThan(0);
+  });
+
+  it("every exactly pinned pair is bumped together", () => {
+    const split = pairs
+      .map(([a, b, range]) => ({ pair: `${a} -> ${b}@${range}`, a: groupOf(groups, a), b: groupOf(groups, b) }))
+      .filter(({ a, b }) => a === null || a !== b);
+    expect(split).toEqual([]);
+  });
+
+  it("discriminates: without '@vitest/*' the vitest pair is split", () => {
+    const without = { ...groups, vite: groups.vite.filter((p) => p !== "@vitest/*") };
+    expect(groupOf(without, "@vitest/coverage-v8")).not.toBe(groupOf(without, "vitest"));
+  });
+});
+
+describe("toolchain contract: lockfile keeps platform metadata (libc)", () => {
+  const { checked, drift } = platformDrift(lock, root);
+
+  it("checks at least one installed platform-specific package", () => {
+    // Auf jeder unterstuetzten Plattform ist mindestens ein rolldown-Binding installiert.
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it("os/cpu/libc in the lockfile match the installed manifests", () => {
+    expect(drift).toEqual([]);
+  });
+
+  it("discriminates: an npm-10-style lockfile without libc is caught", () => {
+    const stripped = structuredClone(lock);
+    for (const meta of Object.values(stripped.packages)) delete meta.libc;
+    const hasLibc = Object.values(lock.packages).some((m) => m.libc);
+    expect(hasLibc).toBe(true);
+    expect(platformDrift(stripped, root).drift.length).toBeGreaterThan(0);
+  });
 });
