@@ -20,7 +20,7 @@ priority_when_in_conflict: 1
 
 ## Project context
 
-- **Stack:** JavaScript + Vite, React 19.2, Vitest (unit), Playwright (e2e +
+- **Stack:** JavaScript + Vite, React 19 (exact pins: `package.json`), Vitest 5 (unit), Playwright (e2e +
   visual regression). Package name `hexgol`, `"private": true`.
 - **Purpose:** GolHex is a Carter-Bays **hex-topology cellular automaton**
   (Hexagonal Game of Life) with real-valued physics modes (snow, water, unitary
