@@ -26,10 +26,17 @@ updates:
           - "@types/react"
           - "@types/react-dom"
       vite:
+        # "@vitest/*" gehoert hierher (2026-09-27): @vitest/coverage-v8 pinnt vitest
+        # per peerDependency EXAKT (4.1.11 <-> 4.1.11). Getrennt gruppiert entstanden
+        # zwei PRs, die jeder fuer sich nicht aufloesbar waren (ERESOLVE): #191
+        # (vitest 5, coverage-v8 bleibt 4) und #180 (coverage-v8 5, vitest bleibt 4)
+        # -- beide mit rotem unit/e2e. Waechter: toolchain-contract.test.js leitet
+        # exakte Peer-Pins aus der Lockdatei ab und verlangt dieselbe Gruppe.
         patterns:
           - "vite"
           - "@vitejs/*"
           - "vitest"
+          - "@vitest/*"
       testing:
         patterns:
           - "@playwright/*"
@@ -49,6 +56,20 @@ updates:
     labels:
       - dependencies
       - github-actions
+    # Private reusable workflow (2026-09-27, Session-Bericht 09-21 Option A):
+    # mobile-render.yml ruft marcohost33-maker/coworkerz-ci auf. Das Repo ist
+    # privat und gehoert einem BENUTZERkonto; den Schalter "Dependabot darf private
+    # Repos lesen" gibt es nur fuer Organisationen. Folge war ein jede Woche roter
+    # Updater-Lauf (git_dependencies_not_reachable, z.B. 34812276520, 35567389769),
+    # der auch die uebrigen Actions-Updates dieses Blocks gefaehrdete.
+    # Ausgeschlossen wird GENAU diese eine Datei (sie hat nur die eine `uses:`-Zeile),
+    # nicht ein Glob: jede neue Workflow-Datei bleibt automatisch unter Dependabot.
+    # Preis, bewusst angenommen: den coworkerz-ci-Pin in mobile-render.yml pflegt
+    # ein Mensch per PR -- Dependabot konnte ihn ohnehin nie aktualisieren.
+    # Waechter: tests/unit/toolchain-contract.test.js (keine veraltete Ausnahme,
+    # kein privater Aufruf ausserhalb der Ausnahme).
+    exclude-paths:
+      - ".github/workflows/mobile-render.yml"
 
 # Cooldown configuration (added 2026-05-23 to address zizmor/dependabot-cooldown).
 # Each updater waits N days after a new release before opening a PR. This

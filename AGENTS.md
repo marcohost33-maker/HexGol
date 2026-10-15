@@ -163,6 +163,20 @@ docs/
 
 ## Build / test commands
 
+**Node:** `^22.22.2 || ^24.15.0 || >=26.0.0` (`package.json` → `engines`). Node 20 is
+end-of-life since 2026-04-30 and is rejected by the locked toolchain (jsdom 30,
+undici 8, jest-dom 7). The range is the one every `engines.node` in
+`package-lock.json` accepts; `tests/unit/toolchain-contract.test.js` fails if the
+promise and the lockfile drift apart, or if a CI `setup-node` leaves the range.
+Regenerate the lockfile with **npm ≥ 11** (`npx npm@11 install …`): npm 10 strips
+the `libc` fields from `package-lock.json`, and npm 11 `--package-lock-only` does
+**not** restore them once lost (measured 2026-09-27). The same test compares
+`os`/`cpu`/`libc` of every installed package against its lock entry, so a stripped
+lockfile turns `unit` red. Dependabot itself runs npm 11 and keeps the fields.
+Packages that pin each other exactly via `peerDependencies` (today
+`vitest` ↔ `@vitest/coverage-v8`) must share one Dependabot group; the test derives
+those pairs from the lockfile.
+
 ```bash
 npm install
 npm run dev          # http://localhost:5173
@@ -186,6 +200,11 @@ npm run test:e2e:update   # refresh Playwright snapshots (use deliberately)
    prevent nothing. All gating happens on the pull request. A merge therefore runs no
    test job; `encoding-guard` and `zizmor` still fire on `push: main` when the merge
    touches `.github/**`, which is intended (they guard the workflow files themselves).
+   **Stacked PRs are tested too.** `unit-tests.yml`, `visual-regression.yml` and
+   `mobile-render.yml` trigger on *every* `pull_request`, not only those based on
+   `main` (since 2026-09-27; #185 was merged into an unprotected intermediate
+   branch without `unit`/`e2e` ever running). On such a branch the checks are
+   visible but not enforced — only `main` has branch protection.
 2. **Backup-First on destructive ops.** Before any `git push --force`, branch
    delete, or ref-PATCH: capture pre-SHA, run the op, verify post-SHA.
 3. **Visual baselines are intentional.** Do not blanket-run

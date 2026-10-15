@@ -5,8 +5,8 @@ on:
   # gemergten Commit. Das Gate ist vollstaendig der PR -- als Pflicht-Check `e2e`.
   # (deploy-pages.yml, auf das dieser Kommentar frueher verwies, existiert nicht mehr:
   # ausgeliefert wird ueber Cloudflare Pages, siehe AGENTS.md.)
+  # Kein `branches:`-Filter (2026-09-27) -- Begruendung siehe unit-tests.yml Kopf.
   pull_request:
-    branches: [ main ]
   workflow_dispatch:
 
 concurrency:
