@@ -1,6 +1,8 @@
 node_modules
 dist
 coverage
+# Vitest 5 legt Artefakte (attachments, blob reports) unter .vitest/ ab
+.vitest/
 .vite
 .wrangler
 .DS_Store
