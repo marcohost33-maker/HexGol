@@ -17,12 +17,6 @@ import { defineConfig, devices } from "@playwright/test";
 //   - prefers-color-scheme is locked to "dark" so the theme cannot flip
 //     between machines
 //
-// Snapshots live under tests/e2e/__snapshots__ with per-OS suffixes via the
-// default Playwright behavior so a Linux baseline does not break a local
-// macOS dev run. The visual-regression workflow runs inside the official
-// Microsoft Playwright Docker image so baselines are always generated and
-// asserted in identical environments (playwright.dev/docs/docker).
-//
 // Security contract (#176): Vite preview does not apply Cloudflare Pages'
 // dist/_headers. The e2e server is therefore the tiny static
 // scripts/serve-dist-with-headers.mjs server, which applies the checked-in `/*`
@@ -30,6 +24,17 @@ import { defineConfig, devices } from "@playwright/test";
 // OffscreenCanvas worker specs exercise their production resources under the
 // same CSP as the document instead of only the CSP smoke test doing so.
 //
+// Snapshots live under tests/e2e/__snapshots__ with a per-OS suffix, which
+// `snapshotPathTemplate` below spells out explicitly (`{platform}`). Until
+// issue #167 that suffix was CLAIMED here and absent from the template: the
+// override dropped it, so a Linux CI baseline was also the comparison target
+// for a local Windows or macOS run. The visual-regression workflow runs inside
+// the official Microsoft Playwright Docker image, so CI baselines are always
+// generated and asserted in identical environments (playwright.dev/docs/docker)
+// -- but a developer's machine is not that environment, and a missing baseline
+// for their platform is the honest outcome there, not a silent wrong compare.
+// The claim is guarded by tests/unit/visual-baseline-contract.test.js, so it
+// cannot drift back into a comment that describes a property the code lacks.
 // The first-open education intro (ConwayIntro) is a fixed full-screen overlay
 // that intercepts pointer events until dismissed. Every existing functional spec
 // drives the app directly and is unaware of it, so we pre-seed the "seen" flag in
@@ -86,7 +91,17 @@ export default defineConfig({
       caret: "hide",
     },
   },
-  snapshotPathTemplate: "{testDir}/__snapshots__/{testFilePath}/{arg}{ext}",
+  // `{platform}` is load-bearing (issue #167): font rasterisation, device pixel
+  // ratio and GPU compositing differ per OS, and one baseline is NOT canvas-only
+  // -- `worker-overlay-outline` captures the `.ghx-canvas` CONTAINER, because the
+  // shot has to composite the worker-owned field canvas with the main-thread
+  // overlay canvas stacked on top of it. That container is a div carrying a 1px
+  // border, a 14px radius and an inset box-shadow, i.e. compositor-painted chrome,
+  // which is exactly the case that makes a shared cross-OS baseline flake.
+  // `{projectName}` is deliberately NOT in the template: no spec matched by the
+  // `mobile` project takes a screenshot today. That is a measured fact, not an
+  // assumption -- the guard test asserts it and fails when it stops holding.
+  snapshotPathTemplate: "{testDir}/__snapshots__/{testFilePath}/{arg}-{platform}{ext}",
   projects: [
     {
       name: "chromium",
