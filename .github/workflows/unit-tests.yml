@@ -31,9 +31,12 @@ concurrency:
 permissions: {}
 
 jobs:
+  # Required context `unit`: both the declared minimum runtime and the normal
+  # Node-22 test/build lane live in ONE required job. A Node-20-only regression
+  # therefore cannot leave the required `unit` context green.
   unit:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 18
     permissions:
       contents: read
     steps:
@@ -41,18 +44,82 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
+      # Vite 8 supports ^20.19.0 || >=22.12.0. Exercise the exact lower edge,
+      # not a moving "20" alias.
+      - name: Set up declared minimum Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
+        with:
+          node-version: 20.19.0
+          cache: npm
+
+      # npm's linked layout is intentionally unhoisted. npm recommends it for
+      # catching undeclared/phantom imports in package-author workflows (#181).
+      - name: Install isolated dependency graph at minimum Node
+        run: npm ci --install-strategy=linked
+
+      - name: Verify direct parser dependency contract
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs";
+
+          const pkg = JSON.parse(readFileSync("package.json", "utf8"));
+          const lock = JSON.parse(readFileSync("package-lock.json", "utf8"));
+          const expected = "8.0.1";
+          const root = lock.packages?.[""];
+          const parse5 = lock.packages?.["node_modules/parse5"];
+
+          const assert = (condition, message) => {
+            if (!condition) throw new Error(message);
+          };
+
+          assert(
+            pkg.devDependencies?.parse5 === expected,
+            `package.json must declare parse5@${expected} directly`,
+          );
+          assert(
+            root?.devDependencies?.parse5 === expected,
+            `package-lock root must declare parse5@${expected} directly`,
+          );
+          assert(
+            parse5?.version === expected,
+            `package-lock must contain node_modules/parse5@${expected}`,
+          );
+          assert(
+            typeof parse5?.resolved === "string" && parse5.resolved.length > 0,
+            "parse5 lock entry must retain a resolved registry artifact",
+          );
+          assert(
+            typeof parse5?.integrity === "string" && parse5.integrity.startsWith("sha512-"),
+            "parse5 lock entry must retain sha512 integrity metadata",
+          );
+          assert(
+            root?.engines?.node === pkg.engines?.node,
+            "package-lock root Node engine must match package.json",
+          );
+
+          console.log(
+            `direct dependency contract OK: parse5@${expected}; node ${pkg.engines.node}`,
+          );
+          NODE
+
+      - name: Build production bundle at declared minimum Node
+        run: npm run build
+
+      # Switch the same required job to the normal CI runtime. npm ci removes
+      # the linked node_modules tree before installing the standard layout.
+      - name: Set up Node 22 test runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
         with:
           node-version: 22
           cache: npm
 
-      - name: Install dependencies
+      - name: Install dependencies for tests
         run: npm ci
 
       - name: Run Vitest
         run: npm test -- --reporter=verbose
 
-      - name: Build production bundle (smoke check)
+      - name: Build production bundle on normal CI runtime
         run: npm run build
 
   # Coverage is MEASURE-FIRST (Test-Center T4): it reports the number but does
