@@ -19,8 +19,15 @@ TMP_DIR="$(mktemp -d)"
 WORKTREE="$TMP_DIR/hexgol-wave-001"
 
 cleanup() {
-  git -C "$ORIGIN_ROOT" worktree remove --force "$WORKTREE" >/dev/null 2>&1 || true
-  rm -rf "$TMP_DIR"
+  # Fail closed: a worktree that cannot be removed stays registered in the origin
+  # repository, so a "PASS" with a dirty cleanup must not exit 0.
+  local rc=$?
+  if [[ -d "$WORKTREE" ]] && ! git -C "$ORIGIN_ROOT" worktree remove --force "$WORKTREE" >/dev/null 2>&1; then
+    echo "Cleanup failed: could not remove detached worktree $WORKTREE" >&2
+    [[ $rc -eq 0 ]] && rc=45
+  fi
+  rm -rf "$TMP_DIR" || { echo "Cleanup failed: could not remove $TMP_DIR" >&2; [[ $rc -eq 0 ]] && rc=45; }
+  exit "$rc"
 }
 trap cleanup EXIT INT TERM
 
@@ -37,10 +44,10 @@ done
 # PACK_COMMIT must be an evidence-only child of the solver revision. If any
 # production/test file other than the pack's own V&V test changed, the historical
 # result is not cleanly attributable to SOLVER_COMMIT anymore.
-UNEXPECTED="$(
-  git -C "$ORIGIN_ROOT" diff --name-only "$SOLVER_COMMIT" "$PACK_COMMIT" -- \
-    | grep -Ev "^$PACK_REL/|^tests/unit/hqst-vv\.test\.js$" || true
-)"
+# The diff runs on its own line so `set -e` stops on a git failure; only the grep
+# "no match" status (1) is tolerated, never a failed diff.
+CHANGED="$(git -C "$ORIGIN_ROOT" diff --name-only "$SOLVER_COMMIT" "$PACK_COMMIT" --)"
+UNEXPECTED="$(printf '%s\n' "$CHANGED" | grep -Ev "^$PACK_REL/|^tests/unit/hqst-vv\.test\.js$|^$" || [[ $? -eq 1 ]])"
 if [[ -n "$UNEXPECTED" ]]; then
   echo "Evidence/solver provenance boundary violated; unexpected files changed:" >&2
   printf '%s\n' "$UNEXPECTED" >&2
@@ -69,6 +76,9 @@ done
   printf '  "recorded_at_utc": "%s",\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   printf '  "pack_commit": "%s",\n' "$PACK_COMMIT"
   printf '  "solver_commit": "%s",\n' "$SOLVER_COMMIT"
+  printf '  "launcher_commit": "%s",\n' "$(git -C "$ORIGIN_ROOT" rev-parse HEAD)"
+  printf '  "launcher_dirty": %s,\n' "$([[ -n "$(git -C "$ORIGIN_ROOT" status --porcelain -- "$PACK_REL/commands.sh")" ]] && echo true || echo false)"
+  printf '  "launcher_sha256": "%s",\n' "$(sha256sum "$ORIGIN_ROOT/$PACK_REL/commands.sh" | cut -d' ' -f1)"
   printf '  "node": "%s",\n' "$(node --version)"
   printf '  "npm": "%s",\n' "$(npm --version)"
   printf '  "python": "%s"\n' "$(python --version 2>&1 | sed 's/^Python //')"
@@ -110,26 +120,36 @@ python "$PACK_REL/ed_oracle.py" | tee "$OUT_DIR/ed-oracle.log"
 
 # 5. Strong reproduction check: DO NOT regenerate the manifest. Verify the newly
 # generated outputs against the historical checksums committed in PACK_COMMIT.
+# The verdict rests on the NUMERICAL artifacts (results/*) only. The two
+# logs/*_summary.json files embed runtime versions (node, numpy, scipy), so on any
+# host with other versions they differ although every number is identical; they
+# are compared separately and reported as provenance drift, never as a FAIL.
 (
   cd "$PACK"
-  sha256sum -c checksums.sha256
+  grep -E '[ *]results/' checksums.sha256 > "$OUT_DIR/checksums.numeric.sha256"
+  grep -Ev '[ *]results/' checksums.sha256 > "$OUT_DIR/checksums.provenance.sha256"
+  sha256sum -c "$OUT_DIR/checksums.numeric.sha256"
 ) | tee "$OUT_DIR/checksums.verify.txt"
+PROVENANCE=SAME
+( cd "$PACK" && sha256sum -c "$OUT_DIR/checksums.provenance.sha256" ) \
+  > "$OUT_DIR/checksums.provenance.txt" 2>&1 || PROVENANCE=DRIFT
 
-# 6. Catch tracked evidence outputs that are not covered by checksums.sha256.
-# A byte-identical reproduction leaves the historical worktree clean.
-if ! git diff --exit-code -- "$PACK_REL/results" "$PACK_REL/logs" \
-  > "$OUT_DIR/historical-output.diff"; then
-  echo "Reproduction produced tracked output bytes different from PACK_COMMIT." >&2
+# 6. Catch tracked numerical outputs that are not covered by checksums.sha256.
+# A byte-identical reproduction leaves results/ in the historical worktree clean.
+if ! git diff --exit-code -- "$PACK_REL/results" > "$OUT_DIR/historical-output.diff"; then
+  echo "Reproduction produced tracked result bytes different from PACK_COMMIT." >&2
   echo "See: $OUT_DIR/historical-output.diff" >&2
   exit 44
 fi
+git diff -- "$PACK_REL/logs" > "$OUT_DIR/provenance-logs.diff" || true
 
 cat > "$OUT_DIR/VERDICT.txt" <<EOF
 PASS
 pack_commit=$PACK_COMMIT
 solver_commit=$SOLVER_COMMIT
-historical_checksums=PASS
-tracked_output_diff=EMPTY
+historical_numeric_checksums=PASS
+tracked_result_diff=EMPTY
+runtime_provenance=$PROVENANCE
 EOF
 
 echo "Historical evidence reproduction PASS"
