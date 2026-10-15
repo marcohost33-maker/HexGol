@@ -2,5 +2,6 @@ GolHex
 Copyright 2026 Coworker Research / Coworkerz
 
 This product is licensed under the Apache License, Version 2.0 (see LICENSE).
-Until 2026-10-16 the repository was licensed under the MIT License; copies
-obtained before that date remain available under MIT.
+Versions released before 2026-10-16 (up to and including commit 6a451fd,
+package version 33.5.0) were published under the MIT License and remain
+available under it, whenever and from whomever they are obtained.
