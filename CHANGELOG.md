@@ -7,6 +7,12 @@ und `docs/` (z.B. Re-Konvergenz 2026-06-04, v31→v31.0).
 
 ## [Unreleased]
 
+### Changed
+- **License: MIT -> Apache-2.0** (2026-10-16, owner decision when the repository went
+  public). `LICENSE` holds the unmodified Apache-2.0 text, `NOTICE` the copyright holder
+  (Coworker Research / Coworkerz) and the transition note; copies obtained before
+  2026-10-16 remain available under MIT. `package.json` declares `"license": "Apache-2.0"`.
+
 ### Added
 - Repo-Standard-14-Anschluss: `00_landkarte/`, `docs/ROADMAP.md`,
   `docs/ADR/ADR-001-*`, `inventar/`, `pr_nr/`, `todo/`, dieser Changelog
