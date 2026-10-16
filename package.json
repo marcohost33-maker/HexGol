@@ -18,12 +18,12 @@
     "typecheck": "tsc -p tsconfig.typecheck.json --noEmit"
   },
   "dependencies": {
-    "react": "^19.2.8",
-    "react-dom": "^19.2.8"
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.13.0",
-    "@playwright/test": "^1.62.1",
+    "@playwright/test": "^1.64.0",
     "@testing-library/jest-dom": "^7.0.1",
     "@testing-library/react": "^16.3.3",
     "@types/react": "^19.3.0",
@@ -31,12 +31,13 @@
     "@vitejs/plugin-react": "^6.1.1",
     "@vitest/coverage-v8": "^4.1.11",
     "fake-indexeddb": "^6.2.5",
-    "jsdom": "^30.0.1",
+    "jsdom": "^30.1.2",
     "vite": "^8.2.2",
     "vitest": "^4.1.10",
     "typescript": "6.0.3"
   },
   "engines": {
     "node": ">=20"
-  }
+  },
+  "license": "Apache-2.0"
 }
