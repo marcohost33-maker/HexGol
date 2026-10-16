@@ -669,4 +669,4 @@ docs/
 
 ## License
 
-MIT - see LICENSE.
+Apache-2.0 - see LICENSE and NOTICE. (Until 2026-10-16: MIT; earlier copies stay under MIT.)
