@@ -1,11 +1,17 @@
-# Adoptiert den zentralen Reusable `mobile-render-verify` (coworkerz-ci) — EVALUATION_STRATEGY §8.1.
-# Faengt die Desktop-vs-Mobile-Klasse, die am 06-09 zwei iPhone-only-Bugs durch desktop-CI durchliess:
-# Form-/Geometrie-Assertion (mobile-hexshape) + deterministisches Perf-Budget unter CDP-Throttle (mobile-perf-budget).
-# Laeuft NUR die 2 dedizierten Render/Perf-Specs (nicht-redundant zur vollen e2e/visual-regression).
+# Mobile render/perf gate (EVALUATION_STRATEGY §8.1). Catches the desktop-vs-mobile
+# class that let two iPhone-only bugs through desktop CI on 06-09: form/geometry
+# assertion (mobile-hexshape) + deterministic perf budget under CDP throttle
+# (mobile-perf-budget). Runs ONLY the 2 dedicated render/perf specs (not redundant
+# with the full e2e/visual-regression).
+#
+# Inlined on 2026-10-16 from coworkerz-ci `mobile-render-verify.yml` @40104a8 (same
+# steps, same pinned actions). Reason: HexGol is public since 2026-10-16, and a public
+# repository may only call reusable workflows from public repositories; the private
+# coworkerz-ci call failed before running any spec (Codex P2 on #193).
 name: mobile-render
 
 on:
-  # Kein push:main mehr (2026-08-11) -- Begruendung siehe deploy-pages.yml Kopf.
+  # No push:main (2026-08-11) -- gates live on the pull request.
   pull_request:
     branches: [main]
 
@@ -18,6 +24,22 @@ permissions:
 
 jobs:
   mobile-render:
-    uses: marcohost33-maker/coworkerz-ci/.github/workflows/mobile-render-verify.yml@40104a8cc2772b8563107c510660c51e12e2d367 # coworkerz-ci main (mobile-render-verify reusable)
-    with:
-      render-test-command: "npx playwright test --project=mobile tests/e2e/mobile-hexshape.spec.ts tests/e2e/mobile-perf-budget.spec.ts"
+    name: mobile-render
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: install
+        run: npm ci --no-audit --no-fund
+      - name: build
+        run: npm run build
+      - name: playwright-install
+        run: npx playwright install --with-deps chromium
+      - name: mobile-render-verify
+        run: npx playwright test --project=mobile tests/e2e/mobile-hexshape.spec.ts tests/e2e/mobile-perf-budget.spec.ts
