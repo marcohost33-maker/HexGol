@@ -52,11 +52,42 @@ eigenmode phase, and both falsification gates) inside the required `unit` check.
 
 ## Reproduce
 
+This directory represents a **frozen historical evidence object** with two distinct revisions:
+
+- solver revision: `62a565f316f74ac6057135ab36046a7710c62745`;
+- evidence-pack revision: `bd79bc45812916504ccc303e0fc018ccea2673eb`.
+
+The distinction is load-bearing: the evidence pack was added one commit after the solver revision,
+without changing production solver sources. A reproduction therefore cannot simply check out the
+solver revision (the runner does not exist there), and it must not run the historical runner against
+current `main`.
+
+Use the hardened launcher from the current repository:
+
 ```bash
 bash docs/research/EVIDENCE_PACK_GOLHEX_WAVE_001/commands.sh
 ```
 
-Add `--full` to the `node` step for the extended local grid (24×24 torus, dt=0.20, V=0.1).
+The launcher:
+
+1. creates a temporary detached worktree at the historical evidence-pack commit;
+2. proves that no production file changed between solver and evidence-pack revisions and byte-checks
+   the two named solver sources;
+3. installs the historical JavaScript lockfile with `npm ci`;
+4. executes the historical V&V unit gate, JS evidence runner and independent Python oracle;
+5. verifies regenerated artifacts against the **committed historical `checksums.sha256`** instead
+   of replacing that manifest;
+6. requires the tracked historical `results/` and `logs/` trees to remain byte-identical;
+7. writes new run provenance outside the frozen worktree under ignored
+   `reproductions/<UTC-run-id>/`.
+
+A failed checksum or tracked-output comparison is a **reproducibility result**, not a reason to
+refresh WAVE_001 in place. A solver run on current `main`, a changed oracle, or new thresholds must
+receive a new evidence-pack identifier (for example WAVE_002) with its own provenance and claims.
+
+The original pack records Node/Python/numpy/scipy versions in `environment.lock`. A reproduction
+record additionally captures the actual runtime versions used, so environment drift is visible even
+when the numerical artifacts remain byte-identical.
 
 ## Bounds (see negative_results.md)
 
