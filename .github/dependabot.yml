@@ -14,6 +14,14 @@ updates:
     # Cooldown (added 2026-05-23) - mitigates fresh-release supply-chain attacks (zizmor/dependabot-cooldown)
     cooldown:
       default-days: 7
+    # React 19.3 akzeptiert (Marco 2026-11-02, mit dem Bundle-Budget aus
+    # scripts/verify-bundle-size.mjs): Patches laufen durch, ein neuer Minor
+    # oder Major wird bewusst gehoben, nicht per Dependabot.
+    ignore:
+      - dependency-name: "react"
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
+      - dependency-name: "react-dom"
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
     open-pull-requests-limit: 8
     labels:
       - dependencies
