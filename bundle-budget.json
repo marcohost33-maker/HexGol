@@ -1,0 +1,11 @@
+{
+  "file": "dist/assets/index-*.js",
+  "tolerance_percent": 2,
+  "baseline": {
+    "raw_bytes": 408516,
+    "gzip_bytes": 125426
+  },
+  "measured_with": "node scripts/verify-bundle-size.mjs --print (Node zlib gzip default level)",
+  "measured_on": "2026-11-02, branch vero/hexgol-198-next @ 7489e74: React 19.3.0, Vite 8.3.5",
+  "reason": "Initial budget = the bundle main ships today (React 19.3.0 since #192). Any growth beyond 2 % turns `npm run build` red; raise this file only in the same PR as a deliberate, explained size change."
+}
