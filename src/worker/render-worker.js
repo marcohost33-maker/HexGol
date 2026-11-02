@@ -26,8 +26,7 @@
 // =============================================================================
 import {
   buildNeighbors, mkHqstWork, stepHQST, stepReiter, stepWater, stepCollatz, stepGenes,
-  RMETA, INT_META, WATZ_META, hexClass2, COSH, SINH, COMPLEMENT,
-  birthColorQuad, cMixVec, mMixCnt, driftHue, hash2, PRIMARY,
+  stepLife as stepLifeCore, RMETA, INT_META, WATZ_META,
 } from "../lib/sim-engine.js";
 import { renderRaster } from "../lib/raster-render.js";
 import { renderHex } from "../lib/hex-render.js";
@@ -88,76 +87,35 @@ let mirrorStream = false;  // true = nach jedem Render einen Frame zurueckschick
 let capCanvas = null, capCtx = null;
 
 // --- Sim-Schritt (Spiegel von App.tsx step(), gleiche Engine-Aufrufe) --------
-function stepLife() {
-  const { ruleIdx: ri, torusOn: to, ax: A, a5: A5, watzOnly: wO, ruleSrc: rs, sysT, sysSp, bcMode: bc } = cfg;
+function stepLifeWorker() {
+  const {
+    ruleIdx: ri, torusOn: to, ax: A, a5: A5,
+    watzOnly: wO, ruleSrc: rs, sysT, sysSp, bcMode: bc,
+  } = cfg;
   const meta = wO ? WATZ_META : (rs === "int" ? INT_META[ri] : RMETA[ri]);
-  const { bL, sL, smin, smax } = meta;
-  const isINT = !!meta.isINT, b2 = meta.b2 || null, s2 = meta.s2 || null;
   const NL = to ? neigh.torus : neigh.edge;
   const dmask = neigh.mask;
-  const t = tick + 1, n = col.length;
+  const t = tick + 1;
   const spN = sysT ? Math.round(sysSp * 6) : 0;
-  for (let i = 0; i < n; i++) {
-    if (dmask[i] === 0) { nCol[i] = 0; nGh[i] = 0; nAge[i] = 0; continue; }
-    const base = i * 6;
-    const cnt = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-    let live = 0, sx = 0, sy = 0, mask = 0;
-    const self = col[i], selfAlive = self !== 0;
-    const adia = bc === "adiabatic";
-    for (let k = 0; k < 6; k++) {
-      const j = NL[base + k];
-      if (j < 0) {
-        if (adia) {
-          if (selfAlive) { cnt[self]++; live++; sx += COSH[self]; sy += SINH[self]; mask |= (1 << k); }
-          else if (A.a4 && gh[i]) live++;
-        }
-        continue;
-      }
-      const cj = col[j];
-      if (cj !== 0) { cnt[cj]++; live++; sx += COSH[cj]; sy += SINH[cj]; mask |= (1 << k); }
-      else if (A.a4 && gh[j]) live++;
-    }
-    const cntSelf = selfAlive ? cnt[self] : 0;
-    let maxN = 0; for (let c = 1; c <= 12; c++) if (cnt[c] > maxN) maxN = cnt[c];
-    let eff = live;
-    if (A5 === "sym") eff = selfAlive ? cntSelf : maxN;
-    else if (A5 === "komp") eff = selfAlive ? live - cntSelf : live - maxN;
-    let born = false, newC = 0;
-    if (selfAlive) {
-      let surv = eff <= 6 && sL[eff] === 1;
-      if (surv && isINT && eff === 2 && s2 && !s2.includes(hexClass2(mask))) surv = false;
-      if (!surv && A.a3 && age[i] >= 6 && eff >= smin - 1 && eff <= smax + 1) surv = true;
-      if (sysT) { if (!surv && live > 0 && live < spN) surv = true; else if (surv && live > spN + 1) surv = false; }
-      if (surv) { born = true; newC = (A.colorMode === "drift" && live > 0) ? driftHue(self, sx, sy) : self; }
-    } else if (live > 0 && eff >= 0 && eff <= 6 && bL[eff] === 1) {
-      let ok = true;
-      if (isINT && eff === 2 && b2 && !b2.includes(hexClass2(mask))) ok = false;
-      if (sysT && live > spN) ok = false;
-      if (ok) {
-        born = true;
-        if (A.colorMode === "quad") newC = birthColorQuad(cnt, sx, sy);
-        else if (A.a2) newC = mMixCnt(cnt, i);
-        else newC = cMixVec(sx, sy, i);
-      }
-    }
-    if (born) { nCol[i] = newC; nGh[i] = 0; nAge[i] = selfAlive ? (age[i] < 65535 ? age[i] + 1 : 65535) : 1; }
-    else { nAge[i] = 0; if (selfAlive && A.a4) { nCol[i] = 0; nGh[i] = 1; } else { nCol[i] = 0; nGh[i] = 0; } }
+
+  // SINGLE SOURCE: the worker does not own a second CA transition anymore.
+  // Main thread and worker both execute src/lib/sim-engine.js::stepLife().
+  stepLifeCore({
+    col, gh, age,
+    nc: nCol, ng: nGh, na: nAge,
+    NL, dmask, meta,
+    colorMode: A.colorMode,
+    a1: A.a1, a2: A.a2, a3: A.a3, a4: A.a4,
+    a5: A5, sysT, spN, adia: bc === "adiabatic", tick: t,
+  });
+
+  // #111: last-live colour is worker-owned render metadata, not transition logic.
+  // Update it from the shared core's output before swapping the double buffers.
+  const n = col.length;
+  if (lastLive) {
+    for (let i = 0; i < n; i++) if (nCol[i] !== 0) lastLive[i] = nCol[i];
   }
-  if (A.a1) {
-    for (let i = 0; i < n; i++) {
-      if (nCol[i] !== 0 || nGh[i] !== 0 || col[i] !== 0) continue;
-      const base = i * 6; let silent = true;
-      for (let k = 0; k < 6; k++) { const j = NL[base + k]; if (j < 0) continue; if (col[j] !== 0 || (A.a4 && gh[j])) { silent = false; break; } }
-      if (silent && hash2(i, t) < 0.012) { nCol[i] = PRIMARY[Math.floor(hash2(i + 7, t * 3 + 1) * 3)]; nAge[i] = 1; }
-    }
-  }
-  // #111: letzte lebende Familie merken (Worker-Spiegel von App.tsx lastCol[i]=cc).
-  // nCol ist der NEUE Ist-Zustand (wird gleich zu col). Fuer JEDE lebende Zelle die
-  // Spezies-Farbe festhalten -> ueberlebt das Sterben und traegt den Dying-Ring.
-  // Voller O(N)-Durchlauf (nur ein Int-Vergleich je Zelle) fuer ALLE Zellen, nicht
-  // nur die sichtbaren -> Parity auch beim spaeteren Weg-/Hin-Schwenken der Ansicht.
-  if (lastLive) { for (let i = 0; i < n; i++) if (nCol[i] !== 0) lastLive[i] = nCol[i]; }
-  // Doppelpuffer-Tausch (wie App.tsx step()).
+
   let tmp;
   tmp = col; col = nCol; nCol = tmp;
   tmp = gh; gh = nGh; nGh = tmp;
@@ -196,7 +154,7 @@ function stepRval() {
   tick += 1;
 }
 
-function doStep() { if (mode === "rval") stepRval(); else stepLife(); stepsSinceReport++; }
+function doStep() { if (mode === "rval") stepRval(); else stepLifeWorker(); stepsSinceReport++; }
 
 // --- Render (Pfad-Wahl raster vs. hex -- DIESELBE Logik wie der Main-Thread) --
 // Meldet einen Wechsel des Render-Modus an den Main-Thread, der ihn auf

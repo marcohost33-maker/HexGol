@@ -3,5 +3,5 @@ message: "If you use this software, please cite it as below."
 authors:
   - name: "Coworker Research / Coworkerz"
 title: "GolHex"
-license: MIT
+license: Apache-2.0
 repository-code: "https://github.com/marcohost33-maker/HexGol"

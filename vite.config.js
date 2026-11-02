@@ -108,6 +108,23 @@ function bundleContent(entry, path) {
   return entry.type === "chunk" ? entry.code : entry.source;
 }
 
+// Apache-2.0 section 4: a redistribution (the deployed app is one) must carry the
+// license and the NOTICE file. Both are emitted verbatim next to index.html.
+function emitLicenseFiles() {
+  return {
+    name: "hexgol-license-files",
+    generateBundle() {
+      for (const fileName of ["LICENSE", "NOTICE"]) {
+        this.emitFile({
+          type: "asset",
+          fileName,
+          source: readFileSync(fileURLToPath(new URL(`./${fileName}`, import.meta.url))),
+        });
+      }
+    },
+  };
+}
+
 function emitBuildMetadata() {
   return {
     name: "hexgol-build-metadata",
@@ -174,7 +191,7 @@ export default defineConfig({
     // Kurz-SHA reicht fuer den Blick; version.json traegt den vollen Wert.
     __APP_COMMIT__: JSON.stringify(commitSha ? commitSha.slice(0, 7) : null),
   },
-  plugins: [react(), emitBuildMetadata()],
+  plugins: [react(), emitBuildMetadata(), emitLicenseFiles()],
   server: {
     port: 5173,
     strictPort: false,

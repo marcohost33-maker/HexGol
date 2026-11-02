@@ -17,6 +17,13 @@ import { defineConfig, devices } from "@playwright/test";
 //   - prefers-color-scheme is locked to "dark" so the theme cannot flip
 //     between machines
 //
+// Security contract (#176): Vite preview does not apply Cloudflare Pages'
+// dist/_headers. The e2e server is therefore the tiny static
+// scripts/serve-dist-with-headers.mjs server, which applies the checked-in `/*`
+// header block to EVERY response. That means existing service-worker and
+// OffscreenCanvas worker specs exercise their production resources under the
+// same CSP as the document instead of only the CSP smoke test doing so.
+//
 // Snapshots live under tests/e2e/__snapshots__ with a per-OS suffix, which
 // `snapshotPathTemplate` below spells out explicitly (`{platform}`). Until
 // issue #167 that suffix was CLAIMED here and absent from the template: the
@@ -117,9 +124,9 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: "npm run preview -- --host 127.0.0.1 --port 4173",
+    command: "node scripts/serve-dist-with-headers.mjs",
     url: "http://127.0.0.1:4173",
-    reuseExistingServer: !process.env.CI,
+    reuseExistingServer: false,
     timeout: 120000,
   },
 });

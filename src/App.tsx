@@ -319,10 +319,10 @@ function frameOptsFor(shape, { circleRadius, ellipseA, ellipseB, polygon }) {
 // liefen sonst UNSICHTBAR weiter (Kamera-/Speicher-/Akku-Last). Die Komponente
 // registriert hier einen Abbruch-Callback (stoppt den aktiven Controller); closeApp
 // ruft ihn vor jedem Schliess-/Fallback-Pfad.
-const closeAppCleanups = new Set();
-export function registerCloseCleanup(fn) {
+const closeAppCleanups = new Set<() => void>();
+export function registerCloseCleanup(fn: () => void) {
   closeAppCleanups.add(fn);
-  return () => closeAppCleanups.delete(fn);
+  return () => { closeAppCleanups.delete(fn); };
 }
 function runCloseCleanups() {
   for (const fn of Array.from(closeAppCleanups)) {
@@ -340,7 +340,8 @@ function detectCloseEnv() {
     standalone =
       (typeof window !== "undefined" && typeof window.matchMedia === "function" &&
         window.matchMedia("(display-mode: standalone)").matches) ||
-      (typeof navigator !== "undefined" && navigator.standalone === true); // iOS Safari
+      (typeof navigator !== "undefined" &&
+        (navigator as Navigator & { standalone?: boolean }).standalone === true); // iOS Safari
   } catch { /* matchMedia/navigator nicht verfuegbar */ }
   const historyLength =
     typeof window !== "undefined" && window.history ? window.history.length : 0;
@@ -513,7 +514,8 @@ export default function GolHex() {
   // Touch: Tap (kein Hover). Nur im CVD-Modus + life sichtbar.
   const [inspect, setInspect] = useState(null);
   const lastInspectIdxRef = useRef(-1);
-  const [brush, setBrush] = useState("cycle"); // cycle | CR | CB | CY | erase
+  type Brush = "cycle" | "erase" | number;
+  const [brush, setBrush] = useState<Brush>("cycle"); // cycle | Farb-State-ID | erase
   // AP-3: Long-Press-Farbrad. Hold ~500 ms ohne Bewegung > Touch-Slop oeffnet ein
   // radiales 12-Farb-Rad um den Druckpunkt; Auswahl faerbt die Zelle SOFORT und
   // setzt die aktive Pinselfarbe (Marco-Entscheid M-3 "Beides"). null = geschlossen.
@@ -539,7 +541,21 @@ export default function GolHex() {
   useEffect(() => { stampModeRef.current = (drawer === 2); }, [drawer]);
   const stampPvRef = useRef(null); // Live-Mini-Vorschau des Stempels im Drawer
   const [gen, setGen] = useState(0);
-  const [stats, setStats] = useState({ pop: 0, cnt: [0,0,0,0,0,0,0,0,0,0,0,0,0], density: 0, births: 0, deaths: 0, sps: 0, hist: [] });
+  type StatsState = {
+    pop: number;
+    cnt: number[];
+    density: number;
+    births: number;
+    deaths: number;
+    sps: number;
+    hist: number[];
+    rval?: boolean;
+    rvalSum?: number;
+  };
+  const [stats, setStats] = useState<StatsState>({
+    pop: 0, cnt: [0,0,0,0,0,0,0,0,0,0,0,0,0], density: 0,
+    births: 0, deaths: 0, sps: 0, hist: [],
+  });
   const [zoomLbl, setZoomLbl] = useState(1);
   const [showAxioms, setShowAxioms] = useState(false);
   // Semantikprofil: welches Regelwerk wird auf den laufenden Zustand angewandt.
@@ -704,7 +720,10 @@ export default function GolHex() {
   const refitRef = useRef(null); // AP-4: aktuelle fit()-Funktion (Layout-Reflow-Refit)
   const undoRef = useRef([]);
 
-  const cfg = useRef({ ruleIdx, torusOn, ax, a5, R, C, watzOnly, ruleSrc });
+  const cfg = useRef({
+    ruleIdx, torusOn, ax: { ...ax, colorMode }, a5, R, C, watzOnly, ruleSrc,
+    sysT: sysTheory, sysSp: sysSetpoint, openSys, solverId, bcMode: boundaryMode,
+  });
   useEffect(() => { cfg.current = { ruleIdx, torusOn, ax: { ...ax, colorMode }, a5, R, C, watzOnly, ruleSrc, sysT: sysTheory, sysSp: sysSetpoint, openSys, solverId, bcMode: boundaryMode }; }, [ruleIdx, torusOn, ax, a5, R, C, watzOnly, colorMode, ruleSrc, sysTheory, sysSetpoint, openSys, solverId, boundaryMode]);
   const runRef = useRef(running); useEffect(() => { runRef.current = running; }, [running]);
   const spRef = useRef(SPEEDS[speedIdx]); useEffect(() => { spRef.current = SPEEDS[speedIdx]; }, [speedIdx]);
@@ -1296,7 +1315,7 @@ export default function GolHex() {
     // Schliesskante (verify-closepath-fix.mjs: lineTo-zurueck stroke-DIFFERS) ->
     // `close=true` nur dort. Resultat: M laufend 2.7 -> 27.3 fps (10x), keine
     // Verhaltens-/Pixel-Aenderung im Fuell-Pfad.
-    const addHex = (path, x, y, rr, close) => {
+    const addHex = (path, x, y, rr, close = false) => {
       path.moveTo(x + rr * cosA[0], y + rr * sinA[0]);
       for (let k = 1; k < 6; k++) path.lineTo(x + rr * cosA[k], y + rr * sinA[k]);
       if (close) path.closePath();
@@ -1305,7 +1324,7 @@ export default function GolHex() {
     // ohne pro Zelle ein {x,y}-Objekt zu erzeugen (vermeidet GC-Druck bei XXL).
     // Spiegelt hexCenter: x = PAD + S3*hr*(col + (row&1?0.5:0)), y = PAD + 1.5*hr*row.
     const padHr = PAD(hr), wHr = S3 * hr, vHr = 1.5 * hr;
-    const addHexIdx = (path, i, rr, close) => {
+    const addHexIdx = (path, i, rr, close = false) => {
       const row = (i / c0) | 0, c = i - row * c0;
       const x = padHr + wHr * (c + ((row & 1) ? 0.5 : 0)), y = padHr + vHr * row;
       path.moveTo(x + rr * cosA[0], y + rr * sinA[0]);
@@ -1619,7 +1638,7 @@ export default function GolHex() {
   // die Zellen zeigen zwar die Form, aber bei leerem Feld fehlte jede Rahmen-Linie).
   // Eine Quelle der Wahrheit: dieselbe drawFrame() wie der Main-Thread, nur auf eine
   // separate, immer-Main-Thread Overlay-Canvas mit identischer View-Transform.
-  const drawOverlayOutline = useCallback((force) => {
+  const drawOverlayOutline = useCallback((force = false) => {
     const ov = overlayRef.current; if (!ov) return;
     const active = workerActiveRef.current;
     const octx = ov.getContext("2d"); if (!octx) return;
@@ -1784,7 +1803,22 @@ export default function GolHex() {
 
   // --- Pointer / Gesten -----------------------------------------------------
   const ptrs = useRef(new Map());
-  const ges = useRef({ mode: "", startDist: 0, startS: 1, lastMid: null, moved: 0, lastCell: -1, down: null });
+  type PointerPoint = { x: number; y: number };
+  type GestureState = {
+    mode: string;
+    startDist: number;
+    startS: number;
+    lastMid: PointerPoint | null;
+    moved: number;
+    lastCell: number;
+    down: PointerPoint | null;
+    draftPoly: PointerPoint[] | null;
+    panOk: boolean;
+  };
+  const ges = useRef<GestureState>({
+    mode: "", startDist: 0, startS: 1, lastMid: null, moved: 0,
+    lastCell: -1, down: null, draftPoly: null, panOk: false,
+  });
   // AP-3 Long-Press (web-fundiert: B4 ~500 ms Hold + Touch-Slop). Ein Timer pro
   // Single-Pointer-Down; jede Bewegung > LONG_PRESS_SLOP oder ein zweiter Finger
   // (Pinch) oder ein frueher Pointerup bricht ihn ab (kein Rad beim Pan/Zoom/Tap).
@@ -1835,7 +1869,10 @@ export default function GolHex() {
       }
       dirtyRef.current = true; syncWorkerState(); updatePop();
     }
-    setBrush(eff.brush); brushRef.current = eff.brush; // aktive Pinsel-/Radier-Wahl wechseln
+    const nextBrush: Brush =
+      typeof eff.brush === "number" ? eff.brush :
+      eff.brush === "erase" ? "erase" : "cycle";
+    setBrush(nextBrush); brushRef.current = nextBrush; // aktive Pinsel-/Radier-Wahl wechseln
     setWheel(null);
   };
   const cancelWheel = () => setWheel(null);
@@ -4446,7 +4483,11 @@ export default function GolHex() {
           <span style={{ fontSize: 10, color: T.sub, fontFamily: MONO, minWidth: 34, textAlign: "right" }}>
             {zoomLbl >= 10 ? zoomLbl.toFixed(0) : zoomLbl.toFixed(1)}x
           </span>
-          {[["−", "Verkleinern", () => zoom(1 / 1.3)], ["Fit", "Einpassen", () => fitView()], ["+", "Vergroessern", () => zoom(1.3)]].map(([lab, al, fn], i) => (
+          {([
+            ["−", "Verkleinern", () => zoom(1 / 1.3)],
+            ["Fit", "Einpassen", () => fitView()],
+            ["+", "Vergroessern", () => zoom(1.3)],
+          ] as Array<[string, string, () => void]>).map(([lab, al, fn], i) => (
             <button key={i} onClick={fn} aria-label={al} title={al} style={{
               width: 40, height: 40, borderRadius: 10, cursor: "pointer", border: `1px solid ${T.border}`,
               background: "rgba(20,27,36,0.92)", color: T.accent, fontSize: lab === "Fit" ? 12 : 19, fontWeight: 700,

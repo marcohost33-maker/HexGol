@@ -40,8 +40,8 @@ priority_when_in_conflict: 1
   hard-code the number here; engine + UI live in `src/App.tsx`;
   pure cores extracted to `src/lib/sim-core.js` (HQST applyH/solveCN) and
   `src/lib/hex-geom.js` (hex cube geometry), both unit-tested.
-- **License:** MIT
-- **Visibility:** PRIVATE (marcohost33-maker/HexGol)
+- **License:** Apache-2.0 (since 2026-10-16; MIT before -- see NOTICE)
+- **Visibility:** PUBLIC since 2026-10-16 (marcohost33-maker/HexGol)
 - **KANON anchor:** `ENGINE-HEXGOL` in `Vero/Meta/KANON/KANON_APPS.yaml`
 - **DEPLOY — es gibt genau EINE Live-URL: <https://golhex.pages.dev>**
   Cloudflare Pages, Projekt `golhex`. Kanonisch seit 2026-06-07 (`KANON_APPS.yaml`
@@ -155,7 +155,7 @@ docs/
 .github/workflows/
   ├── unit-tests.yml         # primary CI — Vitest (required check: unit) — PR only
   ├── visual-regression.yml  # Playwright visual baselines (required check: e2e) — PR only
-  ├── mobile-render.yml      # 2 mobile render/perf specs (reusable) — PR only
+  ├── mobile-render.yml      # 2 mobile render/perf specs (inline since #204) — every PR
   ├── update-snapshots.yml   # snapshot refresh helper
   ├── encoding-guard.yml     # UTF-8 / line-ending guard
   └── zizmor.yml             # workflow security audit (SHA-pinned)

@@ -190,7 +190,12 @@ describe("toolchain contract: Dependabot vs. private reusable workflows", () => 
   });
 
   it("excludes every workflow that calls the private coworkerz-ci", () => {
-    expect(callers.length).toBeGreaterThan(0);
+    // Seit #204 (2026-10-16) ruft keine Workflow-Datei mehr ein privates Reusable auf;
+    // `callers` ist dann leer. Damit der Test nicht vakuos gruen ist, zuerst die
+    // Erkennung selbst an einem echten Aufruf pruefen.
+    expect(PRIVATE_REUSABLE.test(
+      "    uses: marcohost33-maker/coworkerz-ci/.github/workflows/x.yml@40104a8 # pin\n",
+    )).toBe(true);
     expect(callers.filter((c) => !excluded.includes(c))).toEqual([]);
   });
 
