@@ -12,8 +12,9 @@ name: mobile-render
 
 on:
   # No push:main (2026-08-11) -- gates live on the pull request.
+  # No `branches:` filter (2026-09-27): stacked PRs on intermediate branches are
+  # checked too, see unit-tests.yml.
   pull_request:
-    branches: [main]
 
 concurrency:
   group: mobile-render-${{ github.ref }}

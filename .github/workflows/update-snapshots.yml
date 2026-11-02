@@ -53,7 +53,11 @@ jobs:
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
         with:
-          node-version: 20
+          # War 20 (2026-09-27 korrigiert): Node 20 ist seit 2026-04-30 EOL, und die
+          # Lockdatei verlangt >=22.22.2 (jsdom 30, undici 8). Die Baselines sollen
+          # mit derselben Toolchain entstehen, die sie in visual-regression.yml prueft.
+          # Waechter: tests/unit/toolchain-contract.test.js.
+          node-version: 22
           cache: npm
 
       - name: Cache Playwright browsers

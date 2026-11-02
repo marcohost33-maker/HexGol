@@ -26,3 +26,6 @@ tests/e2e/**/*-diff.png
 
 # Lokale Reproduktionsprotokolle; historische Evidence-Pack-Dateien bleiben immutable.
 docs/research/EVIDENCE_PACK_GOLHEX_WAVE_001/reproductions/
+
+# Vitest 5 writes run artifacts (attachments, blob reports) under .vitest/.
+.vitest/

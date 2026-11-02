@@ -19,8 +19,14 @@ on:
   # Workflows feuerten. Die zentrale coworkerz-ci bleibt im Einsatz, hier ueber
   # mobile-render.yml und zizmor.yml -- beendet ist nur die Dublette.
   # Wer sie wieder einfuehren will: dann faellt DIESER Workflow weg, nicht beide.
+  #
+  # Kein `branches:`-Filter (2026-09-27): #185 zielte auf den ungeschuetzten
+  # Zwischenbranch security/csp-dom-parser-176 und wurde gemergt, ohne dass `unit`
+  # oder `e2e` je liefen -- mit `branches: [ main ]` feuerte fuer ihn schlicht kein
+  # Test-Workflow. Jetzt laeuft die Suite fuer JEDEN PR. Pflicht (blockierend) ist
+  # sie weiterhin nur dort, wo ein Branch-Schutz sie verlangt (main); auf einem
+  # Zwischenbranch ist sie sichtbar, aber nicht erzwungen.
   pull_request:
-    branches: [ main ]
   workflow_dispatch:
 
 concurrency:
