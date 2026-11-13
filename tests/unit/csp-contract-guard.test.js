@@ -218,6 +218,155 @@ describe("CSP output guard (#168 review)", () => {
     expect(run.stderr).toMatch(/script scan accounted for 1 of 2 "<script" occurrences/);
   });
 
+  // RUNDE 3 (#168, 2026-09-12, vier Minuten NACH dem Merge). Der Befund trifft die
+  // Bauform, nicht ein Muster: bis fe5e7b2 lag EINE Schema-Positivliste ueber allen
+  // URI-Attributen, ohne Ruecksicht darauf, welche Direktive der Browser anwendet.
+  // Das war in beide Richtungen falsch, und beides ist auf fe5e7b2 nachgemessen.
+  it("rejects an external script origin that script-src does not allow (N1, round 3)", () => {
+    // Der schwerste der vier: ein falsches OK auf main. Die Liste kennt `https`
+    // als harmlos, also galt <script src="https://cdn.example/app.js"> als in
+    // Ordnung -- unter `script-src 'self'` blockt der Browser genau das. Der
+    // Waechter meldete Exit 0 fuer eine Ausgabe, die live nicht startet.
+    const run = runGuard(baselineHtml('<script src="https://cdn.example/app.js"></script>'));
+    expect(run.status).not.toBe(0);
+    expect(run.stderr).toMatch(/blocked resource <script src="https:\/\/cdn\.example\/app\.js">/);
+    expect(run.stderr).toMatch(/is not allowed by script-src 'self'/);
+  });
+
+  it("accepts a data: image because img-src permits it (N1 counter-direction)", () => {
+    // Die andere Richtung desselben Befunds: `data:` stand auf der Sperrliste und
+    // war damit ueberall ein Verstoss -- auch unter `img-src 'self' data:`, wo die
+    // Richtlinie es ausdruecklich erlaubt. Ein Waechter, der Korrektes rot faerbt,
+    // wird abgeschaltet; deshalb steht diese Zelle direkt neben der obigen.
+    const run = runGuard(baselineHtml('<img src="data:image/png;base64,iVBORw0KGgo=" alt="" />'));
+    expect(run.status, run.stderr).toBe(0);
+    expect(run.stdout).toContain("blocked-resources=0");
+  });
+
+  it("still rejects the same data: image when img-src does not permit it", () => {
+    // Die Gegenprobe zur Gegenprobe. Ohne sie waere die Zelle darueber auch dann
+    // gruen, wenn `data:` jetzt ueberall durchginge -- die Lockerung muss an der
+    // RICHTLINIE haengen, nicht am Schema.
+    const strict = HEADERS_SELF_ONLY.replace("img-src 'self' data:;", "img-src 'self';");
+    expect(strict, "the strict fixture did not change").not.toBe(HEADERS_SELF_ONLY);
+    const run = runGuard(baselineHtml('<img src="data:image/png;base64,iVBORw0KGgo=" alt="" />'), strict);
+    expect(run.status).not.toBe(0);
+    expect(run.stderr).toMatch(/is not allowed by img-src 'self'/);
+  });
+
+  it("does not read a scheme-relative URL as a relative one (N1, self-check)", () => {
+    // NICHT aus dem Review. Beim Umbau auf die Direktiven-Pruefung fiel auf, dass
+    // `//cdn.example/x.png` vor dem ersten `/` kein Schema traegt und deshalb als
+    // relative -- also gleich-origin -- URL galt. Sie zeigt aber auf eine fremde
+    // Origin. Derselbe Fehler wie der Hauptbefund, nur ohne Schema; auf fe5e7b2
+    // mit Exit 0 nachgestellt.
+    const run = runGuard(baselineHtml('<img src="//cdn.example/x.png" alt="" />'));
+    expect(run.status).not.toBe(0);
+    expect(run.stderr).toMatch(/\(scheme-relative\)\/\/cdn\.example is not allowed by img-src/);
+  });
+
+  it("keeps judging <link href> by its rel, not by one list for all of them", () => {
+    // Dasselbe Attribut, drei Direktiven: ein Icon faellt unter img-src, ein
+    // Stylesheet unter style-src, ein Manifest unter manifest-src (und mangels
+    // Eintrag unter default-src). Eine einzige Liste ueber alles kann das nicht.
+    const ok = runGuard(baselineHtml('<link rel="icon" href="/icon.svg" />'));
+    expect(ok.status, ok.stderr).toBe(0);
+    const remote = runGuard(baselineHtml('<link rel="stylesheet" href="https://cdn.example/x.css" />'));
+    expect(remote.status).not.toBe(0);
+    expect(remote.stderr).toMatch(/is not allowed by style-src/);
+  });
+
+  // Der Hostname steht hier zusammengesetzt: woertlich darf er im Baum nur an den
+  // beiden benannten Stellen vorkommen (scripts/verify-csp-contract.mjs und
+  // tests/unit/csp-fonts.test.js), damit der stumpfe Quell-Waechter nicht an
+  // einer Ausnahme vorbeisehen muss.
+  const FONT_HOST = ["fonts", "gstatic", "com"].join(".");
+
+  it("compares remote font hostnames case-insensitively (N3 round 3, N4)", () => {
+    // DNS loest einen Hostnamen ohne Ruecksicht auf die Schreibweise auf --
+    // `FONTS.GSTATIC.COM` und die kleine Form sind dieselbe Herkunft. Der
+    // woertliche Vergleich meldete auf fe5e7b2 null Referenzen, und die
+    // Schrift ging live an `font-src 'self'` kaputt: genau die Drift zwischen
+    // Entwicklung und Produktion, gegen die dieser Punkt gebaut ist.
+    const shouted = runGuard(baselineHtml(`<link rel="preconnect" href="https://${FONT_HOST.toUpperCase()}" />`));
+    expect(shouted.status).not.toBe(0);
+    expect(shouted.stderr).toMatch(/remote font origin/);
+  });
+
+  it("still finds the lower-case spelling and still passes without it (N4 controls)", () => {
+    // Positiv-Kontrolle und Gegenrichtung in einer Zelle: die kleine Form MUSS
+    // weiter rot sein (sonst misst die Zelle oben nichts), und eine Ausgabe ohne
+    // fremde Schrift-Origin MUSS gruen bleiben (sonst faerbt der Waechter alles).
+    const lower = runGuard(baselineHtml(`<link rel="preconnect" href="https://${FONT_HOST}" />`));
+    expect(lower.status, "the lower-case control no longer reddens").not.toBe(0);
+    const clean = runGuard(baselineHtml('<link rel="preconnect" href="https://example.org" />'));
+    expect(clean.status, clean.stderr).toBe(0);
+    expect(clean.stdout).toContain("remote-font-refs=0");
+  });
+
+  it("counts a style attribute as an inline style, not only a <style> block (N3)", () => {
+    // Zweites falsches OK der Runde. Die Entscheidung ueber
+    // `style-src 'unsafe-inline'` hing allein am <style>-BLOCK -- eine Ausgabe mit
+    // `style="..."` und ohne Block galt als stilfrei, und der Waechter war gruen,
+    // waehrend der Browser das Attribut blockt.
+    const withoutBlock = baselineHtml('<div style="background:red">x</div>')
+      .replace("    <style>:root{--ghx-font-sans:system-ui}</style>\n", "");
+    expect(withoutBlock, "the fixture still carries a <style> block").not.toContain("<style>");
+    const strict = HEADERS_SELF_ONLY.replace("style-src 'self' 'unsafe-inline';", "style-src 'self';");
+    expect(strict, "the strict fixture did not change").not.toBe(HEADERS_SELF_ONLY);
+
+    const run = runGuard(withoutBlock, strict);
+    expect(run.status).not.toBe(0);
+    expect(run.stderr).toMatch(/carries inline styles but style-src forbids them/);
+    expect(run.stderr).toMatch(/style attributes: 1/);
+  });
+
+  it("keeps the style decision two-sided after counting attributes (N3 counter-direction)", () => {
+    // Punkt 4 ist bewusst beidseitig: die Erlaubnis muss auch WEGFALLEN, wenn
+    // nichts mehr sie braucht. Sonst haette das Mitzaehlen der Attribute die
+    // Richtlinie stillschweigend nach oben verriegelt.
+    const withoutAnyInlineStyle = baselineHtml()
+      .replace("    <style>:root{--ghx-font-sans:system-ui}</style>\n", "");
+    expect(withoutAnyInlineStyle).not.toContain("<style>");
+    expect(withoutAnyInlineStyle).not.toContain("style=");
+    const stale = runGuard(withoutAnyInlineStyle);
+    expect(stale.status, "the unused 'unsafe-inline' is no longer reported").not.toBe(0);
+    expect(stale.stderr).toMatch(/neither an inline <style> block nor a style attribute/);
+
+    // Und mit der Erlaubnis bleibt das style-Attribut gruen -- sonst waere die
+    // Verschaerfung ein Fehlalarm auf der heutigen, bewusst offenen Richtlinie.
+    const permitted = runGuard(
+      baselineHtml('<div style="background:red">x</div>').replace("    <style>:root{--ghx-font-sans:system-ui}</style>\n", ""),
+    );
+    expect(permitted.status, permitted.stderr).toBe(0);
+    expect(permitted.stdout).toContain("inline-style-attributes=1");
+  });
+
+  it("checks every URL of a list attribute, not only the first (N1, self-check)", () => {
+    // NICHT aus dem Review, sondern aus der Probe der eigenen Haertung: die
+    // Direktiven-Tabelle ordnete `img:srcset` zu, und `srcset` stand gar nicht in
+    // URI_ATTRIBUTES -- die Zuordnung las sich wie Deckung und war keine. Alle
+    // drei Faelle liefen auf der ersten Fassung dieser Runde mit Exit 0 durch.
+    const zweiter = runGuard(baselineHtml('<img src="/icon-192.png" srcset="/icon-192.png 1x, https://cdn.example/b.png 2x" alt="" />'));
+    expect(zweiter.status, "the second srcset entry is still unchecked").not.toBe(0);
+    expect(zweiter.stderr).toMatch(/is not allowed by img-src/);
+
+    const einzeln = runGuard(baselineHtml('<img srcset="https://cdn.example/b.png 2x" alt="" />'));
+    expect(einzeln.status).not.toBe(0);
+
+    // ping ist Leerzeichen-getrennt und faellt unter connect-src.
+    const beacon = runGuard(baselineHtml('<a href="/x" ping="/beacon https://cdn.example/beacon">x</a>'));
+    expect(beacon.status, "the second ping URL is still unchecked").not.toBe(0);
+  });
+
+  it("leaves a well-formed list attribute alone (self-check counter-direction)", () => {
+    // Sonst waere die Zelle darueber mit einem Waechter gruen, der jedes
+    // srcset rot faerbt -- und der waere nach einer Woche abgeschaltet.
+    const run = runGuard(baselineHtml('<img src="/icon-192.png" srcset="/icon-192.png 1x, /icon-384.png 2x" alt="" />'));
+    expect(run.status, run.stderr).toBe(0);
+    expect(run.stdout).toContain("blocked-resources=0");
+  });
+
   it("reports how many tags it scanned, so an empty result cannot pass as absence", () => {
     // Ohne diese Zahl waere "null Handler" auch dann gruen, wenn der Tag-Zerleger
     // gar nichts mehr faende -- genau die Klasse, gegen die dieser Waechter baut.
