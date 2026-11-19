@@ -61,3 +61,51 @@ npm test -- --run tests/unit/planar-golden-v2-contract.test.js
 ```
 
 v1 is untouched by v2. If `sim-engine.js` changes, the v2 generator refuses to refresh: create v3.
+
+# GolHex planar water Golden Vector contract v1 (real-valued profile)
+
+Purpose: the open item of the `golhex-3d` R03 re-audit (2026-11-19, NR-GH3D-R03-03). The 2D water
+parity there was checked against a hand-mirrored copy of `stepWater`, so a mistake shared by both
+sides stays invisible. `scripts/generate-planar-water-golden.mjs` is the independent upstream side:
+it drives only the production `buildNeighbors()` and `stepWater()` (engine blob `631c07d`, the same
+as v1/v2) and writes one file per profile into `contracts/golhex-planar-water-golden-v1/`:
+
+| file | profile | grid, ticks | counterexample |
+|---|---|---|---|
+| `water-oddr-edge.json` | water, odd-r edge, closed system | 6 x 6, 0..12 | same seed, `Float64Array` buffers (no binary32 store rounding) |
+| `water-oddr-torus.json` | water, odd-r box-torus, closed system | 6 x 6, 0..12 | same seed with the edge boundary |
+
+Both counterexamples come from the same production function under a changed condition, never from a
+second implementation. Each diverges at tick 1; a seed that cannot tell a profile from its contrast is
+refused.
+
+State encoding: each cell is its IEEE-754 binary32 bit pattern as an unsigned 32-bit integer
+(`wBits`, row-major), so nothing is lost to decimal printing. `stateSha256` is SHA-256 over
+`uint32le(tick)` followed by the cells as little-endian float32.
+
+Arithmetic a consumer must reproduce: every intermediate is binary64 using only `+ - * / min max`,
+and every write into the field rounds to binary32 (nearest-even). No fused multiply-add: in C, C++
+or Rust the compiler must not contract `a + b * c` (for GCC/Clang `-ffp-contract=off`). The buffer
+protocol is `out = stepWater(w, NL, cols, buf); buf = w; w = out`; the lateral exchange reads the
+post-gravity snapshot, not the field being written.
+
+Measured 2026-11-19: `scripts/verify-planar-water-golden.py`, a standard-library Python
+re-implementation written from that recipe, reproduces all 26 checkpoints bit for bit (Python 3.13),
+and reports the cell when one bit of a fixture is flipped. It is a consumer reference, not run in CI.
+
+```bash
+node scripts/generate-planar-water-golden.mjs contracts/golhex-planar-water-golden-v1          # write
+node scripts/generate-planar-water-golden.mjs --check contracts/golhex-planar-water-golden-v1  # verify
+npm test -- --run tests/unit/planar-water-golden-contract.test.js
+python3 -I scripts/verify-planar-water-golden.py contracts/golhex-planar-water-golden-v1       # by hand
+```
+
+What passing establishes: this 2D water automaton on these two bounded box profiles, without the
+open-system exchange. What it does not: any other frame shape or mask, snow/HQST/Collatz/genes, the
+3D CVFD water model of `golhex-3d` (a different operator, not a slice of this one), or any physical
+validity. `stepWater` is a game-style cellular fluid, not a calibrated flow model. `massFloat64` in
+the fixture is a diagnostic: mass is conserved pairwise in exact arithmetic, and the binary32 store
+leaves a drift below 1e-6 over these runs.
+
+The life contracts v1 and v2 are untouched. If `sim-engine.js` changes, the generator refuses to
+refresh: create a new contract version.
