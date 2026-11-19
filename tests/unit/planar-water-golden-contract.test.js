@@ -1,6 +1,8 @@
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
+import { cpSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -14,8 +16,8 @@ import {
 // Upstream water Golden Vectors for golhex-3d (R03 re-audit 2026-11-19, NR-GH3D-R03-03:
 // "source mirroring is not an independent 2D parity").
 const SHA256 = {
-  "water-oddr-edge": "ded5baa8b357f8e9d75d6aaf53937b6b108b62ef135b906b2e0ab0678c42f62e",
-  "water-oddr-torus": "0c81bc141a2c43b8ac6c715f49c2ff9b3856ca41b24e38d7bb59d6d663140206",
+  "water-oddr-edge": "13d3acb58c04a6d01cd159999b8f5c633627e4565dc81373fc1fbfd2a022332b",
+  "water-oddr-torus": "4cc31435fbc46dec0e4d74606335e5b552e99ced9e4dc458df9c02b5f44e2867",
 };
 const dir = resolve("contracts/golhex-planar-water-golden-v1");
 const toFloat = (bits) => new Float32Array(new Uint32Array([bits]).buffer)[0];
@@ -45,9 +47,10 @@ describe("cross-repo planar water Golden Vector contract v1", () => {
         expect(cp.wBits).toHaveLength(spec.rows * spec.cols);
         expect(stateSha256(cp.tick, cp.wBits)).toBe(cp.stateSha256);
         for (const bits of cp.wBits) {
-          expect(Number.isInteger(bits) && bits >= 0 && bits <= 0xffffffff).toBe(true);
-          const v = toFloat(bits);
-          expect(v >= 0 && v <= 1).toBe(true); // also rejects NaN
+          // For non-negative binary32 values the bit order is the value order, so this one
+          // range says: finite, in [+0, 1.0], and neither -0 (0x80000000) nor NaN.
+          expect(Number.isInteger(bits) && bits >= 0 && bits <= 0x3f800000).toBe(true);
+          expect(toFloat(bits) <= 1).toBe(true);
         }
       }
       // The seed in the fixture is the state at tick 0.
@@ -82,6 +85,78 @@ describe("cross-repo planar water Golden Vector contract v1", () => {
     };
     for (const [file, sha] of Object.entries(pinned)) {
       expect(createHash("sha256").update(readFileSync(file)).digest("hex")).toBe(sha);
+    }
+  });
+});
+
+// --- Strength of the fixtures -------------------------------------------------------
+// A golden vector is only worth what it can tell apart. Two measurements, both gates:
+// (1) mutants of the production stepWater must be noticed, (2) a re-implementation in
+// another language must reproduce the fixtures from the documented arithmetic, and the
+// usual porting mistake (all-binary32 arithmetic) must NOT reproduce them.
+
+describe("water Golden Vector v1: mutation check of stepWater", () => {
+  it("kills every non-equivalent mutant; the equivalent ones stay equivalent", () => {
+    const out = execFileSync(process.execPath, ["scripts/mutation-check-planar-water-golden.mjs", "--json"], { encoding: "utf8", cwd: resolve(".") });
+    const summary = JSON.parse(out);
+    expect(summary.failures).toEqual([]);
+    expect(summary.results.filter((r) => r.status === "stale")).toEqual([]);
+    expect(summary.killed).toBe(20);
+    expect(summary.equivalent).toBe(5);
+    expect(summary.mutants).toBe(25);
+    // Neither profile alone is enough: each one is the only witness for some mutant.
+    for (const id of Object.keys(SHA256)) {
+      const onlyWitness = summary.results.filter((r) => r.status === "killed"
+        && r.perProfile[id] !== "survives"
+        && Object.entries(r.perProfile).every(([k, v]) => k === id || v === "survives"));
+      expect(onlyWitness.length, `${id} is redundant`).toBeGreaterThan(0);
+    }
+  }, 60_000);
+});
+
+function findPython() {
+  for (const cmd of ["python3", "python", "py"]) {
+    const probe = spawnSync(cmd, ["-I", "-c", "import sys; print(sys.version_info[0])"], { encoding: "utf8" });
+    if (probe.status === 0 && probe.stdout.trim() === "3") return cmd;
+  }
+  return null;
+}
+const python = findPython();
+const verifier = (args) => spawnSync(python, ["-I", "scripts/verify-planar-water-golden.py", ...args], { encoding: "utf8", cwd: resolve(".") });
+
+describe("water Golden Vector v1: cross-language consumer reference (Python)", () => {
+  it("Python 3 is available wherever this is a gate", () => {
+    // Fail closed in CI: a missing interpreter must not turn the oracle into a skip.
+    if (process.env.CI) expect(python, "CI runner has no Python 3").not.toBeNull();
+  });
+
+  it.skipIf(!python)("reproduces every checkpoint from the documented arithmetic", () => {
+    const run = verifier([dir]);
+    expect(run.stdout).toContain("water-oddr-edge.json [reference]: reproduced");
+    expect(run.stdout).toContain("water-oddr-torus.json [reference]: reproduced");
+    expect(run.status).toBe(0);
+  });
+
+  it.skipIf(!python)("all-binary32 arithmetic does not reproduce either profile", () => {
+    const run = verifier([dir, "--arithmetic", "binary32"]);
+    expect(run.status).toBe(1);
+    expect(run.stdout).toContain("water-oddr-edge.json [binary32]: MISMATCH");
+    expect(run.stdout).toContain("water-oddr-torus.json [binary32]: MISMATCH");
+  });
+
+  it.skipIf(!python)("reports a single flipped bit with tick and cell, and refuses an empty directory", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "golhex-water-neg-"));
+    try {
+      expect(verifier([tmp]).status).toBe(2); // no fixtures: not a pass
+      cpSync(join(dir, "water-oddr-edge.json"), join(tmp, "water-oddr-edge.json"));
+      const fx = JSON.parse(readFileSync(join(tmp, "water-oddr-edge.json"), "utf8"));
+      fx.checkpoints[5].wBits[20] ^= 1;
+      writeFileSync(join(tmp, "water-oddr-edge.json"), JSON.stringify(fx));
+      const run = verifier([tmp]);
+      expect(run.status).toBe(1);
+      expect(run.stdout).toContain("tick 5 cell 20");
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
     }
   });
 });

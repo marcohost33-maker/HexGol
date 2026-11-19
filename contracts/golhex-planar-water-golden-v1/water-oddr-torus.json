@@ -17,7 +17,8 @@
       "runtime": "Node.js",
       "language": "ECMAScript modules"
     },
-    "arithmetic": "IEEE-754 binary64 for every intermediate (+ - * / min max only), stored to binary32 round-to-nearest-even; no fused multiply-add",
+    "arithmetic": "IEEE-754 binary64 for every intermediate (+ - * / min max only); every write into the field rounds to binary32, nearest-even",
+    "arithmeticControls": "all-binary32 arithmetic is detected by these checkpoints; contracting a + b * c into a fused multiply-add on the binary64 intermediates is NOT detected (see contracts/README.md)",
     "stateEncoding": "wBits: binary32 bit pattern per cell as uint32, row-major",
     "stateSha256Input": "uint32le(tick) || float32le(w[0]) || ... || float32le(w[n-1])",
     "massFloat64": "sum of w in index order, accumulated in binary64 (diagnostic, not a gate)",

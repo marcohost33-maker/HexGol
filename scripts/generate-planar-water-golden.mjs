@@ -9,8 +9,10 @@
 // No fluid logic lives here. Both counterexamples are produced by the same production
 // function under a changed condition, never by a second implementation:
 //  - "precision": the same seed with Float64Array buffers. stepWater is typed-array
-//    agnostic, so this is the production code minus the binary32 store rounding -- the
-//    mistake a consumer in another language makes first.
+//    agnostic, so this is the production code minus the binary32 store rounding.
+//    (The opposite mistake, all-binary32 arithmetic, needs a second implementation and
+//    is therefore measured on the consumer side: scripts/verify-planar-water-golden.py
+//    --arithmetic binary32.)
 //  - "boundary": the same seed on the other neighbour table (edge vs box-torus).
 // A seed that cannot tell the profile from its contrast is refused.
 //
@@ -123,6 +125,7 @@ function run({ boundary, rows, cols, steps, seed }, FieldArray = Float32Array) {
     buf = w; w = out;
     for (let i = 0; i < n; i += 1) {
       if (!(w[i] >= 0 && w[i] <= 1)) throw new Error(`tick ${tick}: cell ${i} left [0,1] or is NaN: ${w[i]}`);
+      if (Object.is(w[i], -0)) throw new Error(`tick ${tick}: cell ${i} is -0; the bit pattern would not be canonical`);
     }
     checkpoints.push(snapshot(tick));
   }
@@ -160,7 +163,8 @@ export function buildProfile(spec) {
     provenance: {
       reproducibilityLevel: "R3-within-nodejs-backend",
       canonicalReferenceBackend: { runtime: "Node.js", language: "ECMAScript modules" },
-      arithmetic: "IEEE-754 binary64 for every intermediate (+ - * / min max only), stored to binary32 round-to-nearest-even; no fused multiply-add",
+      arithmetic: "IEEE-754 binary64 for every intermediate (+ - * / min max only); every write into the field rounds to binary32, nearest-even",
+      arithmeticControls: "all-binary32 arithmetic is detected by these checkpoints; contracting a + b * c into a fused multiply-add on the binary64 intermediates is NOT detected (see contracts/README.md)",
       stateEncoding: "wBits: binary32 bit pattern per cell as uint32, row-major",
       stateSha256Input: "uint32le(tick) || float32le(w[0]) || ... || float32le(w[n-1])",
       massFloat64: "sum of w in index order, accumulated in binary64 (diagnostic, not a gate)",

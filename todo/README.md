@@ -16,7 +16,8 @@ zentralen `OFFENE_THEMEN.md` (Vero Meta).
 - **Golden-Vector-Abnahme in golhex-3d** — Produzentenseite liegt vor: Life v1/v2 und
   Wasser v1 (`contracts/`). Offen ist die Konsumentenseite: `golhex-3d` muss die Fixtures
   unveraendert uebernehmen und gegen jeden Checkpoint pruefen (R03-Re-Audit 2026-11-19,
-  `HEXGOL_PRODUCER_PARITY`). Weitere Profile (INT-Regeln, Masken/Rahmenformen, Schnee)
+  `HEXGOL_PRODUCER_PARITY`). Bekannte Luecke des Wasser-Vertrags: FMA-Kontraktion wird
+  nicht erkannt (`pr_nr/NR-water-golden-fma-blind-spot.md`). Weitere Profile (INT-Regeln, Masken/Rahmenformen, Schnee)
   erst bei Bedarf des Konsumenten.
 - **Dependabot-Stau** — #208 (TypeScript 7), #213, #223–#226 offen; wie #221 in einer
   CI-Runde buendeln, TypeScript 7 getrennt bewerten.
