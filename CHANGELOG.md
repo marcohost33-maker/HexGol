@@ -16,6 +16,14 @@ und `docs/` (z.B. Re-Konvergenz 2026-06-04, v31→v31.0).
   `NOTICE` into `dist/`, so the deployed app carries them (Apache-2.0 section 4).
 
 ### Added
+- Planar water Golden Vector contract v1 (`contracts/golhex-planar-water-golden-v1/`,
+  `scripts/generate-planar-water-golden.mjs`): two bit-exact `stepWater` profiles (edge,
+  box-torus) for `golhex-3d`, each with a counterexample. Fixture strength is gated in
+  `unit`: a mutation check of `stepWater` (20 of 20 non-equivalent mutants noticed) and a
+  standard-library Python re-implementation that must reproduce every checkpoint, while
+  all-binary32 arithmetic must not. Known blind spot, documented: fused multiply-add on
+  the binary64 intermediates is not detected (`pr_nr/NR-water-golden-fma-blind-spot.md`).
+  No engine change.
 - Repo-Standard-14-Anschluss: `00_landkarte/`, `docs/ROADMAP.md`,
   `docs/ADR/ADR-001-*`, `inventar/`, `pr_nr/`, `todo/`, dieser Changelog
   (Content-Materialisierung Welle 1, Marco-Content-Review offen).

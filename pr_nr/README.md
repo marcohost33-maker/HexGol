@@ -23,6 +23,9 @@ Annahme dadurch falsifiziert wurde. Ziel: Wiederholungsfehler vermeiden
 - **NR — Prismen-Isotropie-Fehlschluss.** Gestapelte Hex-Prismen sind NICHT
   intrinsisch isotroper als Voxel; skalares `kappa` macht sie nicht isotrop
   (ADR-001). Anisotropie quantifizieren, nicht wegdefinieren.
+- **NR — Wasser-Golden-Vector erkennt FMA-Kontraktion nicht.** Durchgehende
+  binary32-Arithmetik wird erkannt, eine FMA auf den binary64-Zwischenwerten nicht
+  (gemessen 2026-11-19). Siehe `NR-water-golden-fma-blind-spot.md`.
 
 > Weitere NR/PR bei Bedarf ergänzen. Diese Liste ist ein Startpunkt aus dem
 > Bestands-Wissen (AGENTS.md / ADR), nicht abschliessend.
