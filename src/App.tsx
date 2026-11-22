@@ -16,7 +16,7 @@ import {
 import Splash from "./lib/Splash.jsx"; // v33 Branding: einmaliger Intro-/Splash-Screen (additiv)
 import ConwayIntro, { introSeen } from "./lib/ConwayIntro.jsx"; // Bildungs-Intro (einmalig, nach Splash; ⓘ re-open)
 import { renderRaster } from "./lib/raster-render.js"; // geteilter Raster-Pfad (Worker + Main)
-import { bewerteGolHex } from "./lib/golhex-nine-rules-adapter.js"; // 9-Regel-Semantikprofil (optional, neben den Axiomen)
+import { bewerteGolHex, schwerpunkt } from "./lib/golhex-nine-rules-adapter.js"; // 9-Regel-Semantikprofil (optional, neben den Axiomen)
 import { STATUS } from "./lib/nine-rules.js";
 import { FONT_SANS, FONT_MONO } from "./lib/typography.js"; // #163: System-Schriftstapel, eine Quelle, kein Fremd-Download
 import { supportsOffscreenWorker } from "./lib/worker-support.js"; // Feature-Detection (fail-closed)
@@ -697,6 +697,17 @@ export default function GolHex() {
   // eine Auswertung pro Frame waere reine Rechenlast ohne sichtbaren Gewinn.
   // Laeuft nur, wenn das Panel offen UND das Profil gewaehlt ist: ein geschlossenes
   // Panel darf nichts kosten.
+  // Kontext fuer die Trace-Erhebung in pushStats (Ref statt State: pushStats ist ein
+  // stabiler Callback). Torus ist nur auf dem Rechteck periodisch; Kreis + Torus ist
+  // antipodal (RP2), andere Rahmen + Torus ebenfalls kein einfacher Torus -> der
+  // Adapter meldet dort "unbestimmt" statt einen Schwerpunkt zu raten.
+  const nineCtxRef = useRef({ aktiv: false, topologie: "edge" });
+  useEffect(() => {
+    nineCtxRef.current = {
+      aktiv: semantikProfil === "neunregeln",
+      topologie: !torusOn ? "edge" : (frameShape === "box" ? "torus" : `torus+${frameShape}`),
+    };
+  }, [semantikProfil, torusOn, frameShape]);
   const nineRulesReport = useMemo(() => {
     if (!showNineRules || semantikProfil !== "neunregeln") return { rules: [], specVersion: "" };
     return bewerteGolHex(popGraphRef.current, gen, { laeuft: running });
@@ -1064,14 +1075,17 @@ export default function GolHex() {
     return { active, sum, extra };
   }, []);
 
-  // Statistik aktualisieren (births/deaths vom letzten Schritt, sonst 0)
-  const pushStats = useCallback((births, deaths) => {
+  // Statistik aktualisieren (births/deaths vom letzten Schritt, sonst 0).
+  // schritt=false: Probe ohne Simulationsschritt (Malen, Laden, Leeren) -- fuer das
+  // 9-Regel-Profil (R4) darf sie nicht als "Schritt ohne Unterscheidung" zaehlen.
+  const pushStats = useCallback((births, deaths, schritt = true) => {
     const N2 = gridRef.current.rows * gridRef.current.cols;
     if (simRef.current === "rval") {
       const r = countRval();
       const h = histRef.current; h.push(r.active); if (h.length > 120) h.shift();
       // Sparkline: im rval-Modus gibt es keinen separaten Geburten/Tode-Diff -> Aktiv = Pop.
-      pushSample(popGraphRef.current, r.active, r.active);
+      pushSample(popGraphRef.current, r.active, r.active,
+        { schritt: false, posGrund: "Physikmodus: kein Zellort erhoben" });
       bumpPopGraph();
       recordStep(["gen", "active", "sum"], [tickRef.current, r.active, r.sum]);
       setStats({ pop: r.active, cnt: [0,0,0,0,0,0,0,0,0,0,0,0,0], density: N2 ? r.active / N2 : 0, births: 0, deaths: 0, sps: spsRef.current, hist: h.slice(), rval: true, rvalSum: r.sum });
@@ -1080,7 +1094,17 @@ export default function GolHex() {
     const c = countColor();
     const h = histRef.current; h.push(c.pop); if (h.length > 120) h.shift();
     // Sparkline: Pop = lebende Zellen, Aktiv = pro-Schritt geaenderte Zellen (births+deaths).
-    pushSample(popGraphRef.current, c.pop, births + deaths);
+    // 9-Regel-Profil: Geburten/Tode getrennt + Domaenengroesse (R4) und Schwerpunkt
+    // (R5/R6). Der O(N)-Schwerpunkt laeuft nur, wenn das Profil gewaehlt ist -- ein
+    // nicht genutztes Pruefraster darf nichts kosten.
+    const nctx = nineCtxRef.current;
+    const nb = neighRef.current;
+    const extra: Record<string, unknown> = { schritt, births, deaths, zellen: (nb && nb.inCount) || N2 };
+    if (nctx.aktiv) {
+      const sp = schwerpunkt(colorRef.current, gridRef.current.rows, gridRef.current.cols, { topologie: nctx.topologie });
+      if (sp.pos) { extra.pos = sp.pos; extra.periode = sp.periode; } else extra.posGrund = sp.grund;
+    } else extra.posGrund = "9-Regel-Profil nicht aktiv";
+    pushSample(popGraphRef.current, c.pop, births + deaths, extra);
     bumpPopGraph();
     recordStep(["gen", "pop", "density", "births", "deaths"], [tickRef.current, c.pop, N2 ? c.pop / N2 : 0, births, deaths]);
     setStats({ pop: c.pop, cnt: c.cnt, density: N2 ? c.pop / N2 : 0, births, deaths, sps: spsRef.current, hist: h.slice() });
@@ -1115,7 +1139,7 @@ export default function GolHex() {
     if (rec.rows.length > 100000) rec.rows.shift(); // Speicherschutz
   };
 
-  const updatePop = useCallback(() => pushStats(0, 0), [pushStats]);
+  const updatePop = useCallback(() => pushStats(0, 0, false), [pushStats]);
 
   // --- Simulationsschritt ---------------------------------------------------
   const step = useCallback(() => {
@@ -3798,8 +3822,10 @@ export default function GolHex() {
             <div style={{ display: "flex", flexDirection: "column", gap: 5 }} data-testid="ninerules-panel">
               <div style={{ padding: "7px 10px", borderRadius: 9, background: "rgba(92,240,204,0.06)", border: "1px solid rgba(92,240,204,0.14)", fontSize: 10, color: T.sub, fontFamily: MONO, lineHeight: 1.45 }}>
                 Prueft den <b>Populationsverlauf</b> — nicht einzelne Zellen. Beobachtet nur,
-                veraendert nichts. <b>Richtung</b> und <b>Bewegung</b> fehlen bewusst: eine
-                Population hat keinen Ort.
+                veraendert nichts. <b>Unterscheidet</b>: behandelte der letzte Schritt Zellen
+                gleichen Vorzustands verschieden? <b>Richtung</b>/<b>Bewegung</b> beziehen sich
+                auf den <b>Schwerpunkt</b> der lebenden Zellen — eine abgeleitete Groesse; wo er
+                nicht eindeutig ist (verteilt auf dem Torus, Kreis-Torus), steht <b>offen</b>.
               </div>
               {nineRulesReport.rules.map((r) => {
                 const farbe =

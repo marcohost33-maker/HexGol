@@ -6,7 +6,9 @@
 // EHRLICH bleibt -- also N/A meldet, wo die Entitaet nichts hergibt.
 
 import { describe, it, expect } from "vitest";
-import { baueTrace, bewerteGolHex, CA_LIFE, NICHT_ANWENDBAR } from "../../src/lib/golhex-nine-rules-adapter.js";
+import {
+  baueTrace, bewerteGolHex, CA_LIFE, NICHT_ANWENDBAR, schwerpunkt, uebergangsKlassen, RBAR_MIN,
+} from "../../src/lib/golhex-nine-rules-adapter.js";
 import { STATUS } from "../../src/lib/nine-rules.js";
 
 const buf = (pop, active) => ({ pop, active: active ?? pop.map(() => 1) });
@@ -21,8 +23,11 @@ describe("Trace-Bau", () => {
     expect(t.map((s) => s.gen)).toEqual([8, 9, 10]);
   });
 
-  it("fuehrt bewusst KEINE Position -- eine Population hat keinen Ort", () => {
-    for (const s of baueTrace(buf([1, 2]), 5)) expect(s.q).toBeUndefined();
+  it("ohne erhobene Ortsdaten wird KEINE Position erfunden (unbestimmt, nicht geraten)", () => {
+    for (const s of baueTrace(buf([1, 2]), 5)) {
+      expect(s.q).toBeUndefined();
+      expect(typeof s.qUnbekannt).toBe("string");
+    }
   });
 
   it("vertraegt einen leeren oder fehlenden Puffer", () => {
@@ -31,18 +36,151 @@ describe("Trace-Bau", () => {
   });
 });
 
-describe("Ehrlichkeit: was das Modell ueber eine Population NICHT sagen kann", () => {
-  it("R5 und R6 sind gar nicht erst aktiviert", () => {
-    const rep = bewerteGolHex(buf([1, 2, 3]), 3);
-    const ids = rep.rules.map((r) => r.id);
-    for (const aus of NICHT_ANWENDBAR) expect(ids).not.toContain(aus);
+describe("Ehrlichkeit: alle neun Regeln sind aktiv, Unbestimmtes bleibt UNKNOWN", () => {
+  it("keine Regel ist mehr abgeschaltet", () => {
+    expect(NICHT_ANWENDBAR).toEqual([]);
+    const ids = bewerteGolHex(buf([1, 2, 3]), 3).rules.map((r) => r.id);
+    expect(ids).toEqual(["R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8", "R9"]);
   });
 
-  it("es wird keine Position erfunden, um R6 gruen zu bekommen", () => {
-    // Der Test ist der Punkt: waere irgendwo ein Schwerpunkt berechnet worden,
-    // saehe R6 plausibel aus und behauptete etwas ueber eine Entitaet ohne Ort.
+  it("ohne Ortsdaten ist R6 UNOBSERVED -- weder erfundenes PASS noch N/A", () => {
     const rep = bewerteGolHex(buf([1, 5, 2]), 3);
-    expect(rep.rules.find((r) => r.id === "R6")).toBeUndefined();
+    expect(statusOf(rep, "R6")).toBe(STATUS.UNOBSERVED);
+    expect(statusOf(rep, "R5")).toBe(STATUS.UNOBSERVED);
+    expect(statusOf(rep, "R4")).toBe(STATUS.UNOBSERVED);
+  });
+});
+
+// --- Erhobene Trace-Groessen (2026-11-22) -----------------------------------
+// Puffer mit `extra` je Probe, wie App.tsx ihn ueber pushSample fuellt.
+const bufX = (pop, extra) => ({ pop, active: pop.map(() => 1), extra });
+const schritt = (births, deaths, zellen = 100, rest = {}) => ({ schritt: true, births, deaths, zellen, ...rest });
+const ruleOf = (rep, id) => rep.rules.find((r) => r.id === id);
+
+/** Gitter R x C (odd-r offset), lebend an den gegebenen [row, col]. */
+function gitter(R, C, zellen) {
+  const col = new Uint8Array(R * C);
+  for (const [r, c] of zellen) col[r * C + c] = 1;
+  return col;
+}
+
+describe("Schwerpunkt der lebenden Zellen (Grundlage fuer R5/R6)", () => {
+  it("Rand-Topologie: Einzelzelle liegt auf ihrer eigenen axialen Koordinate", () => {
+    // odd-r (row 2, col 3) -> axial q = 3 - (2 - 0)/2 = 2, r = 2
+    expect(schwerpunkt(gitter(6, 6, [[2, 3]]), 6, 6, { topologie: "edge" }).pos).toEqual({ q: 2, r: 2 });
+  });
+
+  it("Rand-Topologie: Mittel ueber mehrere Zellen, auf die naechste Zelle gerundet", () => {
+    // (2,1) und (2,3) -> axial (0,2) und (2,2) -> Mittel (1,2)
+    expect(schwerpunkt(gitter(6, 6, [[2, 1], [2, 3]]), 6, 6, { topologie: "edge" }).pos).toEqual({ q: 1, r: 2 });
+  });
+
+  it("leere Population hat keinen Schwerpunkt", () => {
+    const s = schwerpunkt(gitter(4, 4, []), 4, 4, { topologie: "edge" });
+    expect(s.pos).toBeUndefined();
+    expect(s.grund).toMatch(/keine lebende Zelle/);
+  });
+
+  it("Torus: Haufen ueber die Naht liegt AN der Naht, nicht in der Gittermitte", () => {
+    // Spalten 9, 0, 1 in Reihe 4 eines 10x10-Torus. Das arithmetische Mittel waere
+    // Spalte 3.3 (Gittermitte, falsch); das Kreismittel ist Spalte 0.
+    const s = schwerpunkt(gitter(10, 10, [[4, 9], [4, 0], [4, 1]]), 10, 10, { topologie: "torus" });
+    expect(s.pos).toEqual({ q: -2, r: 4 }); // offset (4,0) -> q = 0 - 2
+    expect(s.periode).toEqual({ R: 10, C: 10 });
+  });
+
+  it("Torus: ueber eine Achse gleichverteilte Population hat KEINEN Schwerpunkt", () => {
+    const ring = Array.from({ length: 10 }, (_, c) => [4, c]);
+    const s = schwerpunkt(gitter(10, 10, ring), 10, 10, { topologie: "torus" });
+    expect(s.pos).toBeUndefined();
+    expect(s.grund).toMatch(/verteilt/);
+    expect(RBAR_MIN).toBeGreaterThan(0);
+  });
+
+  it("andere Topologien (z. B. Kreis + Torus = RP2) bleiben unbestimmt", () => {
+    const s = schwerpunkt(gitter(6, 6, [[2, 2]]), 6, 6, { topologie: "rp2" });
+    expect(s.pos).toBeUndefined();
+    expect(s.grund).toMatch(/rp2/);
+  });
+});
+
+describe("R6 Bewegt / R5 Richtung auf dem Schwerpunkt", () => {
+  const pos = (q, r, rest = {}) => schritt(0, 0, 100, { pos: { q, r }, ...rest });
+
+  it("Schwerpunkt wandert axial: R6 PASS, R5 PASS mit D6-Richtung", () => {
+    const rep = bewerteGolHex(bufX([5, 5], [pos(0, 0), pos(2, 0)]), 1);
+    expect(statusOf(rep, "R6")).toBe(STATUS.PASS);
+    expect(statusOf(rep, "R5")).toBe(STATUS.PASS);
+    expect(ruleOf(rep, "R5").evidence).toMatch(/\(1,0\)/);
+  });
+
+  it("Schwerpunkt steht: R6 FAIL, R5 N/A (ohne Bewegung keine Richtung)", () => {
+    const rep = bewerteGolHex(bufX([5, 5], [pos(3, 1), pos(3, 1)]), 1);
+    expect(statusOf(rep, "R6")).toBe(STATUS.FAIL);
+    expect(statusOf(rep, "R5")).toBe(STATUS.NA);
+    expect(ruleOf(rep, "R5").evidence).toMatch(/unbewegt/);
+  });
+
+  it("schraege Verschiebung: R6 PASS, R5 UNKNOWN statt auf eine D6-Richtung gerundet", () => {
+    const rep = bewerteGolHex(bufX([5, 5], [pos(0, 0), pos(1, 1)]), 1);
+    expect(statusOf(rep, "R6")).toBe(STATUS.PASS);
+    expect(statusOf(rep, "R5")).toBe(STATUS.UNOBSERVED);
+  });
+
+  it("unbestimmter Schwerpunkt: R6 und R5 UNKNOWN mit Grund", () => {
+    const rep = bewerteGolHex(bufX([5, 5], [pos(0, 0), schritt(0, 0, 100, { posGrund: "gleich verteilt" })]), 1);
+    expect(statusOf(rep, "R6")).toBe(STATUS.UNOBSERVED);
+    expect(ruleOf(rep, "R6").evidence).toMatch(/gleich verteilt/);
+    expect(statusOf(rep, "R5")).toBe(STATUS.UNOBSERVED);
+  });
+
+  it("Torus: Schritt ueber die Naht ist EIN Schritt (Minimalbild), nicht ein Sprung quer", () => {
+    const periode = { R: 10, C: 10 };
+    // offset (4,9) -> q = 9-2 = 7 ; offset (4,0) -> q = -2. Roh-Differenz -9, kuerzeste +1.
+    const rep = bewerteGolHex(bufX([5, 5], [pos(7, 4, { periode }), pos(-2, 4, { periode })]), 1);
+    expect(statusOf(rep, "R5")).toBe(STATUS.PASS);
+    expect(ruleOf(rep, "R5").evidence).toMatch(/\(1,0\)/);
+  });
+});
+
+describe("R4 Unterscheidet: der Schritt behandelt Zellen gleichen Vorzustands verschieden", () => {
+  it("Uebergangsklassen werden aus Pop/Geburten/Toden/Domaene abgeleitet", () => {
+    // pop jetzt 7, 3 Geburten, 5 Tode, 100 Zellen: vorher lebend = 7-3+5 = 9
+    // -> ueberlebt 4, gestorben 5, geboren 3, leer geblieben 100-9-3 = 88
+    expect(uebergangsKlassen(7, 3, 5, 100).klassen).toEqual([
+      { vor: 1, nach: 1, n: 4 }, { vor: 1, nach: 0, n: 5 },
+      { vor: 0, nach: 1, n: 3 }, { vor: 0, nach: 0, n: 88 },
+    ]);
+  });
+
+  it("inkonsistente Zaehlung ergibt keinen Vergleichsraum", () => {
+    expect(uebergangsKlassen(2, 5, 0, 100).grund).toMatch(/inkonsistent/);
+  });
+
+  it("ERSTARRT unterscheidet NICHT (Befund B3 2026-08-11 andersherum war falsch)", () => {
+    const rep = bewerteGolHex(bufX([9, 9], [schritt(0, 0), schritt(0, 0)]), 1);
+    expect(statusOf(rep, "R4")).toBe(STATUS.FAIL);
+  });
+
+  it("teilweise sterbend unterscheidet: Ueberlebende und Gestorbene gleichen Vorzustands", () => {
+    const rep = bewerteGolHex(bufX([9, 5], [schritt(0, 0), schritt(0, 4)]), 1);
+    expect(statusOf(rep, "R4")).toBe(STATUS.PASS);
+  });
+
+  it("Geburt nur an manchen leeren Zellen unterscheidet ebenfalls", () => {
+    const rep = bewerteGolHex(bufX([4, 7], [schritt(0, 0), schritt(3, 0)]), 1);
+    expect(statusOf(rep, "R4")).toBe(STATUS.PASS);
+  });
+
+  it("vollstaendiges Aussterben in einem Schritt behandelt alle Lebenden gleich -> FAIL", () => {
+    const rep = bewerteGolHex(bufX([9, 0], [schritt(0, 0), schritt(0, 9)]), 1);
+    expect(statusOf(rep, "R4")).toBe(STATUS.FAIL);
+  });
+
+  it("Probe ohne Simulationsschritt (Malen, Laden) ist UNKNOWN, nicht FAIL", () => {
+    const rep = bewerteGolHex(bufX([9, 10], [schritt(0, 0), { schritt: false }]), 1);
+    expect(statusOf(rep, "R4")).toBe(STATUS.UNOBSERVED);
+    expect(ruleOf(rep, "R4").evidence).toMatch(/kein Simulationsschritt/);
   });
 });
 
@@ -173,7 +311,7 @@ describe("Praefix-Monotonie: definitive TRACE-Urteile duerfen nie kippen", () =>
 describe("Robustheit", () => {
   it("leerer Puffer kippt die Auswertung nicht", () => {
     const rep = bewerteGolHex(buf([]), 0);
-    expect(rep.rules).toHaveLength(6);
+    expect(rep.rules).toHaveLength(9);
   });
 
   it("keine Regel meldet einen Konfigurationsfehler -- der Adapter ist vollstaendig", () => {

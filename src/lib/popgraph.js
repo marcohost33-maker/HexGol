@@ -20,7 +20,8 @@ export const POPGRAPH_CAP = 200;
  */
 export function createBuffer(cap = POPGRAPH_CAP) {
   const c = Math.max(1, cap | 0);
-  return { pop: [], active: [], cap: c };
+  // extra: optionale Zusatzgroessen je Probe (9-Regel-Profil R4/R5/R6), null wenn keine.
+  return { pop: [], active: [], extra: [], cap: c };
 }
 
 /**
@@ -32,14 +33,20 @@ export function createBuffer(cap = POPGRAPH_CAP) {
  * @param {number} active
  * @returns {{pop:number[], active:number[], cap:number}} derselbe (mutierte) Buffer
  */
-export function pushSample(buf, pop, active) {
+export function pushSample(buf, pop, active, extra = null) {
   const p = Number.isFinite(pop) ? Math.max(0, pop) : 0;
   const a = Number.isFinite(active) ? Math.max(0, active) : 0;
   buf.pop.push(p);
   buf.active.push(a);
-  // Beide Reihen parallel halten und gemeinsam am Kapazitaetsrand kuerzen.
+  // Aeltere Buffer (ohne extra-Feld) bleiben gueltig: Feld bei Bedarf anlegen und auf
+  // die Laenge von pop auffuellen, damit Index i immer dieselbe Probe meint.
+  if (!Array.isArray(buf.extra)) buf.extra = [];
+  while (buf.extra.length < buf.pop.length - 1) buf.extra.push(null);
+  buf.extra.push(extra ?? null);
+  // Alle Reihen parallel halten und gemeinsam am Kapazitaetsrand kuerzen.
   while (buf.pop.length > buf.cap) buf.pop.shift();
   while (buf.active.length > buf.cap) buf.active.shift();
+  while (buf.extra.length > buf.cap) buf.extra.shift();
   return buf;
 }
 
@@ -52,6 +59,7 @@ export function pushSample(buf, pop, active) {
 export function resetBuffer(buf) {
   buf.pop.length = 0;
   buf.active.length = 0;
+  if (Array.isArray(buf.extra)) buf.extra.length = 0;
   return buf;
 }
 
