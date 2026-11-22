@@ -40,21 +40,23 @@ function stepLifeNaive(g) {
       else if (a4 && gh[j]) live++;
     }
     const cntSelf = selfAlive ? cnt[self] : 0;
-    let maxN = 0; for (let c = 1; c <= 12; c++) if (cnt[c] > maxN) maxN = cnt[c]; // immer
+    let maxN = 0, nCol = 0; for (let c = 1; c <= 12; c++) { nCol += cnt[c]; if (cnt[c] > maxN) maxN = cnt[c]; } // immer
     let eff = live;
-    if (A5 === "sym") eff = selfAlive ? cntSelf : maxN;
-    else if (A5 === "komp") eff = selfAlive ? live - cntSelf : live - maxN;
+    // A5 sym = dokumentierte Regel (E3 2026-11-22): eff bleibt live, K<=S / S>K gaten.
+    if (A5 === "komp") eff = selfAlive ? live - cntSelf : live - maxN;
     let born = false, newC = 0;
     if (selfAlive) {
       let surv = eff <= 6 && sL[eff] === 1;
       if (surv && isINT && eff === 2 && s2 && !s2.includes(hexClass2(mask))) surv = false;
       if (!surv && a3 && age[i] >= 6 && eff >= smin - 1 && eff <= smax + 1) surv = true;
       if (sysT) { if (!surv && live > 0 && live < spN) surv = true; else if (surv && live > spN + 1) surv = false; }
+      if (surv && A5 === "sym" && nCol - maxN > maxN) surv = false;
       if (surv) { born = true; newC = (colorMode === "drift" && live > 0) ? driftHue(self, sx, sy) : self; }
     } else if (live > 0 && eff >= 0 && eff <= 6 && bL[eff] === 1) {
       let ok = true;
       if (isINT && eff === 2 && b2 && !b2.includes(hexClass2(mask))) ok = false;
       if (sysT && live > spN) ok = false;
+      if (ok && A5 === "sym" && !(maxN > nCol - maxN)) ok = false;
       if (ok) {
         born = true;
         if (colorMode === "quad") newC = birthColorQuad(cnt, sx, sy);

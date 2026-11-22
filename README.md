@@ -53,8 +53,13 @@ Three rule families, all defined in `src/lib/sim-engine.js` (not inline in
 The Watzlawick layer maps Paul Watzlawick's pragmatic axioms of communication onto
 the cell transition. Axioms A1–A4 (silence, relationship-over-content, punctuation
 via cell age, analog "ghost" state) act on the transition; **A5** (symmetric vs.
-complementary — count only same-coloured resp. differently-coloured neighbours) is a
-separate opt-in mode (`sim-engine.js:548-549`, UI toggle `src/App.tsx:3700`).
+complementary) is a separate opt-in mode with two settings. **sym** is the documented
+rule of `docs/watzlawick-rule.md`: with S = the largest same-coloured neighbour group
+and K = the remaining live neighbours, survival additionally requires K <= S and
+birth requires S > K. The birth/survival thresholds still apply to the total
+neighbour count. This is a behaviour change: up to v33.5.0, sym only counted
+same-coloured neighbours. **komp** counts only differently-coloured neighbours
+(unchanged). See `stepLife` in `sim-engine.js`.
 
 The canonical axiom registry is
 [`src/lib/watzlawick-axioms.js`](src/lib/watzlawick-axioms.js). `WATZLAWICK_AXIOMS`

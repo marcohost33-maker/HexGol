@@ -543,10 +543,15 @@ function stepLife(g) {
       else if (a4 && gh[j]) live++;
     }
     const cntSelf = selfAlive ? cnt[self] : 0;
-    let maxN = 0; if (needMax) { for (let c = 1; c <= 12; c++) if (cnt[c] > maxN) maxN = cnt[c]; }
+    let maxN = 0, nCol = 0;
+    if (needMax) { for (let c = 1; c <= 12; c++) { const v = cnt[c]; nCol += v; if (v > maxN) maxN = v; } }
     let eff = live;
-    if (A5 === "sym") eff = selfAlive ? cntSelf : maxN;
-    else if (A5 === "komp") eff = selfAlive ? live - cntSelf : live - maxN;
+    // A5 "sym" = dokumentierte Regel (docs/watzlawick-rule.md, Axiom 5): Schwellen auf
+    // der Gesamtzahl, zusaetzlich Ueberleben nur bei K <= S, Geburt nur bei S > K
+    // (S = maxN, K = nCol - maxN). Bis v33.5.0 zaehlte "sym" nur gleichfarbige
+    // Nachbarn -- Verhaltensaenderung, Marco-Entscheid E3 2026-11-22.
+    const symGate = A5 === "sym";
+    if (A5 === "komp") eff = selfAlive ? live - cntSelf : live - maxN;
 
     let born = false, newC = 0;
     if (selfAlive) {
@@ -556,6 +561,7 @@ function stepLife(g) {
       if (!surv && a3 && age[i] >= 6 && eff >= smin - 1 && eff <= smax + 1) surv = true;
       // Systemtheorie: Unterdichte stuetzt das Ueberleben, Ueberdichte entzieht es.
       if (sysT) { if (!surv && live > 0 && live < spN) surv = true; else if (surv && live > spN + 1) surv = false; }
+      if (surv && symGate && nCol - maxN > maxN) surv = false; // A5: K <= S
       if (surv) {
         born = true;
         newC = (colorMode === "drift" && live > 0) ? driftHue(self, sx, sy) : self;
@@ -565,6 +571,7 @@ function stepLife(g) {
       if (isINT && eff === 2 && b2 && !b2.includes(hexClass2(mask))) ok = false;
       // Systemtheorie: Geburt nur unter dem Sollwert (fuellt Luecken bis Gleichgewicht).
       if (sysT && live > spN) ok = false;
+      if (ok && symGate && !(maxN > nCol - maxN)) ok = false; // A5: S > K
       if (ok) {
         born = true;
         if (colorMode === "quad") newC = birthColorQuad(cnt, sx, sy);
