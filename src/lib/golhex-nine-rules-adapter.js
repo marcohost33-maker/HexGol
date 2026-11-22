@@ -87,13 +87,16 @@ export const CA_LIFE = Object.freeze({
  *
  * @param {{pop:number[], active:number[]}} buf Populations-Ringpuffer
  * @param {number} gen aktuelle Generation
- * @param {{laeuft?:boolean, r2Modus?:string}} opts
- *   laeuft: ob die Simulation gerade laeuft. Bestimmt, ob der Trace als abgeschlossen
- *   gilt -- und damit, ob TRACE-Regeln endgueltig oder nur vorlaeufig urteilen duerfen.
+ * @param {{laeuft?:boolean, traceEnde?:boolean, r2Modus?:string}} opts
+ *   laeuft: ob die Simulation gerade laeuft (nur Auskunft, entscheidet NICHTS mehr).
+ *   traceEnde: nur ein ausdrueckliches Ende schliesst den Trace ab; erst dann duerfen
+ *   TRACE-Regeln endgueltig urteilen. Eine PAUSE ist kein Ende (Entscheid E2,
+ *   2026-11-22): nach "Weiter" laeuft derselbe Trace fort, ein FINAL-Urteil koennte
+ *   kippen -- das verbietet der Finalitaetsvertrag. Die App setzt traceEnde nie.
  */
 export function bewerteGolHex(buf, gen, opts = {}) {
   const trace = baueTrace(buf, gen);
-  const laeuft = opts.laeuft !== false;
+  const laeuft = opts.traceEnde !== true; // "Trace laeuft noch", nicht "Simulation laeuft"
 
   const config = {
     // R2: Populationswachstum, mit Rueckschritten. Ein Muster darf schrumpfen und
