@@ -114,7 +114,7 @@ describe("9-rule verdict dimensions", () => {
       applicability: APPLICABILITY.APPLICABLE,
       verdict: VERDICT.TRUE,
       finality: FINALITY.FINAL,
-      specVersion: "9R-v1.1.0",
+      specVersion: "9R-v1.2.0",
     });
   });
 });

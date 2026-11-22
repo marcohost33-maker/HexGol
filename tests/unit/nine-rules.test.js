@@ -502,3 +502,49 @@ describe("R4 Vergleichsraum (Profil STRUCTURAL)", () => {
     expect(statusOf(evaluateNineRules([S(1)], strukturell([4])), "R4")).toBe(STATUS.UNOBSERVED);
   });
 });
+
+// 9R-v1.2.0: "unbestimmt" ist nicht "nicht anwendbar". Ein Zustand kann eine
+// Groesse grundsaetzlich fuehren, sie im Einzelfall aber nicht bestimmen koennen
+// (z. B. ein Schwerpunkt auf einem Torus, ueber den die Population gleichmaessig
+// verteilt ist). Das ist UNKNOWN -- weder N/A (die Regel passt sehr wohl) noch
+// PASS/FAIL (es gibt keinen Messwert). Ohne die neuen Felder bleibt alles beim Alten.
+describe("Unbestimmte Groessen melden UNOBSERVED statt N/A (9R-v1.2.0)", () => {
+  it("R6: fehlende Position mit Grund -> UNOBSERVED, Grund in der Evidenz", () => {
+    const tr = [{ u: 1, qUnbekannt: "verteilt" }, { u: 1, qUnbekannt: "verteilt" }];
+    const rep = evaluateNineRules(tr, {});
+    expect(statusOf(rep, "R6")).toBe(STATUS.UNOBSERVED);
+    expect(rep.rules.find((r) => r.id === "R6").evidence).toMatch(/verteilt/);
+  });
+
+  it("R6: Grund nur am Vorgaenger reicht ebenfalls (erste gemessene Position)", () => {
+    const tr = [{ u: 1, qUnbekannt: "noch nicht erhoben" }, S(1, 2, 0)];
+    expect(statusOf(evaluateNineRules(tr, {}), "R6")).toBe(STATUS.UNOBSERVED);
+  });
+
+  it("R6: ohne Grund bleibt es N/A (Bestandsverhalten)", () => {
+    expect(statusOf(evaluateNineRules([{ u: 1 }, { u: 2 }], {}), "R6")).toBe(STATUS.NA);
+  });
+
+  it("R5: fehlende Orientierung mit Grund -> UNOBSERVED", () => {
+    const rep = evaluateNineRules([{ u: 1, dUnbekannt: "schraeg" }], {});
+    expect(statusOf(rep, "R5")).toBe(STATUS.UNOBSERVED);
+    expect(rep.rules.find((r) => r.id === "R5").evidence).toMatch(/schraeg/);
+  });
+
+  it("R5: N/A traegt einen mitgelieferten Grund in die Evidenz", () => {
+    const rep = evaluateNineRules([{ u: 1, dGrund: "Schwerpunkt unbewegt" }], {});
+    expect(statusOf(rep, "R5")).toBe(STATUS.NA);
+    expect(rep.rules.find((r) => r.id === "R5").evidence).toMatch(/unbewegt/);
+  });
+
+  it("R4: zu kleiner Vergleichsraum nennt den mitgelieferten Grund", () => {
+    const cfg = { population: () => [], discriminator: () => true };
+    const rep = evaluateNineRules([{ u: 1, vergleichsraumGrund: "kein Simulationsschritt" }], cfg);
+    expect(statusOf(rep, "R4")).toBe(STATUS.UNOBSERVED);
+    expect(rep.rules.find((r) => r.id === "R4").evidence).toMatch(/kein Simulationsschritt/);
+  });
+
+  it("Spec-Version ist angehoben", () => {
+    expect(SPEC_VERSION).toBe("9R-v1.2.0");
+  });
+});

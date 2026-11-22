@@ -358,7 +358,12 @@ export const RULES = Object.freeze([
       if (!Array.isArray(pop)) {
         return res(STATUS.CONFIG_ERROR, "keine population() konfiguriert -- Vergleichsraum unbestimmt");
       }
-      if (pop.length < 2) return res(STATUS.UNOBSERVED, `Vergleichsraum hat nur ${pop.length} Element(e)`);
+      if (pop.length < 2) {
+        // Optionaler Grund aus dem Zustand (9R-v1.2.0): WARUM der Vergleichsraum leer
+        // ist, sagt der Adapter -- das Modul selbst bleibt domaenenfrei.
+        const grund = typeof ctx.last?.vergleichsraumGrund === "string" ? `: ${ctx.last.vergleichsraumGrund}` : "";
+        return res(STATUS.UNOBSERVED, `Vergleichsraum hat nur ${pop.length} Element(e)${grund}`);
+      }
 
       if (modus === R4_MODUS.ACTIVE) {
         const disc = ctx.config.discriminator;
@@ -392,7 +397,16 @@ export const RULES = Object.freeze([
     claim: "Eine gueltige Orientierung ist definiert. Ein Tensor ist dafuer nicht noetig.",
     evaluate(ctx) {
       const s = ctx.last;
-      if (!s || s.d === undefined || s.d === null) return res(STATUS.NA, "keine Orientierung im Zustand gefuehrt");
+      if (!s || s.d === undefined || s.d === null) {
+        // 9R-v1.2.0: "fuehrt eine Orientierung, kann sie hier aber nicht bestimmen" ist
+        // UNKNOWN, nicht N/A -- die Regel passt, es fehlt nur der Messwert.
+        if (typeof s?.dUnbekannt === "string") {
+          return res(STATUS.UNOBSERVED, `Orientierung unbestimmt: ${s.dUnbekannt}`);
+        }
+        return res(STATUS.NA, typeof s?.dGrund === "string"
+          ? `keine Orientierung: ${s.dGrund}`
+          : "keine Orientierung im Zustand gefuehrt");
+      }
       return isValidDirection(s.d)
         ? res(STATUS.PASS, `Orientierung (${s.d.q},${s.d.r}) liegt in D6`)
         : res(STATUS.FAIL, `Orientierung (${s.d.q},${s.d.r}) liegt NICHT in D6`);
@@ -405,7 +419,12 @@ export const RULES = Object.freeze([
       if (ctx.trace.length < 2) return res(STATUS.NA, "kein Uebergang vorhanden (weniger als zwei Zustaende)");
       const a = ctx.trace[ctx.trace.length - 2];
       const b = ctx.last;
-      if (!a?.q || !b?.q) return res(STATUS.NA, "keine Position im Zustand gefuehrt");
+      if (!a?.q || !b?.q) {
+        // 9R-v1.2.0: Position grundsaetzlich gefuehrt, im Einzelfall unbestimmt -> UNKNOWN.
+        const grund = !b?.q ? b?.qUnbekannt : a?.qUnbekannt;
+        if (typeof grund === "string") return res(STATUS.UNOBSERVED, `Position unbestimmt: ${grund}`);
+        return res(STATUS.NA, "keine Position im Zustand gefuehrt");
+      }
       if (![a.q.q, a.q.r, b.q.q, b.q.r].every(isNum)) {
         return res(STATUS.CONFIG_ERROR, "Positionskoordinaten sind nicht endlich (NaN/Infinity)");
       }
@@ -525,4 +544,6 @@ export function evaluateNineRules(trace, config = {}, opts = {}) {
   };
 }
 
-export const SPEC_VERSION = "9R-v1.1.0";
+// 9R-v1.2.0 (2026-11-22): optionale Zustandsfelder qUnbekannt / dUnbekannt / dGrund /
+// vergleichsraumGrund. Ohne sie ist das Verhalten identisch zu 9R-v1.1.0.
+export const SPEC_VERSION = "9R-v1.2.0";
