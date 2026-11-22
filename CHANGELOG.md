@@ -9,15 +9,23 @@ und `docs/` (z.B. Re-Konvergenz 2026-06-04, v31→v31.0).
 
 ### Changed
 - **BEHAVIOUR CHANGE — Watzlawick A5 "sym" now implements the documented rule**
-  (owner decision E3, 2026-11-22, PR #228). With S = the largest same-coloured
+  (owner decision E3, 2026-11-22; branch `vero/engine-a5-int-fixes`). With S = the largest same-coloured
   neighbour group and K = the remaining live neighbours, survival additionally requires
   `K <= S` and birth requires `S > K`; the active rule's B/S thresholds apply to the
   total neighbour count. Up to v33.5.0, "sym" replaced the threshold count with the
   same-coloured count and had no K/S condition, so the documented rule existed nowhere
   in the code. Patterns and saved states that use A5 = sym evolve differently. "komp"
   is unchanged.
-- **Stats: A1 spontaneous births are now counted in `births`** (PR #228). The
-  simulation itself is unchanged.
+- **BEHAVIOUR CHANGE — INT rules (Callahan o/m/p) classify two neighbours by their
+  real angle.** The classifier read the neighbour-table index as a position around the
+  cell; the table order is up-left, up-right, left, right, down-left, down-right, so e.g.
+  left+right (180 deg) counted as "o". Additionally an A4 ghost neighbour now carries its
+  direction: with exactly two neighbours, one of them a ghost, every INT condition used to
+  block the cell. INT patterns evolve differently.
+- **Stats: A1 spontaneous births are now counted in `births`** (found by Codex on
+  PR #228). The simulation itself is unchanged.
+- The planar golden contracts pin the engine blob; their vector bytes regenerate
+  identically, only the pinned blob differs (open owner decision, see the PR).
 - **License: MIT -> Apache-2.0** (2026-10-16, owner decision when the repository went
   public). `LICENSE` is the unmodified apache.org text (SHA-256 cfc7749b96f63bd3...),
   `NOTICE` names the copyright holder (Coworker Research / Coworkerz) and records that
