@@ -581,7 +581,8 @@ function stepLife(g) {
       if (nc[i] !== 0 || ng[i] !== 0 || col[i] !== 0) continue;
       const base = i * 6; let silent = true;
       for (let k = 0; k < 6; k++) { const j = NL[base + k]; if (j < 0) continue; if (col[j] !== 0 || (a4 && gh[j])) { silent = false; break; } }
-      if (silent && hash2(i, tick) < 0.012) { nc[i] = PRIMARY[Math.floor(hash2(i + 7, tick * 3 + 1) * 3)]; na[i] = 1; }
+      // Spontangeburt zaehlt als Geburt (Codex-Befund PR #228: fehlte in `births`).
+      if (silent && hash2(i, tick) < 0.012) { nc[i] = PRIMARY[Math.floor(hash2(i + 7, tick * 3 + 1) * 3)]; na[i] = 1; births++; }
     }
   }
   return { births, deaths };
