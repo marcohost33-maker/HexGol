@@ -83,10 +83,12 @@ what each rule measures:
 - **R4 Unterscheidet** — did the last step treat cells with the same prior state
   differently (some survive and some die, or some empty cells are born and
   others not)? Derived from births/deaths/domain size per sample.
-- **R5 Richtung / R6 Bewegt** — the centroid of the live cells, a derived
-  summary quantity. Defined on edge topology and, on the rectangular torus, only
-  for a localized population; elsewhere the rules report *offen* (UNKNOWN), and
-  R5 only reports a direction for a displacement exactly along a hex axis.
+- **R5 Richtung / R6 Bewegt** — the (fractional) centroid of the live cells, a
+  derived summary quantity. Defined on edge topology; on the rectangular torus
+  and on circle + torus (antipodal rim, RP2) only for a localized population.
+  Elsewhere the rules report *offen* (UNKNOWN). R5 reports a direction only for a
+  displacement along a hex axis with a unique shortest path that does not cross
+  the RP2 seam (RP2 is non-orientable).
 
 Without measured data a rule reports *offen* / *n. a.*, never pass/fail. In the
 OffscreenCanvas worker mode the main thread records no samples, so the trace

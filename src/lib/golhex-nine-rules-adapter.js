@@ -47,7 +47,7 @@
 // ein Proxy fuer Aktivitaet, keine Aussage ueber Leben -- und traegt deshalb den
 // Claim-Tier MODEL/PROXY.
 
-import { evaluateNineRules, R2_MODUS, R4_MODUS, D6, hexDistance } from "./nine-rules.js";
+import { evaluateNineRules, R2_MODUS, R4_MODUS, D6 } from "./nine-rules.js";
 
 // Abgeschaltete Regeln. Seit 2026-11-22 leer: R4/R5/R6 werden auf erhobenen Groessen
 // ausgewertet (siehe Kopf). Export bleibt fuer bestehende Aufrufer erhalten.
@@ -67,52 +67,61 @@ export const NICHT_ANWENDBAR = Object.freeze([]);
 
 /** Mindest-Resultantenlaenge je Achse fuer einen Torus-Schwerpunkt (0..1). */
 export const RBAR_MIN = 0.5;
+/** RP2 (Kreis + Torus): maximale Streuung (RMS) um den Schwerpunkt, relativ zum Kreisradius. */
+export const RP2_STREU_MAX = 0.5;
+/** Toleranz in Gitterschritten fuer "steht still" / "liegt auf einer Hex-Achse" / "gleich kurz". */
+export const ACHS_TOL = 1e-9;
 
 const istGanz = (x) => Number.isInteger(x);
 const mod = (a, m) => ((a % m) + m) % m;
+const S3 = Math.sqrt(3);
 
-/** Kubische Rundung fraktionaler axialer Koordinaten auf die naechste Hexzelle. */
-function axialRunden(qf, rf) {
-  const sf = -qf - rf;
-  let q = Math.round(qf), r = Math.round(rf);
-  const s = Math.round(sf);
-  const dq = Math.abs(q - qf), dr = Math.abs(r - rf), ds = Math.abs(s - sf);
-  if (dq > dr && dq > ds) q = -r - s;
-  else if (dr > ds) r = -q - s;
-  return { q: q + 0, r: r + 0 }; // +0 normalisiert -0
+// Koordinaten. Spaltenkoordinate x = Spalte + 0.5 auf ungeraden Reihen, y = Reihe
+// (beide in Gitterschritten); axial q = x - y/2, r = y. Euklidische Welt wie in
+// sim-engine buildNeighbors (Hexradius 1): X = x*sqrt(3), Y = y*1.5.
+// Positionen bleiben FRAKTIONAL: erst runden und dann vergleichen machte eine
+// schraege Verschiebung zu einer D6-Richtung (Codex-Befund PR #228).
+const axialAusXY = (x, y) => ({ q: x - y / 2, r: y });
+const xyAusAxial = (p) => ({ x: p.q + p.r / 2, y: p.r });
+
+/** RP2-Bild eines Weltvektors v (relativ zur Kreismitte) jenseits der Antipoden-Naht. */
+function rp2Bild(vx, vy, rho) {
+  const l = Math.hypot(vx, vy);
+  if (!(l > 0)) return [vx, vy];
+  const f = -(2 * rho - l) / l;
+  return [vx * f, vy * f];
 }
 
-const axialAusOffset = (row, col) => ({ q: col - (row - (row & 1)) / 2, r: row });
-const offsetAusAxial = (p) => ({ row: p.r, col: p.q + (p.r - (p.r & 1)) / 2 });
-
 /**
- * Schwerpunkt der lebenden Zellen eines odd-r-Gitters.
+ * Schwerpunkt der lebenden Zellen eines odd-r-Gitters (fraktional, axial).
  *
  * @param {ArrayLike<number>} col Zellfarben (0 = tot), Laenge R*C
  * @param {number} R Reihen
  * @param {number} C Spalten
- * @param {{topologie?: string}} opts "edge" | "torus" (nur Rechteck) | sonst unbestimmt
- * @returns {{pos?:{q:number,r:number}, periode?:{R:number,C:number}|null, grund?:string}}
+ * @param {{topologie?: string, mask?: ArrayLike<number>}} opts
+ *   topologie: "edge" | "torus" (Rechteck) | "rp2" (Kreis + Torus, braucht mask) | sonst unbestimmt
+ * @returns {{pos?:{q:number,r:number}, geom?:object|null, grund?:string}}
  */
 export function schwerpunkt(col, R, C, opts = {}) {
   const topo = opts.topologie || "edge";
   if (!col || !istGanz(R) || !istGanz(C) || R < 1 || C < 1 || col.length < R * C) {
     return { grund: "keine Gitterdaten" };
   }
-  if (topo !== "edge" && topo !== "torus") {
+  if (topo !== "edge" && topo !== "torus" && topo !== "rp2") {
     return { grund: `Topologie '${topo}' hat keinen eindeutigen Schwerpunkt` };
   }
   if (topo === "edge") {
-    let n = 0, sq = 0, sr = 0;
+    let n = 0, sx = 0, sy = 0;
     for (let row = 0; row < R; row++) {
-      const versatz = (row - (row & 1)) / 2;
+      const halb = (row & 1) ? 0.5 : 0;
       for (let c = 0; c < C; c++) {
-        if (col[row * C + c] !== 0) { n++; sq += c - versatz; sr += row; }
+        if (col[row * C + c] !== 0) { n++; sx += c + halb; sy += row; }
       }
     }
     if (n === 0) return { grund: "keine lebende Zelle" };
-    return { pos: axialRunden(sq / n, sr / n), periode: null };
+    return { pos: axialAusXY(sx / n, sy / n), geom: null };
   }
+  if (topo === "rp2") return schwerpunktRP2(col, R, C, opts.mask);
   // Torus (Rechteck, periodisch in Reihe und Spalte): Kreismittel je Achse.
   // Weltkoordinate x = Spalte + 0.5 auf ungeraden Reihen (Periode C), y = Reihe (R).
   const proReihe = new Float64Array(R);
@@ -143,12 +152,76 @@ export function schwerpunkt(col, R, C, opts = {}) {
   }
   const yq = mod((Math.atan2(ys, yc) * R) / (2 * Math.PI), R);
   const xq = mod((Math.atan2(xs, xc) * C) / (2 * Math.PI), C);
-  const a = axialRunden(xq - yq / 2, yq);
-  // Auf die kanonische Zelle im Grundgebiet normieren.
-  const o = offsetAusAxial(a);
-  const row = mod(o.row, R), c = mod(o.col, C);
-  const pos = axialAusOffset(row, c);
-  return { pos: { q: pos.q + 0, r: pos.r + 0 }, periode: { R, C } };
+  return { pos: axialAusXY(xq, yq), geom: { art: "torus", R, C } };
+}
+
+/**
+ * RP2: Kreis-Rahmen, dessen Rand antipodal identifiziert ist (Engine: Randzelle ->
+ * Punktspiegelung am Zentrum). Eine Zelle nahe dem Rand hat ein zweites Bild jenseits
+ * der Naht: Spiegelung am Zentrum, dann radial am Kreis gespiegelt. Der Schwerpunkt
+ * ist das Mittel, bei dem jede Zelle das Bild nimmt, das ihm naeher liegt (wenige
+ * Fixpunkt-Iterationen); liegt es ausserhalb des Kreises, wird es zurueckgebildet.
+ * Kreisradius aus der Maske: groesster Zentrumsabstand einer Domaenenzelle + sqrt(3)/2
+ * (halber Nachbarabstand -- Naeherung an die Naht der Engine).
+ */
+function schwerpunktRP2(col, R, C, mask) {
+  if (!mask || mask.length < R * C) return { grund: "RP2 ohne Domaenen-Maske: Kreisrand unbekannt" };
+  const cr = (R - 1) / 2, cc = (C - 1) / 2;
+  const cx = cc + ((cr & 1) ? 0.5 : 0), cy = cr;          // wie buildNeighbors (inkl. &1 auf cr)
+  let maxD = 0;
+  const vs = [];
+  for (let row = 0; row < R; row++) {
+    const halb = (row & 1) ? 0.5 : 0;
+    for (let c = 0; c < C; c++) {
+      const i = row * C + c;
+      if (!mask[i]) continue;
+      const vx = (c + halb - cx) * S3, vy = (row - cy) * 1.5;
+      const d = Math.hypot(vx, vy);
+      if (d > maxD) maxD = d;
+      if (col[i] !== 0) vs.push(vx, vy);
+    }
+  }
+  const n = vs.length / 2;
+  if (n === 0) return { grund: "keine lebende Zelle" };
+  const rho = maxD + S3 / 2;
+  // Fixpunkt-Iteration ab mehreren Startpunkten (Mittel + bis zu 8 Zellen): ab dem
+  // Mittel allein bliebe ein Haufen ueber der Naht in der Kreismitte haengen.
+  const iteriere = (mx, my) => {
+    let streu = Infinity;
+    for (let it = 0; it < 8; it++) {
+      let sx = 0, sy = 0, s2 = 0;
+      const reps = [];
+      for (let k = 0; k < vs.length; k += 2) {
+        const [bx, by] = rp2Bild(vs[k], vs[k + 1], rho);
+        const direkt = Math.hypot(vs[k] - mx, vs[k + 1] - my), bild = Math.hypot(bx - mx, by - my);
+        const [px, py] = bild < direkt ? [bx, by] : [vs[k], vs[k + 1]];
+        reps.push(px, py); sx += px; sy += py;
+      }
+      const nx = sx / n, ny = sy / n;
+      for (let k = 0; k < reps.length; k += 2) s2 += (reps[k] - nx) ** 2 + (reps[k + 1] - ny) ** 2;
+      streu = Math.sqrt(s2 / n);
+      const fertig = nx === mx && ny === my;
+      mx = nx; my = ny;
+      if (fertig) break;
+    }
+    return { mx, my, streu };
+  };
+  let sx0 = 0, sy0 = 0;
+  for (let k = 0; k < vs.length; k += 2) { sx0 += vs[k]; sy0 += vs[k + 1]; }
+  let best = iteriere(sx0 / n, sy0 / n);
+  const schritt = Math.max(1, Math.floor(n / 8));
+  for (let z = 0; z < n; z += schritt) {
+    const v = iteriere(vs[2 * z], vs[2 * z + 1]);
+    if (v.streu < best.streu) best = v;
+  }
+  let { mx, my } = best;
+  const { streu } = best;
+  // NaN-fest: nur ein WAHRER Vergleich laesst einen Schwerpunkt zu.
+  if (!(streu <= RP2_STREU_MAX * rho)) {
+    return { grund: `Population ueber die Scheibe verteilt (Streuung ${(streu / rho).toFixed(2)} rho > ${RP2_STREU_MAX})` };
+  }
+  if (Math.hypot(mx, my) > rho) [mx, my] = rp2Bild(mx, my, rho);
+  return { pos: axialAusXY(cx + mx / S3, cy + my / 1.5), geom: { art: "rp2", cx, cy, rho } };
 }
 
 /**
@@ -173,26 +246,53 @@ export function uebergangsKlassen(pop, births, deaths, zellen) {
   };
 }
 
-/** Kuerzeste axiale Verschiebung a->b, auf dem Torus ueber die 9 Gitterbilder. */
-function verschiebung(a, b, periode) {
-  if (!periode) return { q: b.q - a.q, r: b.r - a.r };
-  const ob = offsetAusAxial(b);
-  let best = null;
-  for (const dr of [-periode.R, 0, periode.R]) {
-    for (const dc of [-periode.C, 0, periode.C]) {
-      const bild = axialAusOffset(ob.row + dr, ob.col + dc);
-      const d = hexDistance(a, bild);
-      if (!best || d < best.d) best = { d, q: bild.q - a.q, r: bild.r - a.r };
+const weltAbstand = (a, b) => {
+  const pa = xyAusAxial(a), pb = xyAusAxial(b);
+  return Math.hypot((pb.x - pa.x) * S3, (pb.y - pa.y) * 1.5);
+};
+
+/**
+ * Kuerzeste axiale Verschiebung a->b.
+ * Torus: ueber die 9 Gitterbilder; RP2: direkt oder ueber die Antipoden-Naht.
+ * Mehrere gleich kurze, VERSCHIEDENE Wege -> keine Richtung (Codex-Befund PR #228).
+ * @returns {{q:number, r:number} | {grund:string}}
+ */
+function verschiebung(a, b, geom) {
+  if (!geom) return { q: b.q - a.q, r: b.r - a.r };
+  const kandidaten = [];
+  if (geom.art === "torus") {
+    const pb = xyAusAxial(b);
+    for (const dy of [-geom.R, 0, geom.R]) {
+      for (const dx of [-geom.C, 0, geom.C]) kandidaten.push({ p: axialAusXY(pb.x + dx, pb.y + dy), naht: false });
     }
+  } else if (geom.art === "rp2") {
+    const pb = xyAusAxial(b);
+    const vx = (pb.x - geom.cx) * S3, vy = (pb.y - geom.cy) * 1.5;
+    const [bx, by] = rp2Bild(vx, vy, geom.rho);
+    kandidaten.push({ p: b, naht: false });
+    kandidaten.push({ p: axialAusXY(geom.cx + bx / S3, geom.cy + by / 1.5), naht: true });
+  } else {
+    return { grund: `unbekannte Geometrie '${geom.art}'` };
   }
-  return { q: best.q, r: best.r };
+  for (const k of kandidaten) k.d = weltAbstand(a, k.p);
+  const min = Math.min(...kandidaten.map((k) => k.d));
+  if (!Number.isFinite(min)) return { grund: "Abstand nicht bestimmbar" };
+  const kurz = kandidaten.filter((k) => k.d - min <= ACHS_TOL * (1 + min));
+  const erster = kurz[0];
+  const verschieden = kurz.some((k) => weltAbstand(erster.p, k.p) > ACHS_TOL * (1 + min));
+  if (verschieden && min > ACHS_TOL) return { grund: "mehrdeutig (gleich kurze Wege in verschiedene Richtungen)" };
+  if (erster.naht && min > ACHS_TOL) {
+    return { grund: "Verschiebung ueber die Antipoden-Naht: auf RP2 nicht orientierbar" };
+  }
+  return { q: erster.p.q - a.q, r: erster.p.r - a.r };
 }
 
-/** D6-Einheitsrichtung, falls v ein positives Vielfaches einer Hex-Achse ist. */
+/** D6-Einheitsrichtung, falls v (bis auf ACHS_TOL) ein positives Vielfaches einer Hex-Achse ist. */
 function achsRichtung(v) {
   const k = Math.max(Math.abs(v.q), Math.abs(v.r), Math.abs(v.q + v.r));
-  if (k === 0) return null;
-  return D6.find((d) => d.q * k === v.q && d.r * k === v.r) || null;
+  if (!(k > ACHS_TOL)) return null;
+  const tol = ACHS_TOL * (1 + k);
+  return D6.find((d) => Math.abs(d.q * k - v.q) <= tol && Math.abs(d.r * k - v.r) <= tol) || null;
 }
 
 /**
@@ -224,7 +324,7 @@ export function baueTrace(buf, gen = 0) {
     // R6: Schwerpunkt, sonst unbestimmt mit Grund.
     if (x && x.pos && Number.isFinite(x.pos.q) && Number.isFinite(x.pos.r)) {
       s.q = { q: x.pos.q, r: x.pos.r };
-      s.periode = x.periode ?? null;
+      s.geom = x.geom ?? null;
     } else {
       s.qUnbekannt = x?.posGrund || "keine Ortsdaten erhoben";
     }
@@ -236,11 +336,13 @@ export function baueTrace(buf, gen = 0) {
     const v = i > 0 ? trace[i - 1] : null;
     if (!v) { s.dUnbekannt = "noch keine Verschiebung beobachtet"; continue; }
     if (!s.q || !v.q) { s.dUnbekannt = s.qUnbekannt || v.qUnbekannt; continue; }
-    const vs = verschiebung(v.q, s.q, s.periode);
-    if (vs.q === 0 && vs.r === 0) { s.dGrund = "Schwerpunkt unbewegt"; continue; }
+    const vs = verschiebung(v.q, s.q, s.geom);
+    if (typeof vs.grund === "string") { s.dUnbekannt = vs.grund; continue; }
+    const laenge = Math.max(Math.abs(vs.q), Math.abs(vs.r), Math.abs(vs.q + vs.r));
+    if (laenge <= ACHS_TOL) { s.dGrund = "Schwerpunkt unbewegt"; continue; }
     const d = achsRichtung(vs);
     if (d) s.d = { q: d.q, r: d.r };
-    else s.dUnbekannt = `Verschiebung (${vs.q},${vs.r}) liegt auf keiner Hex-Achse`;
+    else s.dUnbekannt = `Verschiebung (${+vs.q.toFixed(3)},${+vs.r.toFixed(3)}) liegt auf keiner Hex-Achse`;
   }
   return trace;
 }

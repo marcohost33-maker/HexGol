@@ -698,14 +698,14 @@ export default function GolHex() {
   // Laeuft nur, wenn das Panel offen UND das Profil gewaehlt ist: ein geschlossenes
   // Panel darf nichts kosten.
   // Kontext fuer die Trace-Erhebung in pushStats (Ref statt State: pushStats ist ein
-  // stabiler Callback). Torus ist nur auf dem Rechteck periodisch; Kreis + Torus ist
-  // antipodal (RP2), andere Rahmen + Torus ebenfalls kein einfacher Torus -> der
-  // Adapter meldet dort "unbestimmt" statt einen Schwerpunkt zu raten.
+  // stabiler Callback). Topologie wie sim-engine buildNeighbors: Torus wickelt nur das
+  // Rechteck periodisch, Kreis + Torus identifiziert den Rand antipodal (RP2), alle
+  // anderen Rahmen fallen mit Torus auf den Rand (edge) zurueck.
   const nineCtxRef = useRef({ aktiv: false, topologie: "edge" });
   useEffect(() => {
     nineCtxRef.current = {
       aktiv: semantikProfil === "neunregeln",
-      topologie: !torusOn ? "edge" : (frameShape === "box" ? "torus" : `torus+${frameShape}`),
+      topologie: !torusOn ? "edge" : (frameShape === "box" ? "torus" : frameShape === "circle" ? "rp2" : "edge"),
     };
   }, [semantikProfil, torusOn, frameShape]);
   const nineRulesReport = useMemo(() => {
@@ -1101,8 +1101,8 @@ export default function GolHex() {
     const nb = neighRef.current;
     const extra: Record<string, unknown> = { schritt, births, deaths, zellen: (nb && nb.inCount) || N2 };
     if (nctx.aktiv) {
-      const sp = schwerpunkt(colorRef.current, gridRef.current.rows, gridRef.current.cols, { topologie: nctx.topologie });
-      if (sp.pos) { extra.pos = sp.pos; extra.periode = sp.periode; } else extra.posGrund = sp.grund;
+      const sp = schwerpunkt(colorRef.current, gridRef.current.rows, gridRef.current.cols, { topologie: nctx.topologie, mask: nb && nb.mask });
+      if (sp.pos) { extra.pos = sp.pos; extra.geom = sp.geom; } else extra.posGrund = sp.grund;
     } else extra.posGrund = "9-Regel-Profil nicht aktiv";
     pushSample(popGraphRef.current, c.pop, births + deaths, extra);
     bumpPopGraph();
@@ -3825,7 +3825,7 @@ export default function GolHex() {
                 veraendert nichts. <b>Unterscheidet</b>: behandelte der letzte Schritt Zellen
                 gleichen Vorzustands verschieden? <b>Richtung</b>/<b>Bewegung</b> beziehen sich
                 auf den <b>Schwerpunkt</b> der lebenden Zellen — eine abgeleitete Groesse; wo er
-                nicht eindeutig ist (verteilt auf dem Torus, Kreis-Torus), steht <b>offen</b>.
+                nicht eindeutig ist (gleichmaessig verteilt, Weg ueber die Kreis-Naht), steht <b>offen</b>.
               </div>
               {nineRulesReport.rules.map((r) => {
                 const farbe =

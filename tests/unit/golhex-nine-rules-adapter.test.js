@@ -10,6 +10,7 @@ import {
   baueTrace, bewerteGolHex, CA_LIFE, NICHT_ANWENDBAR, schwerpunkt, uebergangsKlassen, RBAR_MIN,
 } from "../../src/lib/golhex-nine-rules-adapter.js";
 import { STATUS } from "../../src/lib/nine-rules.js";
+import { buildNeighbors } from "../../src/lib/sim-engine.js";
 
 const buf = (pop, active) => ({ pop, active: active ?? pop.map(() => 1) });
 const statusOf = (rep, id) => rep.rules.find((r) => r.id === id)?.status;
@@ -85,8 +86,18 @@ describe("Schwerpunkt der lebenden Zellen (Grundlage fuer R5/R6)", () => {
     // Spalten 9, 0, 1 in Reihe 4 eines 10x10-Torus. Das arithmetische Mittel waere
     // Spalte 3.3 (Gittermitte, falsch); das Kreismittel ist Spalte 0.
     const s = schwerpunkt(gitter(10, 10, [[4, 9], [4, 0], [4, 1]]), 10, 10, { topologie: "torus" });
-    expect(s.pos).toEqual({ q: -2, r: 4 }); // offset (4,0) -> q = 0 - 2
-    expect(s.periode).toEqual({ R: 10, C: 10 });
+    // Ungerundet (Codex P2, PR #228): Spaltenkoordinate x = q + r/2 liegt kreisfoermig bei 0.
+    const x = s.pos.q + s.pos.r / 2;
+    expect(Math.min(Math.abs(x), Math.abs(10 - x))).toBeLessThan(1e-9);
+    expect(s.pos.r).toBeCloseTo(4, 9);
+    expect(s.geom).toEqual({ art: "torus", R: 10, C: 10 });
+  });
+
+  it("Schwerpunkt bleibt FRAKTIONAL (kein Runden auf eine Zelle)", () => {
+    // (2,2),(2,3),(2,4) -> axial q 1,2,3 -> Mittel q=2 ; mit (1,1) statt (2,4): q 1,2,1 / r 2,2,1
+    const s = schwerpunkt(gitter(6, 6, [[2, 2], [2, 3], [1, 1]]), 6, 6, { topologie: "edge" });
+    expect(s.pos.q).toBeCloseTo(4 / 3, 12);
+    expect(s.pos.r).toBeCloseTo(5 / 3, 12);
   });
 
   it("Torus: ueber eine Achse gleichverteilte Population hat KEINEN Schwerpunkt", () => {
@@ -97,10 +108,63 @@ describe("Schwerpunkt der lebenden Zellen (Grundlage fuer R5/R6)", () => {
     expect(RBAR_MIN).toBeGreaterThan(0);
   });
 
-  it("andere Topologien (z. B. Kreis + Torus = RP2) bleiben unbestimmt", () => {
-    const s = schwerpunkt(gitter(6, 6, [[2, 2]]), 6, 6, { topologie: "rp2" });
+  it("unbekannte Topologien bleiben unbestimmt", () => {
+    const s = schwerpunkt(gitter(6, 6, [[2, 2]]), 6, 6, { topologie: "kugel" });
     expect(s.pos).toBeUndefined();
-    expect(s.grund).toMatch(/rp2/);
+    expect(s.grund).toMatch(/kugel/);
+  });
+});
+
+// E1 (c), Marco 2026-11-22: Kreis + Torus ist in der Engine eine antipodale
+// Identifikation des Randes (RP2, sim-engine buildNeighbors -> antipode()).
+describe("RP2 (Kreis + Torus): Schwerpunkt ueber die Antipoden-Naht", () => {
+  const R = 30, C = 30;
+  const nb = buildNeighbors(R, C, "circle");
+  const S3 = Math.sqrt(3);
+  const cr = (R - 1) / 2, cc = (C - 1) / 2;
+  const zx = (cc + ((cr & 1) ? 0.5 : 0)) * S3, zy = cr * 1.5;           // Kreismitte (Welt)
+  const welt = (row, c) => [(c + ((row & 1) ? 0.5 : 0)) * S3, row * 1.5];
+  const weltAusPos = (p) => [(p.q + p.r / 2) * S3, p.r * 1.5];
+  // Randzelle in Reihe 14 ganz rechts + ihre antipodale Zelle (aus der ENGINE).
+  const reihe = 14;
+  let rechts = -1;
+  for (let c = C - 1; c >= 0; c--) if (nb.mask[reihe * C + c]) { rechts = c; break; }
+  const i = reihe * C + rechts;
+  let anti = -1;
+  for (let k = 0; k < 6; k++) { const j = nb.torus[i * 6 + k]; if (j >= 0 && nb.edge[i * 6 + k] < 0) anti = j; }
+
+  it("Vorbedingung: die Engine verbindet die Randzelle mit einer Zelle am gegenueberliegenden Rand", () => {
+    expect(anti).toBeGreaterThanOrEqual(0);
+    const [ax] = welt((anti / C) | 0, anti % C);
+    expect(ax).toBeLessThan(zx); // links der Mitte
+  });
+
+  it("Haufen ueber die Naht liegt AM Rand, nicht in der Kreismitte", () => {
+    const col = new Uint8Array(R * C);
+    col[i] = 1; col[anti] = 1;
+    const s = schwerpunkt(col, R, C, { topologie: "rp2", mask: nb.mask });
+    expect(s.geom.art).toBe("rp2");
+    const [x, y] = weltAusPos(s.pos);
+    // Das arithmetische Mittel laege bei ~0 Abstand zur Mitte; RP2 legt es an den Rand.
+    expect(Math.hypot(x - zx, y - zy)).toBeGreaterThan(0.8 * s.geom.rho);
+  });
+
+  it("Haufen im Inneren: identisch zum arithmetischen Mittel", () => {
+    const col = gitter(R, C, [[14, 14], [14, 15], [15, 14]]);
+    const a = schwerpunkt(col, R, C, { topologie: "rp2", mask: nb.mask });
+    const e = schwerpunkt(col, R, C, { topologie: "edge" });
+    expect(a.pos.q).toBeCloseTo(e.pos.q, 9);
+    expect(a.pos.r).toBeCloseTo(e.pos.r, 9);
+  });
+
+  it("ueber die ganze Scheibe verteilte Population hat keinen Schwerpunkt", () => {
+    const s = schwerpunkt(nb.mask, R, C, { topologie: "rp2", mask: nb.mask });
+    expect(s.pos).toBeUndefined();
+    expect(s.grund).toMatch(/verteilt/);
+  });
+
+  it("ohne Maske ist der Kreisrand unbekannt -> unbestimmt", () => {
+    expect(schwerpunkt(gitter(R, C, [[14, 14]]), R, C, { topologie: "rp2" }).grund).toMatch(/Maske/);
   });
 });
 
@@ -135,11 +199,51 @@ describe("R6 Bewegt / R5 Richtung auf dem Schwerpunkt", () => {
   });
 
   it("Torus: Schritt ueber die Naht ist EIN Schritt (Minimalbild), nicht ein Sprung quer", () => {
-    const periode = { R: 10, C: 10 };
+    const geom = { art: "torus", R: 10, C: 10 };
     // offset (4,9) -> q = 9-2 = 7 ; offset (4,0) -> q = -2. Roh-Differenz -9, kuerzeste +1.
-    const rep = bewerteGolHex(bufX([5, 5], [pos(7, 4, { periode }), pos(-2, 4, { periode })]), 1);
+    const rep = bewerteGolHex(bufX([5, 5], [pos(7, 4, { geom }), pos(-2, 4, { geom })]), 1);
     expect(statusOf(rep, "R5")).toBe(STATUS.PASS);
     expect(ruleOf(rep, "R5").evidence).toMatch(/\(1,0\)/);
+  });
+
+  // Codex P2 (PR #228): gleich kurze Wege in beide Richtungen -> keine Richtung.
+  it("Torus: halbe Periode ist mehrdeutig -> R5 UNKNOWN statt willkuerlicher Richtung", () => {
+    const geom = { art: "torus", R: 10, C: 10 };
+    const rep = bewerteGolHex(bufX([5, 5], [pos(0, 0, { geom }), pos(5, 0, { geom })]), 1);
+    expect(statusOf(rep, "R5")).toBe(STATUS.UNOBSERVED);
+    expect(ruleOf(rep, "R5").evidence).toMatch(/mehrdeutig/);
+  });
+
+  // Codex P2 (PR #228): erst runden, dann vergleichen machte eine schraege echte
+  // Verschiebung (-2/3,-1/3) zu einer D6-Richtung (-1,0).
+  it("echte Verschiebung (-2/3,-1/3) aus Zellen bleibt schraeg -> R5 UNKNOWN", () => {
+    const sp = (z) => schwerpunkt(gitter(6, 6, z), 6, 6, { topologie: "edge" });
+    const a = sp([[2, 2], [2, 3], [2, 4]]), b = sp([[2, 2], [2, 3], [1, 1]]);
+    const rep = bewerteGolHex(bufX([3, 3], [pos(a.pos.q, a.pos.r), pos(b.pos.q, b.pos.r)]), 1);
+    expect(statusOf(rep, "R6")).toBe(STATUS.PASS);
+    expect(statusOf(rep, "R5")).toBe(STATUS.UNOBSERVED);
+  });
+
+  it("kleine echte Verschiebung (unter einer Zelle) zaehlt als Bewegung", () => {
+    const rep = bewerteGolHex(bufX([5, 5], [pos(0, 0), pos(0.25, 0)]), 1);
+    expect(statusOf(rep, "R6")).toBe(STATUS.PASS);
+    expect(statusOf(rep, "R5")).toBe(STATUS.PASS);
+  });
+
+  it("RP2: Verschiebung ueber die Antipoden-Naht ist nicht orientierbar -> R5 UNKNOWN", () => {
+    const S3 = Math.sqrt(3);
+    const geom = { art: "rp2", cx: 0, cy: 0, rho: 10 };
+    // Welt X=+9 und X=-9 auf der Mittelachse: direkt 18 auseinander, ueber die Naht 2.
+    const rep = bewerteGolHex(bufX([5, 5], [pos(9 / S3, 0, { geom }), pos(-9 / S3, 0, { geom })]), 1);
+    expect(statusOf(rep, "R6")).toBe(STATUS.PASS);
+    expect(statusOf(rep, "R5")).toBe(STATUS.UNOBSERVED);
+    expect(ruleOf(rep, "R5").evidence).toMatch(/nicht orientierbar/);
+  });
+
+  it("RP2: Verschiebung im Inneren behaelt ihre Richtung", () => {
+    const geom = { art: "rp2", cx: 0, cy: 0, rho: 10 };
+    const rep = bewerteGolHex(bufX([5, 5], [pos(0, 0, { geom }), pos(1, 0, { geom })]), 1);
+    expect(statusOf(rep, "R5")).toBe(STATUS.PASS);
   });
 });
 
