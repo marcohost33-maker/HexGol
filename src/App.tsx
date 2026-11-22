@@ -16,8 +16,9 @@ import {
 import Splash from "./lib/Splash.jsx"; // v33 Branding: einmaliger Intro-/Splash-Screen (additiv)
 import ConwayIntro, { introSeen } from "./lib/ConwayIntro.jsx"; // Bildungs-Intro (einmalig, nach Splash; ⓘ re-open)
 import { renderRaster } from "./lib/raster-render.js"; // geteilter Raster-Pfad (Worker + Main)
-import { bewerteGolHex, schwerpunkt } from "./lib/golhex-nine-rules-adapter.js"; // 9-Regel-Semantikprofil (optional, neben den Axiomen)
-import { STATUS } from "./lib/nine-rules.js";
+// 9-Regel-Semantikprofil (optional, neben den Axiomen): wird erst NACHGELADEN, wenn das
+// Profil gewaehlt ist (dynamischer Import, eigener Chunk) -- ein nicht genutztes
+// Pruefraster kostet so weder Rechenzeit noch Bundle-Budget.
 import { FONT_SANS, FONT_MONO } from "./lib/typography.js"; // #163: System-Schriftstapel, eine Quelle, kein Fremd-Download
 import { supportsOffscreenWorker } from "./lib/worker-support.js"; // Feature-Detection (fail-closed)
 import { shouldStartPan, decideCloseAction, usesRasterPath, wheelSelectionEffect, WHEEL_ERASE, clampWheelCenter } from "./lib/ui-gestures.js"; // pure UI-Entscheider (Pan-Hit-Test + Schliess-Dispatch + HEX-Render-Gate + Farbrad-Wahl + Rad-Clamp)
@@ -702,19 +703,30 @@ export default function GolHex() {
   // Rechteck periodisch, Kreis + Torus identifiziert den Rand antipodal (RP2), alle
   // anderen Rahmen fallen mit Torus auf den Rand (edge) zurueck.
   const nineCtxRef = useRef({ aktiv: false, topologie: "edge" });
+  // Nachgeladenes Adapter-Modul (null, bis das Profil einmal gewaehlt wurde).
+  const [nineMod, setNineMod] = useState<null | typeof import("./lib/golhex-nine-rules-adapter.js")>(null);
+  const nineModRef = useRef<null | typeof import("./lib/golhex-nine-rules-adapter.js")>(null);
   useEffect(() => {
     nineCtxRef.current = {
       aktiv: semantikProfil === "neunregeln",
       topologie: !torusOn ? "edge" : (frameShape === "box" ? "torus" : frameShape === "circle" ? "rp2" : "edge"),
     };
+    // Kein Abbruch-Flag: Ref UND State werden immer gesetzt. Ein Flag, das beim
+    // Topologiewechsel waehrend des Ladens greift, liesse den State fuer immer null,
+    // waehrend der Ref schon gesetzt ist und kein zweiter Import mehr kommt.
+    if (semantikProfil === "neunregeln" && !nineModRef.current) {
+      import("./lib/golhex-nine-rules-adapter.js")
+        .then((m) => { nineModRef.current = m; setNineMod(m); })
+        .catch(() => { /* offline ohne Chunk: Panel bleibt leer, Simulation unberuehrt */ });
+    }
   }, [semantikProfil, torusOn, frameShape]);
   const nineRulesReport = useMemo(() => {
-    if (!showNineRules || semantikProfil !== "neunregeln") return { rules: [], specVersion: "" };
-    return bewerteGolHex(popGraphRef.current, gen, { laeuft: running });
+    if (!showNineRules || semantikProfil !== "neunregeln" || !nineMod) return { rules: [], specVersion: "", STATUS: null };
+    return { ...nineMod.bewerteGolHex(popGraphRef.current, gen, { laeuft: running }), STATUS: nineMod.STATUS };
     // popGraphTick ist die Aenderungs-Quelle des Ref-Inhalts; ohne ihn wuerde React
     // die Neuberechnung nie ausloesen, weil ein Ref keine Render-Abhaengigkeit ist.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showNineRules, semantikProfil, popGraphTick, gen, running]);
+  }, [showNineRules, semantikProfil, popGraphTick, gen, running, nineMod]);
   // LiouScope-Recorder: vollstaendige Zeitreihe der Observablen (nicht nur das
   // 120-Punkt-Anzeigefenster). Jede Zeile = ein Schritt; Spalten regelabhaengig.
   const recRef = useRef({ on: false, rows: [], cols: [] });
@@ -1103,8 +1115,9 @@ export default function GolHex() {
       schritt, births, deaths, zellen: (nb && nb.inCount) || N2,
       a1: !!(cfg.current && cfg.current.ax && cfg.current.ax.a1),
     };
-    if (nctx.aktiv) {
-      const sp = schwerpunkt(colorRef.current, gridRef.current.rows, gridRef.current.cols, { topologie: nctx.topologie, mask: nb && nb.mask });
+    if (nctx.aktiv && !nineModRef.current) extra.posGrund = "9-Regel-Modul laedt noch";
+    else if (nctx.aktiv) {
+      const sp = nineModRef.current.schwerpunkt(colorRef.current, gridRef.current.rows, gridRef.current.cols, { topologie: nctx.topologie, mask: nb && nb.mask });
       if (sp.pos) { extra.pos = sp.pos; extra.geom = sp.geom; } else extra.posGrund = sp.grund;
     } else extra.posGrund = "9-Regel-Profil nicht aktiv";
     pushSample(popGraphRef.current, c.pop, births + deaths, extra);
@@ -3831,6 +3844,7 @@ export default function GolHex() {
                 nicht eindeutig ist (gleichmaessig verteilt, Weg ueber die Kreis-Naht), steht <b>offen</b>.
               </div>
               {nineRulesReport.rules.map((r) => {
+                const STATUS = nineRulesReport.STATUS;
                 const farbe =
                   r.status === STATUS.PASS ? T.accent
                     : r.status === STATUS.FAIL ? "#ff8f8f"

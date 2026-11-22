@@ -47,7 +47,11 @@
 // ein Proxy fuer Aktivitaet, keine Aussage ueber Leben -- und traegt deshalb den
 // Claim-Tier MODEL/PROXY.
 
-import { evaluateNineRules, R2_MODUS, R4_MODUS, D6 } from "./nine-rules.js";
+import { evaluateNineRules, R2_MODUS, R4_MODUS, D6, STATUS } from "./nine-rules.js";
+
+// Re-Export fuer die App: sie laedt dieses Modul dynamisch und soll nine-rules.js
+// nicht zusaetzlich statisch importieren (sonst landet es wieder im Haupt-Chunk).
+export { STATUS };
 
 // Abgeschaltete Regeln. Seit 2026-11-22 leer: R4/R5/R6 werden auf erhobenen Groessen
 // ausgewertet (siehe Kopf). Export bleibt fuer bestehende Aufrufer erhalten.

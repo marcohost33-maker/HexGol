@@ -131,7 +131,11 @@ function emitBuildMetadata() {
     // Run after ordinary Vite/core transforms so index.html and generated chunks
     // represent the bytes/URLs that are about to be written.
     enforce: "post",
-    generateBundle(_options, bundle) {
+    // order "post": auch NACH Vites eigener Import-Analyse, die bei dynamischen
+    // Imports (9-Regel-Chunk) den Code des Haupt-Chunks in generateBundle noch
+    // umschreibt (Preload-Marker). Ohne das fingerprintete der Hook Bytes, die so
+    // nie auf die Platte kamen -> verify-pwa-build.mjs schlug zu Recht fehl.
+    generateBundle: { order: "post", handler(_options, bundle) {
       // Vite content-hashes generated JS/CSS/assets. Feed those exact URLs into
       // the service-worker install set so a new shell and its referenced code are
       // cached atomically. Public icons/manifest are added by sw.js itself.
@@ -180,7 +184,7 @@ function emitBuildMetadata() {
           `self.__GOLHEX_BUILD__ = ${JSON.stringify(buildId)};\n` +
           `self.__GOLHEX_PRECACHE__ = ${JSON.stringify(precache)};\n`,
       });
-    },
+    } },
   };
 }
 
