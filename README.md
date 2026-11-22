@@ -72,6 +72,26 @@ b855a45.
 
 Full derivation: [`docs/watzlawick-rule.md`](docs/watzlawick-rule.md).
 
+### 9-rule semantic profile (observes only)
+
+An optional checker (`src/lib/nine-rules.js`, spec `9R-v1.2.0`) evaluates nine
+rules (R1 Ist … R9 Lebt) against the **population trace**; it never changes the
+simulation. The GolHex adapter (`src/lib/golhex-nine-rules-adapter.js`) decides
+what each rule measures:
+
+- R1/R2/R3/R7/R8/R9 — population count over time (R9 is a MODEL/PROXY "CA-Life").
+- **R4 Unterscheidet** — did the last step treat cells with the same prior state
+  differently (some survive and some die, or some empty cells are born and
+  others not)? Derived from births/deaths/domain size per sample.
+- **R5 Richtung / R6 Bewegt** — the centroid of the live cells, a derived
+  summary quantity. Defined on edge topology and, on the rectangular torus, only
+  for a localized population; elsewhere the rules report *offen* (UNKNOWN), and
+  R5 only reports a direction for a displacement exactly along a hex axis.
+
+Without measured data a rule reports *offen* / *n. a.*, never pass/fail. In the
+OffscreenCanvas worker mode the main thread records no samples, so the trace
+does not advance there.
+
 ## Getting started
 
 ```bash

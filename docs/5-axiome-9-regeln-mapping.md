@@ -61,3 +61,17 @@ Zum Zeitpunkt dieses Mappings exportiert `src/lib/sim-engine.js` in `AXIOMS` nur
 obwohl `docs/watzlawick-rule.md` eindeutig A1–A5 definiert. Das ist als Issue #147 erfasst.
 Die Matrix groundet deshalb gegen die vollständige WZL-Dokumentation und behauptet **nicht**,
 dass der aktuelle `AXIOMS`-Export bereits vollständig ist.
+
+## Gegenprüfung 2026-11-22 (9R-v1.2.0)
+
+Anlass: Falsifikationsregel 5 — `src/lib/nine-rules.js` wurde geändert. Die Änderung fügt nur
+optionale Zustandsfelder hinzu, mit denen R4/R5/R6 „unbestimmt" (UNKNOWN) statt „nicht anwendbar"
+melden; ohne diese Felder ist das Verhalten identisch zu 9R-v1.1.0. Die Semantik von R4 als
+Klassifikator ist unverändert.
+
+Neu ist die **GolHex-Operationalisierung** von R4 im Adapter: Unterscheidung = der letzte Schritt
+schreibt Zellen gleichen Vorzustands verschieden fort (Überlebt/Gestorben bzw. Geboren/Leer
+geblieben). Das ist eine Observable der B/S-Regel auf Populationsebene, **nicht** die Operation
+eines Watzlawick-Axioms (A1 Signal/Abwesenheit, A2 Inhalt/Beziehung, A5 S/K). Die Matrix bleibt
+daher unverändert; es entsteht **kein** neues STRONG_OVERLAP. R5/R6 beziehen sich jetzt auf den
+Schwerpunkt der lebenden Zellen — weiterhin `NO_DIRECT` zu allen fünf Axiomen (Regel 2 gilt fort).
