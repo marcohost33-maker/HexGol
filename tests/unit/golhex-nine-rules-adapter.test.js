@@ -286,6 +286,15 @@ describe("R4 Unterscheidet: der Schritt behandelt Zellen gleichen Vorzustands ve
     expect(statusOf(rep, "R4")).toBe(STATUS.UNOBSERVED);
     expect(ruleOf(rep, "R4").evidence).toMatch(/kein Simulationsschritt/);
   });
+
+  // Codex P2 (PR #228): mit A1 erzeugt stepLife Spontangeburten, die in `births`
+  // (Stand main) fehlen -- Neugeborene wuerden als Ueberlebende gezaehlt. Solange
+  // die Zaehlwerte das nicht abbilden, ist R4 unter A1 UNKNOWN statt eines Urteils.
+  it("A1 aktiv: Zaehlwerte unvollstaendig -> R4 UNKNOWN, nicht FAIL", () => {
+    const rep = bewerteGolHex(bufX([0, 3], [schritt(0, 0), schritt(0, 0, 100, { a1: true })]), 1);
+    expect(statusOf(rep, "R4")).toBe(STATUS.UNOBSERVED);
+    expect(ruleOf(rep, "R4").evidence).toMatch(/A1/);
+  });
 });
 
 describe("Regeln gegen echte Populationsverlaeufe", () => {

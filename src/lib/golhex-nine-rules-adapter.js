@@ -317,6 +317,9 @@ export function baueTrace(buf, gen = 0) {
     // R4: Uebergangsklassen nur fuer echte Simulationsschritte.
     if (!x) s.vergleichsraumGrund = "keine Uebergangsdaten erhoben";
     else if (x.schritt !== true) s.vergleichsraumGrund = "kein Simulationsschritt (Malen/Laden/Physikmodus)";
+    // A1-Spontangeburten fehlen in stepLife-`births` (Stand main, Codex-Befund PR #228);
+    // ohne vollstaendige Zaehlung kein Urteil. Entfaellt, sobald die Engine sie zaehlt.
+    else if (x.a1 === true) s.vergleichsraumGrund = "A1 aktiv: Spontangeburten fehlen in den Zaehlwerten";
     else {
       const k = uebergangsKlassen(p, x.births, x.deaths, x.zellen);
       if (k.klassen) s.klassen = k.klassen; else s.vergleichsraumGrund = k.grund;

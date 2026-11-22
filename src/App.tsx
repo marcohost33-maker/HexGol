@@ -1099,7 +1099,10 @@ export default function GolHex() {
     // nicht genutztes Pruefraster darf nichts kosten.
     const nctx = nineCtxRef.current;
     const nb = neighRef.current;
-    const extra: Record<string, unknown> = { schritt, births, deaths, zellen: (nb && nb.inCount) || N2 };
+    const extra: Record<string, unknown> = {
+      schritt, births, deaths, zellen: (nb && nb.inCount) || N2,
+      a1: !!(cfg.current && cfg.current.ax && cfg.current.ax.a1),
+    };
     if (nctx.aktiv) {
       const sp = schwerpunkt(colorRef.current, gridRef.current.rows, gridRef.current.cols, { topologie: nctx.topologie, mask: nb && nb.mask });
       if (sp.pos) { extra.pos = sp.pos; extra.geom = sp.geom; } else extra.posGrund = sp.grund;
