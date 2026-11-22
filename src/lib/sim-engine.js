@@ -132,8 +132,14 @@ const RMETA = RULES.map((r) => {
 // o=ortho (60grad benachbart), m=meta (120grad), p=para (180grad gegenueber).
 // Reicht das totalistische Modell nicht; erst INT erzeugt die reiche Hex-Dynamik.
 // hexConfig2: besetzte Richtungen (Bitmaske der 6 Nachbarn) -> Klasse bei genau 2.
+// Die Bits folgen der Tabellen-Reihenfolge von buildNeighbors (oben-links, oben-rechts,
+// links, rechts, unten-links, unten-rechts), NICHT dem Umlauf. UMLAUF[k] ist die
+// Position im Uhrzeigersinn ab oben-links. Bis v33.5.0 rechnete diese Funktion mit
+// dem Tabellenindex -- z. B. links/rechts (180 Grad) galt als "o" (Befund 2026-11-22,
+// Orakel tests/unit/step-life-contracts.test.js).
+const UMLAUF = [0, 1, 5, 2, 4, 3];
 function hexClass2(mask) {
-  const d = []; for (let k = 0; k < 6; k++) if (mask & (1 << k)) d.push(k);
+  const d = []; for (let k = 0; k < 6; k++) if (mask & (1 << k)) d.push(UMLAUF[k]);
   if (d.length !== 2) return null;
   const g = Math.min((d[1] - d[0] + 6) % 6, (d[0] - d[1] + 6) % 6);
   return g === 1 ? "o" : g === 2 ? "m" : "p";
@@ -534,13 +540,15 @@ function stepLife(g) {
         // Randzelle selbst (arxiv 2406.06195, 1607.02291). "null"-Standard = tote Wand.
         if (adia) {
           if (selfAlive) { cnt[self]++; live++; sx += COSH[self]; sy += SINH[self]; mask |= (1 << k); }
-          else if (a4 && gh[i]) live++;
+          else if (a4 && gh[i]) { live++; mask |= (1 << k); }
         }
         continue;
       }
       const cj = col[j];
       if (cj !== 0) { cnt[cj]++; live++; sx += COSH[cj]; sy += SINH[cj]; mask |= (1 << k); }
-      else if (a4 && gh[j]) live++;
+      // A4-Geist zaehlt als Nachbar -- dann auch seine RICHTUNG (INT-Anordnung);
+      // sonst lieferte hexClass2 bei "1 lebend + 1 Geist" null und sperrte still.
+      else if (a4 && gh[j]) { live++; mask |= (1 << k); }
     }
     const cntSelf = selfAlive ? cnt[self] : 0;
     let maxN = 0, nCol = 0;

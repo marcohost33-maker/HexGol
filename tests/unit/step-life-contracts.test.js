@@ -5,7 +5,7 @@
 // stattdessen beobachtbare Eigenschaften gegen das Ergebnis selbst.
 
 import { describe, it, expect } from "vitest";
-import { stepLife, buildNeighbors, RMETA } from "../../src/lib/sim-engine.js";
+import { stepLife, buildNeighbors, RMETA, INT_META, hexClass2 } from "../../src/lib/sim-engine.js";
 
 function mulberry32(seed) {
   let a = seed >>> 0;
@@ -122,5 +122,64 @@ describe("A5 sym = dokumentierte Regel (Ueberleben K<=S, Geburt S>K)", () => {
       let live = 0; for (let k = 0; k < 6; k++) { const j = NL[i * 6 + k]; if (j >= 0 && col[j] !== 0) live++; }
       expect(r.nc[i] !== 0).toBe(col[i] !== 0 ? S.has(live) : B.has(live));
     }
+  });
+});
+
+// INT (Callahan o/m/p) bei genau 2 Nachbarn: die Klasse ist der WINKEL zwischen den
+// beiden Nachbarn (o = 60 Grad, m = 120 Grad, p = 180 Grad; Kommentar in sim-engine).
+// Die Bits der Maske folgen aber der Tabellen-Reihenfolge von buildNeighbors
+// (oben-links, oben-rechts, links, rechts, unten-links, unten-rechts) -- nicht dem
+// Umlauf. Orakel hier: echte Weltkoordinaten der Nachbarzellen.
+describe("INT: hexClass2 klassifiziert nach dem geometrischen Winkel", () => {
+  const S3 = Math.sqrt(3);
+  const welt = (r, c) => [(c + ((r & 1) ? 0.5 : 0)) * S3, r * 1.5];
+  for (const row of [4, 5]) {
+    it(`alle 15 Nachbarpaare stimmen mit dem Winkel ueberein (Reihe ${row}, ${row & 1 ? "ungerade" : "gerade"})`, () => {
+      const R = 10, C = 10, c = 4, i = row * C + c;
+      const nb = buildNeighbors(R, C, "box");
+      const [x0, y0] = welt(row, c);
+      const dirs = Array.from({ length: 6 }, (_, k) => {
+        const j = nb.edge[i * 6 + k];
+        const [x, y] = welt((j / C) | 0, j % C);
+        return [x - x0, y - y0];
+      });
+      let n = 0;
+      for (let a = 0; a < 6; a++) {
+        for (let b = a + 1; b < 6; b++) {
+          const [ax, ay] = dirs[a], [bx, by] = dirs[b];
+          const grad = Math.round((Math.acos((ax * bx + ay * by) / (Math.hypot(ax, ay) * Math.hypot(bx, by))) * 180) / Math.PI);
+          const soll = grad === 60 ? "o" : grad === 120 ? "m" : grad === 180 ? "p" : `?${grad}`;
+          expect(hexClass2((1 << a) | (1 << b)), `Paar ${a}/${b}`).toBe(soll);
+          n++;
+        }
+      }
+      expect(n).toBe(15);
+    });
+  }
+});
+
+// A4-Geister zaehlen als Nachbar (live++), fehlten aber in der Richtungsmaske:
+// bei genau 2 Nachbarn, davon ein Geist, lieferte hexClass2 null -> jede
+// INT-Bedingung sperrte still, egal wie die beiden lagen.
+describe("INT + A4: ein Geist-Nachbar zaehlt auch fuer die Anordnung", () => {
+  const R = 10, C = 10, N = R * C;
+  const nb = buildNeighbors(R, C, "box");
+  const i = 4 * C + 4;
+  const nach = (k) => nb.edge[i * 6 + k];
+  // k=0 (oben-links) und k=1 (oben-rechts) liegen 60 Grad auseinander -> "o".
+  it("Positivkontrolle: zwei lebende o-Nachbarn gebaeren unter INT B2o", () => {
+    const col = new Uint8Array(N); col[nach(0)] = 1; col[nach(1)] = 1;
+    expect(schritt({ R, C, col, torus: false, meta: INT_META[0] }).nc[i]).not.toBe(0);
+  });
+  it("lebend + Geist in o-Anordnung gebaeren unter INT B2o mit A4", () => {
+    const col = new Uint8Array(N), gh = new Uint8Array(N);
+    col[nach(0)] = 1; gh[nach(1)] = 1;
+    expect(schritt({ R, C, col, gh, torus: false, a4: true, meta: INT_META[0] }).nc[i]).not.toBe(0);
+  });
+  it("lebend + Geist in p-Anordnung gebaeren unter INT B2o NICHT", () => {
+    const col = new Uint8Array(N), gh = new Uint8Array(N);
+    // k=2 (links) und k=3 (rechts) liegen 180 Grad auseinander.
+    col[nach(2)] = 1; gh[nach(3)] = 1;
+    expect(schritt({ R, C, col, gh, torus: false, a4: true, meta: INT_META[0] }).nc[i]).toBe(0);
   });
 });

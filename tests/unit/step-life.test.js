@@ -31,13 +31,13 @@ function stepLifeNaive(g) {
       if (j < 0) {
         if (adia) {
           if (selfAlive) { cnt[self]++; live++; sx += COSH[self]; sy += SINH[self]; mask |= (1 << k); }
-          else if (a4 && gh[i]) live++;
+          else if (a4 && gh[i]) { live++; mask |= (1 << k); }
         }
         continue;
       }
       const cj = col[j];
       if (cj !== 0) { cnt[cj]++; live++; sx += COSH[cj]; sy += SINH[cj]; mask |= (1 << k); }
-      else if (a4 && gh[j]) live++;
+      else if (a4 && gh[j]) { live++; mask |= (1 << k); }
     }
     const cntSelf = selfAlive ? cnt[self] : 0;
     let maxN = 0, nCol = 0; for (let c = 1; c <= 12; c++) { nCol += cnt[c]; if (cnt[c] > maxN) maxN = cnt[c]; } // immer
