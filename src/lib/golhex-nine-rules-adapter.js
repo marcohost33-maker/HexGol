@@ -291,6 +291,10 @@ function verschiebung(a, b, geom) {
   return { q: erster.p.q - a.q, r: erster.p.r - a.r };
 }
 
+/** Identitaet der Schwerpunkt-Definition einer Probe (Rand | Torus RxC | RP2-Scheibe). */
+const geomSchluessel = (g) => (!g ? "edge" : g.art === "torus" ? `torus:${g.R}x${g.C}`
+  : g.art === "rp2" ? `rp2:${g.cx},${g.cy},${g.rho}` : `?:${g.art}`);
+
 /** D6-Einheitsrichtung, falls v (bis auf ACHS_TOL) ein positives Vielfaches einer Hex-Achse ist. */
 function achsRichtung(v) {
   const k = Math.max(Math.abs(v.q), Math.abs(v.r), Math.abs(v.q + v.r));
@@ -343,10 +347,26 @@ export function baueTrace(buf, gen = 0) {
     const v = i > 0 ? trace[i - 1] : null;
     if (!v) { s.dUnbekannt = "noch keine Verschiebung beobachtet"; continue; }
     if (!s.q || !v.q) { s.dUnbekannt = s.qUnbekannt || v.qUnbekannt; continue; }
+    // Topologiewechsel zwischen zwei Proben: die Schwerpunkte sind verschieden definiert,
+    // ihre Differenz ist keine Bewegung (Codex R2, PR #228). Position UND Richtung
+    // dieser Probe gelten als unbestimmt; R6 vergleicht sonst die rohen Koordinaten.
+    if (geomSchluessel(s.geom) !== geomSchluessel(v.geom)) {
+      const g = "Topologie gewechselt (Schwerpunkte verschieden definiert)";
+      delete s.q;
+      s.qUnbekannt = g;
+      s.dUnbekannt = g;
+      continue;
+    }
     const vs = verschiebung(v.q, s.q, s.geom);
     if (typeof vs.grund === "string") { s.dUnbekannt = vs.grund; continue; }
     const laenge = Math.max(Math.abs(vs.q), Math.abs(vs.r), Math.abs(vs.q + vs.r));
-    if (laenge <= ACHS_TOL) { s.dGrund = "Schwerpunkt unbewegt"; continue; }
+    if (laenge <= ACHS_TOL) {
+      // Innerhalb der Toleranz unbewegt: die Position der Vorprobe uebernehmen, damit
+      // R6 (vergleicht roh, strikt > 0) kein Gleitkomma-Rauschen als Bewegung liest.
+      s.q = { q: v.q.q, r: v.q.r };
+      s.dGrund = "Schwerpunkt unbewegt";
+      continue;
+    }
     const d = achsRichtung(vs);
     if (d) s.d = { q: d.q, r: d.r };
     else s.dUnbekannt = `Verschiebung (${+vs.q.toFixed(3)},${+vs.r.toFixed(3)}) liegt auf keiner Hex-Achse`;
@@ -392,7 +412,12 @@ export function bewerteGolHex(buf, gen, opts = {}) {
     // R4 ACTIVE: Vergleichsraum = besetzte Uebergangsklassen des letzten Schritts;
     // das System unterscheidet, wenn es gleiche Vorzustaende verschieden fortschreibt.
     r4Modus: R4_MODUS.ACTIVE,
-    population: (s) => (s && Array.isArray(s.klassen) ? s.klassen.filter((k) => k.n > 0) : []),
+    // Vielfachheit bleibt erhalten (Codex R2): eine Klasse mit n >= 2 Zellen stellt zwei
+    // Repraesentanten -- n gleich behandelte Zellen sind ein gemessenes "unterscheidet
+    // nicht" (FAIL), kein fehlender Vergleich. Nur eine einzige Zelle bleibt UNKNOWN.
+    population: (s) => (s && Array.isArray(s.klassen)
+      ? s.klassen.filter((k) => k.n > 0).flatMap((k) => (k.n >= 2 ? [k, k] : [k]))
+      : []),
     discriminator: (a, b) => a.vor === b.vor && a.nach !== b.nach,
     // R7: terminal heisst ausgestorben.
     terminalPredicate: (s) => s.u <= 0,

@@ -434,3 +434,53 @@ describe("Robustheit", () => {
     for (const r of rep.rules) expect(r.status).not.toBe(STATUS.CONFIG_ERROR);
   });
 });
+
+// Codex-Runde 2 auf PR #228 (2026-11-22).
+describe("Codex R2: Rauschen, Einklassen-Schritte, Topologiewechsel", () => {
+  const probe = (R, C, zellen, topologie) => {
+    const s = schwerpunkt(gitter(R, C, zellen), R, C, { topologie });
+    return { pos: s.pos, geom: s.geom };
+  };
+
+  it("Gleitkomma-Rauschen ist keine Bewegung: R6 FAIL, R5 n. a. (Torus 10x10)", () => {
+    // (1,4)+(1,6) werden zu (1,5): Schwerpunkt unveraendert, Kreismittel rauscht ~1e-15.
+    const a = probe(10, 10, [[1, 4], [1, 6]], "torus");
+    const b = probe(10, 10, [[1, 5]], "torus");
+    const rep = bewerteGolHex(bufX([2, 1], [schritt(0, 0, 100, a), schritt(0, 1, 100, b)]), 1);
+    expect(statusOf(rep, "R6")).toBe(STATUS.FAIL);
+    expect(statusOf(rep, "R5")).toBe(STATUS.NA);
+  });
+
+  it("vollstaendig gemessener Einklassen-Schritt (leeres Feld) unterscheidet NICHT: R4 FAIL", () => {
+    const rep = bewerteGolHex(bufX([0, 0], [schritt(0, 0), schritt(0, 0)]), 1);
+    expect(statusOf(rep, "R4")).toBe(STATUS.FAIL);
+  });
+
+  it("ganze Domaene stirbt gleichfoermig: R4 FAIL statt UNKNOWN", () => {
+    const rep = bewerteGolHex(bufX([5, 0], [schritt(0, 0, 5), schritt(0, 5, 5)]), 1);
+    expect(statusOf(rep, "R4")).toBe(STATUS.FAIL);
+  });
+
+  it("eine einzige Zelle bleibt UNKNOWN (kein Vergleich moeglich)", () => {
+    const rep = bewerteGolHex(bufX([0, 0], [schritt(0, 0, 1), schritt(0, 0, 1)]), 1);
+    expect(statusOf(rep, "R4")).toBe(STATUS.UNOBSERVED);
+  });
+
+  it("Wechsel Rand -> Torus ohne Zellbewegung: R5 und R6 UNKNOWN, keine Scheinbewegung", () => {
+    const zellen = [[4, 49], [4, 0], [4, 1]];
+    const a = probe(40, 50, zellen, "edge");
+    const b = probe(40, 50, zellen, "torus");
+    const rep = bewerteGolHex(bufX([3, 3], [schritt(0, 0, 2000, a), schritt(0, 0, 2000, b)]), 1);
+    expect(statusOf(rep, "R6")).toBe(STATUS.UNOBSERVED);
+    expect(statusOf(rep, "R5")).toBe(STATUS.UNOBSERVED);
+    expect(ruleOf(rep, "R6").evidence).toMatch(/Topologie/);
+  });
+
+  it("Positivkontrolle: gleiche Topologie, echte Verschiebung bleibt PASS", () => {
+    const a = probe(40, 50, [[4, 10], [4, 11]], "torus");
+    const b = probe(40, 50, [[4, 12], [4, 13]], "torus");
+    const rep = bewerteGolHex(bufX([2, 2], [schritt(0, 0, 2000, a), schritt(2, 2, 2000, b)]), 1);
+    expect(statusOf(rep, "R6")).toBe(STATUS.PASS);
+    expect(statusOf(rep, "R5")).toBe(STATUS.PASS);
+  });
+});
