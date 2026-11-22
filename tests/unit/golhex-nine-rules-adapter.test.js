@@ -143,7 +143,8 @@ describe("RP2 (Kreis + Torus): Schwerpunkt ueber die Antipoden-Naht", () => {
     const col = new Uint8Array(R * C);
     col[i] = 1; col[anti] = 1;
     const s = schwerpunkt(col, R, C, { topologie: "rp2", mask: nb.mask });
-    expect(s.geom.art).toBe("rp2");
+    expect(s.grund).toBeUndefined();
+    expect(s.geom?.art).toBe("rp2");
     const [x, y] = weltAusPos(s.pos);
     // Das arithmetische Mittel laege bei ~0 Abstand zur Mitte; RP2 legt es an den Rand.
     expect(Math.hypot(x - zx, y - zy)).toBeGreaterThan(0.8 * s.geom.rho);
