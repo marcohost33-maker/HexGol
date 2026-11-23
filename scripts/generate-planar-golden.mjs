@@ -4,7 +4,7 @@
 // no duplicate CA implementation lives in this file.
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { realpathSync, writeFileSync } from "node:fs";
+import { readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildNeighbors, RMETA, stepLife } from "../src/lib/sim-engine.js";
@@ -142,18 +142,35 @@ export function canonicalJson(value) {
   return JSON.stringify(value, null, 2) + "\n";
 }
 
+// Provenance rule (contracts/README.md, 2026-11-23): `source.engineBlobSha` records the
+// engine blob the contract was GENERATED from. A later engine blob is accepted only when
+// the contract regenerates byte-identically from it -- then no pinned profile changed
+// and the vendored bytes (and their SHA-256 downstream) stay valid. Any byte change under
+// a new blob is refused: that needs a new contract version, never a silent refresh.
+export function assertProvenance(currentBlob, regenerated, committed) {
+  if (currentBlob === SOURCE_ENGINE_BLOB) return "pinned";
+  if (regenerated === committed) return "reproduced-after-engine-change";
+  throw new Error(
+    `sim-engine.js changed (blob ${SOURCE_ENGINE_BLOB} -> ${currentBlob}) and the v1 vectors ` +
+    "changed with it. Generate a new contract version/provenance record instead of silently refreshing v1.",
+  );
+}
+
 if (
   process.argv[1] &&
   realpathSync(fileURLToPath(import.meta.url)) === realpathSync(resolve(process.argv[1]))
 ) {
   const current = currentEngineBlob();
-  if (current !== SOURCE_ENGINE_BLOB) {
-    throw new Error(
-      `sim-engine.js changed: expected blob ${SOURCE_ENGINE_BLOB}, got ${current}. ` +
-      "Generate a new contract version/provenance record instead of silently refreshing v1.",
+  const body = canonicalJson(buildPlanarGoldenV1());
+  const committed = readFileSync(
+    fileURLToPath(new URL("../contracts/golhex-planar-golden-v1.json", import.meta.url)),
+    "utf8",
+  );
+  if (assertProvenance(current, body, committed) !== "pinned") {
+    process.stderr.write(
+      `note: sim-engine.js blob ${current} != generation blob ${SOURCE_ENGINE_BLOB}; v1 bytes reproduced unchanged\n`,
     );
   }
-  const body = canonicalJson(buildPlanarGoldenV1());
   const target = process.argv[2];
   if (target) writeFileSync(target, body, "utf8");
   else process.stdout.write(body);

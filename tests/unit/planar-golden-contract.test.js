@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  assertProvenance,
   buildPlanarGoldenV1,
   canonicalJson,
   SOURCE_ENGINE_BLOB,
@@ -26,9 +27,22 @@ describe("cross-repo planar Golden Vector contract", () => {
       ["hash-object", "src/lib/sim-engine.js"],
       { encoding: "utf8", cwd: resolve(".") },
     ).trim();
-    expect(currentBlob).toBe(SOURCE_ENGINE_BLOB);
+    // The recorded blob is the GENERATION blob; a later engine blob is accepted only
+    // while the bytes regenerate identically (contracts/README.md, 2026-11-23).
+    expect(["pinned", "reproduced-after-engine-change"])
+      .toContain(assertProvenance(currentBlob, canonicalJson(buildPlanarGoldenV1()), committed));
     expect(createHash("sha256").update(committed).digest("hex"))
       .toBe("c4c3b1d9ae0d25bddcbce8e41f666e1f4814a9be33fea0bee96f3a2954a7b5b1");
+  });
+
+  it("refuses a changed engine blob whose vectors changed (no silent refresh)", () => {
+    const otherBlob = "0".repeat(40);
+    // positive control: same bytes under another blob are accepted
+    expect(assertProvenance(otherBlob, committed, committed)).toBe("reproduced-after-engine-change");
+    // the guarded case: another blob AND other bytes
+    expect(() => assertProvenance(otherBlob, committed.replace('"births": 0', '"births": 1'), committed))
+      .toThrow(/new contract version/);
+    expect(assertProvenance(SOURCE_ENGINE_BLOB, "x", committed)).toBe("pinned");
   });
 
   it("keeps the Offscreen worker on the same production transition core", () => {
