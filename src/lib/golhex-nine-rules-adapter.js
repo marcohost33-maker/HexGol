@@ -75,6 +75,15 @@ export const RBAR_MIN = 0.5;
 export const RP2_STREU_MAX = 0.5;
 /** Toleranz in Gitterschritten fuer "steht still" / "liegt auf einer Hex-Achse" / "gleich kurz". */
 export const ACHS_TOL = 1e-9;
+/**
+ * RP2: hoechstens so viele Zellbesuche je Schwerpunkt-Aufruf (Fixpunkt-Iterationen x
+ * lebende Zellen). Die Probe laeuft synchron alle 250 ms im Main-Thread; reicht das
+ * Budget nicht, ist der Schwerpunkt UNBESTIMMT (Codex R3, PR #228). Gemessen
+ * (Node 24, PC unter Last): 1e6 Besuche ~25-30 ms, also 5e5 ~13 ms. Bis ~3'400
+ * lebende Zellen ist der Schwerpunkt garantiert bestimmbar (9 Starts x 8 Iterationen
+ * x 2 Durchlaeufe), darueber nur, wenn die Iteration frueh konvergiert.
+ */
+export const RP2_BUDGET = 500_000;
 
 const istGanz = (x) => Number.isInteger(x);
 const mod = (a, m) => ((a % m) + m) % m;
@@ -125,7 +134,7 @@ export function schwerpunkt(col, R, C, opts = {}) {
     if (n === 0) return { grund: "keine lebende Zelle" };
     return { pos: axialAusXY(sx / n, sy / n), geom: null };
   }
-  if (topo === "rp2") return schwerpunktRP2(col, R, C, opts.mask);
+  if (topo === "rp2") return schwerpunktRP2(col, R, C, opts.mask, opts.budget ?? RP2_BUDGET);
   // Torus (Rechteck, periodisch in Reihe und Spalte): Kreismittel je Achse.
   // Weltkoordinate x = Spalte + 0.5 auf ungeraden Reihen (Periode C), y = Reihe (R).
   const proReihe = new Float64Array(R);
@@ -167,42 +176,87 @@ export function schwerpunkt(col, R, C, opts = {}) {
  * Fixpunkt-Iterationen); liegt es ausserhalb des Kreises, wird es zurueckgebildet.
  * Kreisradius aus der Maske: groesster Zentrumsabstand einer Domaenenzelle + sqrt(3)/2
  * (halber Nachbarabstand -- Naeherung an die Naht der Engine).
+ * Rechenbudget: siehe RP2_BUDGET. Implementierung: schwerpunktRP2 (nach maskRadius).
  */
-function schwerpunktRP2(col, R, C, mask) {
-  if (!mask || mask.length < R * C) return { grund: "RP2 ohne Domaenen-Maske: Kreisrand unbekannt" };
-  const cr = (R - 1) / 2, cc = (C - 1) / 2;
-  const cx = cc + ((cr & 1) ? 0.5 : 0), cy = cr;          // wie buildNeighbors (inkl. &1 auf cr)
+
+// Groesster Zentrumsabstand einer Domaenenzelle haengt nur an der Maske: einmal je
+// Maske rechnen (die Maske wechselt nur mit dem Gitter). Wert identisch zur frueheren
+// Schleife max(Math.hypot(...)) -- dieselben Ausdruecke, dieselbe Reihenfolge.
+const maskRadiusCache = new WeakMap();
+function maskRadius(mask, R, C, cx, cy) {
+  const alt = typeof mask === "object" ? maskRadiusCache.get(mask) : undefined;
+  if (alt && alt.R === R && alt.C === C) return alt.maxD;
   let maxD = 0;
-  const vs = [];
   for (let row = 0; row < R; row++) {
     const halb = (row & 1) ? 0.5 : 0;
     for (let c = 0; c < C; c++) {
-      const i = row * C + c;
-      if (!mask[i]) continue;
-      const vx = (c + halb - cx) * S3, vy = (row - cy) * 1.5;
-      const d = Math.hypot(vx, vy);
+      if (!mask[row * C + c]) continue;
+      const d = Math.hypot((c + halb - cx) * S3, (row - cy) * 1.5);
       if (d > maxD) maxD = d;
-      if (col[i] !== 0) vs.push(vx, vy);
     }
   }
-  const n = vs.length / 2;
+  if (typeof mask === "object") maskRadiusCache.set(mask, { R, C, maxD });
+  return maxD;
+}
+
+function schwerpunktRP2(col, R, C, mask, budget = RP2_BUDGET) {
+  if (!mask || mask.length < R * C) return { grund: "RP2 ohne Domaenen-Maske: Kreisrand unbekannt" };
+  const cr = (R - 1) / 2, cc = (C - 1) / 2;
+  const cx = cc + ((cr & 1) ? 0.5 : 0), cy = cr;          // wie buildNeighbors (inkl. &1 auf cr)
+  let n = 0;
+  for (let i = 0; i < R * C; i++) if (mask[i] && col[i] !== 0) n++;
   if (n === 0) return { grund: "keine lebende Zelle" };
-  const rho = maxD + S3 / 2;
+  // Mindestaufwand: jeder Start braucht mindestens einen Durchlauf (2n Besuche).
+  const starts = 1 + Math.ceil(n / Math.max(1, Math.floor(n / 8)));
+  if (starts * 2 * n > budget) {
+    return { grund: `RP2-Schwerpunkt: Rechenbudget (${budget} Zellbesuche) reicht fuer ${n} lebende Zellen nicht` };
+  }
+  const rho = maskRadius(mask, R, C, cx, cy) + S3 / 2;
+  // Zellvektoren und ihre Bilder jenseits der Naht EINMAL (sie haengen nicht vom
+  // Schwerpunkt ab); keine temporaeren Arrays in der Iteration (Codex R3, PR #228:
+  // vorher 250-420 ms je Aufruf bei ~30'000 lebenden Zellen, synchron im Main-Thread).
+  const vx = new Float64Array(n), vy = new Float64Array(n);
+  const bx = new Float64Array(n), by = new Float64Array(n);
+  const bild = new Uint8Array(n);
+  for (let row = 0, k = 0; row < R; row++) {
+    const halb = (row & 1) ? 0.5 : 0;
+    for (let c = 0; c < C; c++) {
+      const i = row * C + c;
+      if (!mask[i] || col[i] === 0) continue;
+      const x = (c + halb - cx) * S3, y = (row - cy) * 1.5;
+      vx[k] = x; vy[k] = y;
+      // = rp2Bild(x, y, rho), ohne Array je Zelle
+      const l = Math.hypot(x, y);
+      if (l > 0) { const f = -(2 * rho - l) / l; bx[k] = x * f; by[k] = y * f; } else { bx[k] = x; by[k] = y; }
+      k++;
+    }
+  }
+  // Rechenbudget in Zellbesuchen (deterministisch, keine Uhr): reicht es nicht, ist
+  // der Schwerpunkt UNBESTIMMT statt den Main-Thread zu blockieren.
+  let besuche = 0;
   // Fixpunkt-Iteration ab mehreren Startpunkten (Mittel + bis zu 8 Zellen): ab dem
   // Mittel allein bliebe ein Haufen ueber der Naht in der Kreismitte haengen.
+  // Ergebnis bitgleich zum Stand c09f98a: gleiche Summationsreihenfolge, und die
+  // Bildwahl faellt per Abstandsquadrat nur, wo es eindeutig ist -- sonst wie
+  // vorher per Math.hypot (Aequivalenztest in golhex-nine-rules-adapter.test.js).
   const iteriere = (mx, my) => {
     let streu = Infinity;
     for (let it = 0; it < 8; it++) {
+      besuche += 2 * n;
+      if (besuche > budget) return null;
       let sx = 0, sy = 0, s2 = 0;
-      const reps = [];
-      for (let k = 0; k < vs.length; k += 2) {
-        const [bx, by] = rp2Bild(vs[k], vs[k + 1], rho);
-        const direkt = Math.hypot(vs[k] - mx, vs[k + 1] - my), bild = Math.hypot(bx - mx, by - my);
-        const [px, py] = bild < direkt ? [bx, by] : [vs[k], vs[k + 1]];
-        reps.push(px, py); sx += px; sy += py;
+      for (let k = 0; k < n; k++) {
+        const ddx = vx[k] - mx, ddy = vy[k] - my, dbx = bx[k] - mx, dby = by[k] - my;
+        const qd = ddx * ddx + ddy * ddy, qb = dbx * dbx + dby * dby;
+        const naeher = Math.abs(qb - qd) > 1e-9 * (qb + qd)
+          ? qb < qd : Math.hypot(dbx, dby) < Math.hypot(ddx, ddy);
+        bild[k] = naeher ? 1 : 0;
+        if (naeher) { sx += bx[k]; sy += by[k]; } else { sx += vx[k]; sy += vy[k]; }
       }
       const nx = sx / n, ny = sy / n;
-      for (let k = 0; k < reps.length; k += 2) s2 += (reps[k] - nx) ** 2 + (reps[k + 1] - ny) ** 2;
+      for (let k = 0; k < n; k++) {
+        s2 += bild[k] ? (bx[k] - nx) ** 2 + (by[k] - ny) ** 2 : (vx[k] - nx) ** 2 + (vy[k] - ny) ** 2;
+      }
       streu = Math.sqrt(s2 / n);
       const fertig = nx === mx && ny === my;
       mx = nx; my = ny;
@@ -210,12 +264,15 @@ function schwerpunktRP2(col, R, C, mask) {
     }
     return { mx, my, streu };
   };
+  const zuTeuer = { grund: `RP2-Schwerpunkt: Rechenbudget (${budget} Zellbesuche) reicht fuer ${n} lebende Zellen nicht` };
   let sx0 = 0, sy0 = 0;
-  for (let k = 0; k < vs.length; k += 2) { sx0 += vs[k]; sy0 += vs[k + 1]; }
+  for (let k = 0; k < n; k++) { sx0 += vx[k]; sy0 += vy[k]; }
   let best = iteriere(sx0 / n, sy0 / n);
+  if (!best) return zuTeuer;
   const schritt = Math.max(1, Math.floor(n / 8));
   for (let z = 0; z < n; z += schritt) {
-    const v = iteriere(vs[2 * z], vs[2 * z + 1]);
+    const v = iteriere(vx[z], vy[z]);
+    if (!v) return zuTeuer;
     if (v.streu < best.streu) best = v;
   }
   let { mx, my } = best;
@@ -248,6 +305,37 @@ export function uebergangsKlassen(pop, births, deaths, zellen) {
       { vor: 0, nach: 1, n: births }, { vor: 0, nach: 0, n: leerGeblieben },
     ],
   };
+}
+
+/**
+ * Haelt nach einem Simulationsschritt fest, WOZU dessen Zaehlwerte gehoeren: das Feld
+ * danach (Kopie), die Domaene und ob A1 lief. Der Puffer von `alt` wird
+ * wiederverwendet (kein Speicher je Schritt).
+ */
+export function merkeSchritt(alt, col, births, deaths, zellen, a1, domaene) {
+  const feld = alt && alt.feld && alt.feld.length === col.length ? alt.feld : new Uint8Array(col.length);
+  feld.set(col);
+  return { births, deaths, zellen, a1: a1 === true, domaene, feld };
+}
+
+/**
+ * Zaehlwerte fuer eine Probe -- nur, wenn das Feld noch GENAU das ist, das der letzte
+ * Schritt erzeugt hat. Malen, Zufall, Kreis, Leeren, Laden, Rueckgaengig, Worker-
+ * Rueckgabe: jede Aenderung ausserhalb des Schritts macht die Zaehlwerte zu einer
+ * Aussage ueber ein anderes Feld (Codex R3, PR #228: eine gemalte Zelle wurde als
+ * Ueberlebende gezaehlt und machte aus R4 FAIL ein PASS). Gemessen wird am Feld
+ * selbst, nicht an einer Liste von Bearbeitungswegen, die beim naechsten neuen Weg
+ * luecken wuerde.
+ * @returns {{schritt:true, births:number, deaths:number, zellen:number, a1:boolean} | {schritt:false, schrittGrund:string}}
+ */
+export function uebergangsProbe(stand, col, domaene) {
+  if (!stand || !stand.feld) return { schritt: false, schrittGrund: "seit dem Laden/Aktivieren kein Simulationsschritt gemessen" };
+  if (stand.domaene !== domaene) return { schritt: false, schrittGrund: "Gitter/Domaene seit dem letzten Schritt gewechselt" };
+  const f = stand.feld;
+  let gleich = !!col && f.length === col.length;
+  for (let i = 0; gleich && i < f.length; i++) if (f[i] !== col[i]) gleich = false;
+  if (!gleich) return { schritt: false, schrittGrund: "Feld seit dem letzten Schritt bearbeitet (Zaehlwerte gehoeren zu einem anderen Feld)" };
+  return { schritt: true, births: stand.births, deaths: stand.deaths, zellen: stand.zellen, a1: stand.a1 };
 }
 
 const weltAbstand = (a, b) => {
@@ -324,7 +412,7 @@ export function baueTrace(buf, gen = 0) {
     };
     // R4: Uebergangsklassen nur fuer echte Simulationsschritte.
     if (!x) s.vergleichsraumGrund = "keine Uebergangsdaten erhoben";
-    else if (x.schritt !== true) s.vergleichsraumGrund = "kein Simulationsschritt (Malen/Laden/Physikmodus)";
+    else if (x.schritt !== true) s.vergleichsraumGrund = x.schrittGrund || "kein Simulationsschritt (Malen/Laden/Physikmodus)";
     // A1-Spontangeburten fehlen in stepLife-`births` (Stand main, Codex-Befund PR #228);
     // ohne vollstaendige Zaehlung kein Urteil. Entfaellt, sobald die Engine sie zaehlt.
     else if (x.a1 === true) s.vergleichsraumGrund = "A1 aktiv: Spontangeburten fehlen in den Zaehlwerten";

@@ -683,7 +683,8 @@ export default function GolHex() {
   // dem 1. Sterbe-Frame 0) behaelt dieser Puffer die letzte Spezies-Farbe ueber die
   // GESAMTE Geister-Lebensdauer, damit der Dying-Ring die echte Familie traegt.
   const lastLiveColorRef = useRef(new Uint8Array(N));
-  const statsRef = useRef({ births: 0, deaths: 0 });
+  // stand: Feld + Zaehlwerte des letzten Schritts fuer das 9-Regel-Profil (R4), sonst null.
+  const statsRef = useRef<{ births: number; deaths: number; stand?: null | ReturnType<typeof import("./lib/golhex-nine-rules-adapter.js").merkeSchritt> }>({ births: 0, deaths: 0, stand: null });
   const histRef = useRef([]);
   // Feature 1: Ring-Buffer (Pop + Aktiv) der letzten ~200 Generationen fuer die
   // Live-Sparkline. Pop/Aktiv werden in pushStats BEREITS getrackt — hier nur
@@ -811,7 +812,7 @@ export default function GolHex() {
     rasterImgRef.current = null; // bei Grid-Wechsel ImageData neu anlegen
     undoRef.current = []; originRef.current = null; setHasOrigin(false); // Gitter neu -> Urzustand verwerfen
     tickRef.current = 0; setGen(0);
-    histRef.current = []; statsRef.current = { births: 0, deaths: 0 };
+    histRef.current = []; statsRef.current = { births: 0, deaths: 0, stand: null };
     resetBuffer(popGraphRef.current); popDrawTsRef.current = 0; setPopGraphTick((t) => (t + 1) & 0x7fffffff);
     setStats({ pop: 0, cnt: [0,0,0,0,0,0,0,0,0,0,0,0,0], density: 0, births: 0, deaths: 0, sps: 0, hist: [] });
     setRunning(false); dirtyRef.current = true;
@@ -1111,10 +1112,14 @@ export default function GolHex() {
     // nicht genutztes Pruefraster darf nichts kosten.
     const nctx = nineCtxRef.current;
     const nb = neighRef.current;
-    const extra: Record<string, unknown> = {
-      schritt, births, deaths, zellen: (nb && nb.inCount) || N2,
-      a1: !!(cfg.current && cfg.current.ax && cfg.current.ax.a1),
-    };
+    // R4-Zaehlwerte nur aus dem festgehaltenen Schritt-Stand und nur, wenn das Feld seit
+    // diesem Schritt unveraendert ist (Malen/Zufall/Laden/Undo/Worker -> unbestimmt).
+    // A1 kommt aus dem Schritt selbst, nicht aus der aktuellen Einstellung.
+    const extra: Record<string, unknown> = !schritt
+      ? { schritt: false }
+      : nctx.aktiv && nineModRef.current
+        ? nineModRef.current.uebergangsProbe(statsRef.current.stand, colorRef.current, nb)
+        : { schritt: false, schrittGrund: "9-Regel-Profil nicht aktiv" };
     if (nctx.aktiv && !nineModRef.current) extra.posGrund = "9-Regel-Modul laedt noch";
     else if (nctx.aktiv) {
       const sp = nineModRef.current.schwerpunkt(colorRef.current, gridRef.current.rows, gridRef.current.cols, { topologie: nctx.topologie, mask: nb && nb.mask });
@@ -1248,6 +1253,13 @@ export default function GolHex() {
     // erlaubt (nur wenn die Ansicht stabil ist; dirtyRef hat sonst Vorfahrt).
     tickRef.current = tick; stepDirtyRef.current = true;
     statsRef.current.births = births; statsRef.current.deaths = deaths;
+    // 9-Regel-Profil (R4): festhalten, zu welchem Feld diese Zaehlwerte gehoeren und ob
+    // A1 lief. Eine Probe traegt sie nur, solange das Feld unveraendert ist (Codex R3).
+    const nmod = nineCtxRef.current.aktiv ? nineModRef.current : null;
+    const nbS = neighRef.current;
+    statsRef.current.stand = nmod
+      ? nmod.merkeSchritt(statsRef.current.stand, nc, births, deaths, (nbS && nbS.inCount) || nc.length, !!A.a1, nbS)
+      : null;
     loopStepRef.current += 1;
   }, []);
 

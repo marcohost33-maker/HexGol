@@ -8,6 +8,7 @@
 import { describe, it, expect } from "vitest";
 import {
   baueTrace, bewerteGolHex, CA_LIFE, NICHT_ANWENDBAR, schwerpunkt, uebergangsKlassen, RBAR_MIN,
+  merkeSchritt, uebergangsProbe, RP2_BUDGET,
 } from "../../src/lib/golhex-nine-rules-adapter.js";
 import { STATUS } from "../../src/lib/nine-rules.js";
 import { buildNeighbors } from "../../src/lib/sim-engine.js";
@@ -482,5 +483,205 @@ describe("Codex R2: Rauschen, Einklassen-Schritte, Topologiewechsel", () => {
     const rep = bewerteGolHex(bufX([2, 2], [schritt(0, 0, 2000, a), schritt(2, 2, 2000, b)]), 1);
     expect(statusOf(rep, "R6")).toBe(STATUS.PASS);
     expect(statusOf(rep, "R5")).toBe(STATUS.PASS);
+  });
+});
+
+describe("Codex R3: Zaehlwerte gehoeren zu genau einem Feld", () => {
+  // 10x10 Rechteck: zwei isolierte Zellen sterben unter B2/S34 -> {births:0, deaths:2}.
+  const R = 10, C = 10;
+  const nb = buildNeighbors(R, C, "box");
+  const nachSchritt = () => new Uint8Array(R * C);                 // beide tot, Feld leer
+  const probeUrteil = (stand, feld) => {
+    const x = uebergangsProbe(stand, feld, nb);
+    const pop = feld.reduce((s, v) => s + (v !== 0 ? 1 : 0), 0);
+    return { x, rep: bewerteGolHex(bufX([2, pop], [schritt(0, 0, 100), { ...x }]), 1) };
+  };
+
+  it("Positivkontrolle: unveraendertes Feld traegt die Zaehlwerte -> R4 FAIL (gemessen)", () => {
+    const feld = nachSchritt();
+    const stand = merkeSchritt(null, feld, 0, 2, nb.inCount || R * C, false, nb);
+    const { x, rep } = probeUrteil(stand, feld);
+    expect(x.schritt).toBe(true);
+    expect(statusOf(rep, "R4")).toBe(STATUS.FAIL);
+  });
+
+  it("eine nach dem Schritt gemalte Zelle macht die Zaehlwerte ungueltig: R4 UNKNOWN statt PASS", () => {
+    const feld = nachSchritt();
+    const stand = merkeSchritt(null, feld, 0, 2, nb.inCount || R * C, false, nb);
+    feld[55] = 1;                                                   // Malen vor dem naechsten Schritt
+    const { x, rep } = probeUrteil(stand, feld);
+    expect(x.schritt).toBe(false);
+    expect(statusOf(rep, "R4")).toBe(STATUS.UNOBSERVED);
+    expect(ruleOf(rep, "R4").evidence).toMatch(/bearbeitet/);
+  });
+
+  it("der naechste echte Schritt misst wieder (Puffer wird wiederverwendet)", () => {
+    const feld = nachSchritt();
+    const alt = merkeSchritt(null, feld, 0, 2, 100, false, nb);
+    feld[55] = 1;
+    const neu = merkeSchritt(alt, feld, 1, 0, 100, false, nb);
+    expect(neu.feld).toBe(alt.feld);
+    expect(uebergangsProbe(neu, feld, nb)).toMatchObject({ schritt: true, births: 1, deaths: 0 });
+  });
+
+  it("A1 gilt so, wie es IM Schritt lief -- spaeteres Abschalten macht die Zaehlung nicht vollstaendig", () => {
+    const feld = nachSchritt();
+    const stand = merkeSchritt(null, feld, 0, 2, 100, true, nb);
+    expect(uebergangsProbe(stand, feld, nb).a1).toBe(true);
+  });
+
+  it("Domaenenwechsel und fehlender Schritt-Stand sind unbestimmt", () => {
+    const feld = nachSchritt();
+    const stand = merkeSchritt(null, feld, 0, 2, 100, false, nb);
+    expect(uebergangsProbe(stand, feld, buildNeighbors(R, C, "box")).schritt).toBe(false);
+    expect(uebergangsProbe(null, feld, nb).schritt).toBe(false);
+  });
+});
+
+describe("Codex R3: RP2-Schwerpunkt begrenzt, Ergebnis unveraendert", () => {
+  // Referenz: schwerpunktRP2 im Stand c09f98a, woertlich (nur umbenannt).
+  const S3 = Math.sqrt(3);
+  function rp2BildRef(vx, vy, rho) {
+    const l = Math.hypot(vx, vy);
+    if (!(l > 0)) return [vx, vy];
+    const f = -(2 * rho - l) / l;
+    return [vx * f, vy * f];
+  }
+  function rp2Referenz(col, R, C, mask) {
+    const cr = (R - 1) / 2, cc = (C - 1) / 2;
+    const cx = cc + ((cr & 1) ? 0.5 : 0), cy = cr;
+    let maxD = 0;
+    const vs = [];
+    for (let row = 0; row < R; row++) {
+      const halb = (row & 1) ? 0.5 : 0;
+      for (let c = 0; c < C; c++) {
+        const i = row * C + c;
+        if (!mask[i]) continue;
+        const vx = (c + halb - cx) * S3, vy = (row - cy) * 1.5;
+        const d = Math.hypot(vx, vy);
+        if (d > maxD) maxD = d;
+        if (col[i] !== 0) vs.push(vx, vy);
+      }
+    }
+    const n = vs.length / 2;
+    if (n === 0) return { grund: "keine lebende Zelle" };
+    const rho = maxD + S3 / 2;
+    const iteriere = (mx, my) => {
+      let streu = Infinity;
+      for (let it = 0; it < 8; it++) {
+        let sx = 0, sy = 0, s2 = 0;
+        const reps = [];
+        for (let k = 0; k < vs.length; k += 2) {
+          const [bx, by] = rp2BildRef(vs[k], vs[k + 1], rho);
+          const direkt = Math.hypot(vs[k] - mx, vs[k + 1] - my), bild = Math.hypot(bx - mx, by - my);
+          const [px, py] = bild < direkt ? [bx, by] : [vs[k], vs[k + 1]];
+          reps.push(px, py); sx += px; sy += py;
+        }
+        const nx = sx / n, ny = sy / n;
+        for (let k = 0; k < reps.length; k += 2) s2 += (reps[k] - nx) ** 2 + (reps[k + 1] - ny) ** 2;
+        streu = Math.sqrt(s2 / n);
+        const fertig = nx === mx && ny === my;
+        mx = nx; my = ny;
+        if (fertig) break;
+      }
+      return { mx, my, streu };
+    };
+    let sx0 = 0, sy0 = 0;
+    for (let k = 0; k < vs.length; k += 2) { sx0 += vs[k]; sy0 += vs[k + 1]; }
+    let best = iteriere(sx0 / n, sy0 / n);
+    const schritt = Math.max(1, Math.floor(n / 8));
+    for (let z = 0; z < n; z += schritt) {
+      const v = iteriere(vs[2 * z], vs[2 * z + 1]);
+      if (v.streu < best.streu) best = v;
+    }
+    let { mx, my } = best;
+    const { streu } = best;
+    if (!(streu <= 0.5 * rho)) {
+      return { grund: `Population ueber die Scheibe verteilt (Streuung ${(streu / rho).toFixed(2)} rho > 0.5)` };
+    }
+    if (Math.hypot(mx, my) > rho) [mx, my] = rp2BildRef(mx, my, rho);
+    const x = cx + mx / S3, y = cy + my / 1.5;
+    return { pos: { q: x - y / 2, r: y }, geom: { art: "rp2", cx, cy, rho } };
+  }
+  // Fester Zufall (mulberry32).
+  const zufall = (seed) => () => {
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+
+  it("bitgleich zur Referenz auf zufaelligen und gehaeuften Feldern (feste Seeds)", () => {
+    let mitPos = 0, verteilt = 0, faelle = 0;
+    for (const [R, C] of [[30, 30], [41, 37], [64, 58]]) {
+      const nb = buildNeighbors(R, C, "circle");
+      const innen = [];
+      for (let i = 0; i < R * C; i++) if (nb.mask[i]) innen.push(i);
+      for (let seed = 1; seed <= 12; seed++) {
+        const rnd = zufall(seed * 7919 + R);
+        const col = new Uint8Array(R * C);
+        if (seed % 3 === 0) {
+          const dichte = [0.03, 0.15, 0.4][(seed / 3) % 3];
+          for (const i of innen) if (rnd() < dichte) col[i] = 1;
+        } else {
+          // Haufen um eine zufaellige Domaenenzelle, oft am Rand ...
+          const m = innen[Math.floor(rnd() * innen.length)];
+          const mr = (m / C) | 0, mc = m % C, rad = 1 + Math.floor(rnd() * 4);
+          for (const i of innen) {
+            const r = (i / C) | 0, c = i % C;
+            if (Math.abs(r - mr) <= rad && Math.abs(c - mc) <= rad && rnd() < 0.7) col[i] = 1;
+          }
+          // ... plus Antipoden-Partner einiger Randzellen (Haufen ueber der Naht)
+          for (const i of innen) {
+            if (!col[i] || rnd() < 0.5) continue;
+            for (let k = 0; k < 6; k++) {
+              const j = nb.torus[i * 6 + k];
+              if (j >= 0 && nb.edge[i * 6 + k] < 0) col[j] = 1;
+            }
+          }
+        }
+        const ref = rp2Referenz(col, R, C, nb.mask);
+        const neu = schwerpunkt(col, R, C, { topologie: "rp2", mask: nb.mask, budget: Infinity });
+        faelle++;
+        if (ref.pos) {
+          mitPos++;
+          expect(Object.is(neu.pos.q, ref.pos.q) && Object.is(neu.pos.r, ref.pos.r)).toBe(true);
+          expect(neu.geom).toEqual(ref.geom);
+        } else {
+          if (/verteilt/.test(ref.grund)) verteilt++;
+          expect(neu.grund).toBe(ref.grund);
+        }
+        // Mit Standardbudget: dasselbe Ergebnis oder ausdruecklich "Rechenbudget".
+        const std = schwerpunkt(col, R, C, { topologie: "rp2", mask: nb.mask });
+        if (std.grund && /Rechenbudget/.test(std.grund)) continue;
+        expect(std).toEqual(neu);
+      }
+    }
+    // Beide Zweige wirklich ausgeuebt (sonst waere die Gleichheit leer).
+    expect(faelle).toBe(36);
+    expect(mitPos).toBeGreaterThan(5);
+    expect(verteilt).toBeGreaterThan(2);
+  });
+
+  it("grosse verteilte Population sprengt das Budget: UNBESTIMMT statt Main-Thread-Blockade", () => {
+    const R = 300, C = 280;
+    const nb = buildNeighbors(R, C, "circle");
+    const rnd = zufall(42);
+    const col = new Uint8Array(R * C);
+    let n = 0;
+    for (let i = 0; i < R * C; i++) if (nb.mask[i] && rnd() < 0.5) { col[i] = 1; n++; }
+    expect(n * 2 * 9).toBeGreaterThan(RP2_BUDGET);                  // Vorbedingung
+    const s = schwerpunkt(col, R, C, { topologie: "rp2", mask: nb.mask });
+    expect(s.pos).toBeUndefined();
+    expect(s.grund).toMatch(/Rechenbudget/);
+  });
+
+  it("Positivkontrolle: kleiner Haufen bleibt unter dem Standardbudget bestimmbar", () => {
+    const R = 120, C = 110;
+    const nb = buildNeighbors(R, C, "circle");
+    const col = gitter(R, C, [[60, 50], [60, 51], [61, 50], [61, 51]]);
+    const s = schwerpunkt(col, R, C, { topologie: "rp2", mask: nb.mask });
+    expect(s.grund).toBeUndefined();
+    expect(s.geom?.art).toBe("rp2");
   });
 });
