@@ -58,7 +58,6 @@ describe("Ehrlichkeit: alle neun Regeln sind aktiv, Unbestimmtes bleibt UNKNOWN"
 // Puffer mit `extra` je Probe, wie App.tsx ihn ueber pushSample fuellt.
 const bufX = (pop, extra) => ({ pop, active: pop.map(() => 1), extra });
 const schritt = (births, deaths, zellen = 100, rest = {}) => ({ schritt: true, births, deaths, zellen, ...rest });
-const ruleOf = (rep, id) => rep.rules.find((r) => r.id === id);
 
 /** Gitter R x C (odd-r offset), lebend an den gegebenen [row, col]. */
 function gitter(R, C, zellen) {
