@@ -17,9 +17,13 @@ Why B2/S34, not Conway B3/S23: the production HexGol catalogue is a six-neighbou
 automaton; it deliberately uses a B2-based canonical rule. v1 therefore tests the product's
 actual semantics instead of importing a square-grid convention by name.
 
-Provenance is pinned by the latest commit that changed `src/lib/sim-engine.js` and its exact Git
-blob SHA. If that blob changes, v1 refuses a silent refresh: create/update a contract version and
-review the semantic delta.
+Provenance records the commit and exact Git blob SHA of `src/lib/sim-engine.js` the fixture was
+**generated from**. Rule since 2026-11-23 (PR #229, the first engine change after v1): a later engine
+blob is accepted only while the fixture regenerates **byte-for-byte** from it -- then none of the
+pinned profiles changed, and the vendored bytes and their SHA-256 downstream stay valid. If the
+blob changes AND the bytes change, the producer and the tests refuse a silent refresh: create a new
+contract version and review the semantic delta. This rule applies to v1, v2 and water v1 alike
+(`assertProvenance()` in each producer).
 
 Regenerate/check:
 
@@ -60,7 +64,8 @@ node scripts/generate-planar-golden-v2.mjs --check contracts/golhex-planar-golde
 npm test -- --run tests/unit/planar-golden-v2-contract.test.js
 ```
 
-v1 is untouched by v2. If `sim-engine.js` changes, the v2 generator refuses to refresh: create v3.
+v1 is untouched by v2. If `sim-engine.js` changes and a v2 profile changes with it, the v2 generator
+refuses to refresh: create v3 (a new blob with byte-identical profiles is accepted, see v1).
 
 # GolHex planar water Golden Vector contract v1 (real-valued profile)
 
@@ -135,5 +140,6 @@ validity. `stepWater` is a game-style cellular fluid, not a calibrated flow mode
 the fixture is a diagnostic: mass is conserved pairwise in exact arithmetic, and the binary32 store
 leaves a drift below 1e-6 over these runs.
 
-The life contracts v1 and v2 are untouched. If `sim-engine.js` changes, the generator refuses to
-refresh: create a new contract version.
+The life contracts v1 and v2 are untouched. If `sim-engine.js` changes and a water profile changes
+with it, the generator refuses to refresh: create a new contract version (a new blob with
+byte-identical profiles is accepted, see v1).

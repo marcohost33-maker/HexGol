@@ -24,8 +24,12 @@ und `docs/` (z.B. Re-Konvergenz 2026-06-04, v31→v31.0).
   block the cell. INT patterns evolve differently.
 - **Stats: A1 spontaneous births are now counted in `births`** (found by Codex on
   PR #228). The simulation itself is unchanged.
-- The planar golden contracts pin the engine blob; their vector bytes regenerate
-  identically, only the pinned blob differs (open owner decision, see the PR).
+- **Golden contract provenance:** the recorded `engineBlobSha` is the blob a contract was
+  generated from. A new engine blob is now accepted only while the contract regenerates
+  byte-for-byte (`assertProvenance()` in the three planar producers); a byte change under a
+  new blob still requires a new contract version. This engine change leaves v1, v2 and
+  water v1 byte-identical (none of their profiles uses A1, A5 sym or INT), so no fixture and
+  no SHA-256 pin changed; golhex-3d's vendored copies stay valid.
 - **License: MIT -> Apache-2.0** (2026-10-16, owner decision when the repository went
   public). `LICENSE` is the unmodified apache.org text (SHA-256 cfc7749b96f63bd3...),
   `NOTICE` names the copyright holder (Coworker Research / Coworkerz) and records that
