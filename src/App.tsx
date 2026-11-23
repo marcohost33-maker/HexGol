@@ -16,8 +16,9 @@ import {
 import Splash from "./lib/Splash.jsx"; // v33 Branding: einmaliger Intro-/Splash-Screen (additiv)
 import ConwayIntro, { introSeen } from "./lib/ConwayIntro.jsx"; // Bildungs-Intro (einmalig, nach Splash; ⓘ re-open)
 import { renderRaster } from "./lib/raster-render.js"; // geteilter Raster-Pfad (Worker + Main)
-import { bewerteGolHex } from "./lib/golhex-nine-rules-adapter.js"; // 9-Regel-Semantikprofil (optional, neben den Axiomen)
-import { STATUS } from "./lib/nine-rules.js";
+// 9-Regel-Semantikprofil (optional, neben den Axiomen): wird erst NACHGELADEN, wenn das
+// Profil gewaehlt ist (dynamischer Import, eigener Chunk) -- ein nicht genutztes
+// Pruefraster kostet so weder Rechenzeit noch Bundle-Budget.
 import { FONT_SANS, FONT_MONO } from "./lib/typography.js"; // #163: System-Schriftstapel, eine Quelle, kein Fremd-Download
 import { supportsOffscreenWorker } from "./lib/worker-support.js"; // Feature-Detection (fail-closed)
 import { shouldStartPan, decideCloseAction, usesRasterPath, wheelSelectionEffect, WHEEL_ERASE, clampWheelCenter } from "./lib/ui-gestures.js"; // pure UI-Entscheider (Pan-Hit-Test + Schliess-Dispatch + HEX-Render-Gate + Farbrad-Wahl + Rad-Clamp)
@@ -682,7 +683,8 @@ export default function GolHex() {
   // dem 1. Sterbe-Frame 0) behaelt dieser Puffer die letzte Spezies-Farbe ueber die
   // GESAMTE Geister-Lebensdauer, damit der Dying-Ring die echte Familie traegt.
   const lastLiveColorRef = useRef(new Uint8Array(N));
-  const statsRef = useRef({ births: 0, deaths: 0 });
+  // stand: Feld + Zaehlwerte des letzten Schritts fuer das 9-Regel-Profil (R4), sonst null.
+  const statsRef = useRef<{ births: number; deaths: number; stand?: null | ReturnType<typeof import("./lib/golhex-nine-rules-adapter.js").merkeSchritt> }>({ births: 0, deaths: 0, stand: null });
   const histRef = useRef([]);
   // Feature 1: Ring-Buffer (Pop + Aktiv) der letzten ~200 Generationen fuer die
   // Live-Sparkline. Pop/Aktiv werden in pushStats BEREITS getrackt — hier nur
@@ -697,13 +699,35 @@ export default function GolHex() {
   // eine Auswertung pro Frame waere reine Rechenlast ohne sichtbaren Gewinn.
   // Laeuft nur, wenn das Panel offen UND das Profil gewaehlt ist: ein geschlossenes
   // Panel darf nichts kosten.
+  // Kontext fuer die Trace-Erhebung in pushStats (Ref statt State: pushStats ist ein
+  // stabiler Callback). Topologie wie sim-engine buildNeighbors: Torus wickelt nur das
+  // Rechteck periodisch, Kreis + Torus identifiziert den Rand antipodal (RP2), alle
+  // anderen Rahmen fallen mit Torus auf den Rand (edge) zurueck.
+  const nineCtxRef = useRef({ aktiv: false, topologie: "edge" });
+  // Nachgeladenes Adapter-Modul (null, bis das Profil einmal gewaehlt wurde).
+  const [nineMod, setNineMod] = useState<null | typeof import("./lib/golhex-nine-rules-adapter.js")>(null);
+  const nineModRef = useRef<null | typeof import("./lib/golhex-nine-rules-adapter.js")>(null);
+  useEffect(() => {
+    nineCtxRef.current = {
+      aktiv: semantikProfil === "neunregeln",
+      topologie: !torusOn ? "edge" : (frameShape === "box" ? "torus" : frameShape === "circle" ? "rp2" : "edge"),
+    };
+    // Kein Abbruch-Flag: Ref UND State werden immer gesetzt. Ein Flag, das beim
+    // Topologiewechsel waehrend des Ladens greift, liesse den State fuer immer null,
+    // waehrend der Ref schon gesetzt ist und kein zweiter Import mehr kommt.
+    if (semantikProfil === "neunregeln" && !nineModRef.current) {
+      import("./lib/golhex-nine-rules-adapter.js")
+        .then((m) => { nineModRef.current = m; setNineMod(m); })
+        .catch(() => { /* offline ohne Chunk: Panel bleibt leer, Simulation unberuehrt */ });
+    }
+  }, [semantikProfil, torusOn, frameShape]);
   const nineRulesReport = useMemo(() => {
-    if (!showNineRules || semantikProfil !== "neunregeln") return { rules: [], specVersion: "" };
-    return bewerteGolHex(popGraphRef.current, gen, { laeuft: running });
+    if (!showNineRules || semantikProfil !== "neunregeln" || !nineMod) return { rules: [], specVersion: "", STATUS: null };
+    return { ...nineMod.bewerteGolHex(popGraphRef.current, gen, { laeuft: running }), STATUS: nineMod.STATUS };
     // popGraphTick ist die Aenderungs-Quelle des Ref-Inhalts; ohne ihn wuerde React
     // die Neuberechnung nie ausloesen, weil ein Ref keine Render-Abhaengigkeit ist.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showNineRules, semantikProfil, popGraphTick, gen, running]);
+  }, [showNineRules, semantikProfil, popGraphTick, gen, running, nineMod]);
   // LiouScope-Recorder: vollstaendige Zeitreihe der Observablen (nicht nur das
   // 120-Punkt-Anzeigefenster). Jede Zeile = ein Schritt; Spalten regelabhaengig.
   const recRef = useRef({ on: false, rows: [], cols: [] });
@@ -788,7 +812,7 @@ export default function GolHex() {
     rasterImgRef.current = null; // bei Grid-Wechsel ImageData neu anlegen
     undoRef.current = []; originRef.current = null; setHasOrigin(false); // Gitter neu -> Urzustand verwerfen
     tickRef.current = 0; setGen(0);
-    histRef.current = []; statsRef.current = { births: 0, deaths: 0 };
+    histRef.current = []; statsRef.current = { births: 0, deaths: 0, stand: null };
     resetBuffer(popGraphRef.current); popDrawTsRef.current = 0; setPopGraphTick((t) => (t + 1) & 0x7fffffff);
     setStats({ pop: 0, cnt: [0,0,0,0,0,0,0,0,0,0,0,0,0], density: 0, births: 0, deaths: 0, sps: 0, hist: [] });
     setRunning(false); dirtyRef.current = true;
@@ -1064,14 +1088,17 @@ export default function GolHex() {
     return { active, sum, extra };
   }, []);
 
-  // Statistik aktualisieren (births/deaths vom letzten Schritt, sonst 0)
-  const pushStats = useCallback((births, deaths) => {
+  // Statistik aktualisieren (births/deaths vom letzten Schritt, sonst 0).
+  // schritt=false: Probe ohne Simulationsschritt (Malen, Laden, Leeren) -- fuer das
+  // 9-Regel-Profil (R4) darf sie nicht als "Schritt ohne Unterscheidung" zaehlen.
+  const pushStats = useCallback((births, deaths, schritt = true) => {
     const N2 = gridRef.current.rows * gridRef.current.cols;
     if (simRef.current === "rval") {
       const r = countRval();
       const h = histRef.current; h.push(r.active); if (h.length > 120) h.shift();
       // Sparkline: im rval-Modus gibt es keinen separaten Geburten/Tode-Diff -> Aktiv = Pop.
-      pushSample(popGraphRef.current, r.active, r.active);
+      pushSample(popGraphRef.current, r.active, r.active,
+        { schritt: false, posGrund: "Physikmodus: kein Zellort erhoben" });
       bumpPopGraph();
       recordStep(["gen", "active", "sum"], [tickRef.current, r.active, r.sum]);
       setStats({ pop: r.active, cnt: [0,0,0,0,0,0,0,0,0,0,0,0,0], density: N2 ? r.active / N2 : 0, births: 0, deaths: 0, sps: spsRef.current, hist: h.slice(), rval: true, rvalSum: r.sum });
@@ -1080,7 +1107,25 @@ export default function GolHex() {
     const c = countColor();
     const h = histRef.current; h.push(c.pop); if (h.length > 120) h.shift();
     // Sparkline: Pop = lebende Zellen, Aktiv = pro-Schritt geaenderte Zellen (births+deaths).
-    pushSample(popGraphRef.current, c.pop, births + deaths);
+    // 9-Regel-Profil: Geburten/Tode getrennt + Domaenengroesse (R4) und Schwerpunkt
+    // (R5/R6). Der O(N)-Schwerpunkt laeuft nur, wenn das Profil gewaehlt ist -- ein
+    // nicht genutztes Pruefraster darf nichts kosten.
+    const nctx = nineCtxRef.current;
+    const nb = neighRef.current;
+    // R4-Zaehlwerte nur aus dem festgehaltenen Schritt-Stand und nur, wenn das Feld seit
+    // diesem Schritt unveraendert ist (Malen/Zufall/Laden/Undo/Worker -> unbestimmt).
+    // A1 kommt aus dem Schritt selbst, nicht aus der aktuellen Einstellung.
+    const extra: Record<string, unknown> = !schritt
+      ? { schritt: false }
+      : nctx.aktiv && nineModRef.current
+        ? nineModRef.current.uebergangsProbe(statsRef.current.stand, colorRef.current, nb)
+        : { schritt: false, schrittGrund: "9-Regel-Profil nicht aktiv" };
+    if (nctx.aktiv && !nineModRef.current) extra.posGrund = "9-Regel-Modul laedt noch";
+    else if (nctx.aktiv) {
+      const sp = nineModRef.current.schwerpunkt(colorRef.current, gridRef.current.rows, gridRef.current.cols, { topologie: nctx.topologie, mask: nb && nb.mask });
+      if (sp.pos) { extra.pos = sp.pos; extra.geom = sp.geom; } else extra.posGrund = sp.grund;
+    } else extra.posGrund = "9-Regel-Profil nicht aktiv";
+    pushSample(popGraphRef.current, c.pop, births + deaths, extra);
     bumpPopGraph();
     recordStep(["gen", "pop", "density", "births", "deaths"], [tickRef.current, c.pop, N2 ? c.pop / N2 : 0, births, deaths]);
     setStats({ pop: c.pop, cnt: c.cnt, density: N2 ? c.pop / N2 : 0, births, deaths, sps: spsRef.current, hist: h.slice() });
@@ -1115,7 +1160,7 @@ export default function GolHex() {
     if (rec.rows.length > 100000) rec.rows.shift(); // Speicherschutz
   };
 
-  const updatePop = useCallback(() => pushStats(0, 0), [pushStats]);
+  const updatePop = useCallback(() => pushStats(0, 0, false), [pushStats]);
 
   // --- Simulationsschritt ---------------------------------------------------
   const step = useCallback(() => {
@@ -1208,6 +1253,13 @@ export default function GolHex() {
     // erlaubt (nur wenn die Ansicht stabil ist; dirtyRef hat sonst Vorfahrt).
     tickRef.current = tick; stepDirtyRef.current = true;
     statsRef.current.births = births; statsRef.current.deaths = deaths;
+    // 9-Regel-Profil (R4): festhalten, zu welchem Feld diese Zaehlwerte gehoeren und ob
+    // A1 lief. Eine Probe traegt sie nur, solange das Feld unveraendert ist (Codex R3).
+    const nmod = nineCtxRef.current.aktiv ? nineModRef.current : null;
+    const nbS = neighRef.current;
+    statsRef.current.stand = nmod
+      ? nmod.merkeSchritt(statsRef.current.stand, nc, births, deaths, (nbS && nbS.inCount) || nc.length, !!A.a1, nbS)
+      : null;
     loopStepRef.current += 1;
   }, []);
 
@@ -3798,10 +3850,13 @@ export default function GolHex() {
             <div style={{ display: "flex", flexDirection: "column", gap: 5 }} data-testid="ninerules-panel">
               <div style={{ padding: "7px 10px", borderRadius: 9, background: "rgba(92,240,204,0.06)", border: "1px solid rgba(92,240,204,0.14)", fontSize: 10, color: T.sub, fontFamily: MONO, lineHeight: 1.45 }}>
                 Prueft den <b>Populationsverlauf</b> — nicht einzelne Zellen. Beobachtet nur,
-                veraendert nichts. <b>Richtung</b> und <b>Bewegung</b> fehlen bewusst: eine
-                Population hat keinen Ort.
+                veraendert nichts. <b>Unterscheidet</b>: behandelte der letzte Schritt Zellen
+                gleichen Vorzustands verschieden? <b>Richtung</b>/<b>Bewegung</b> beziehen sich
+                auf den <b>Schwerpunkt</b> der lebenden Zellen — eine abgeleitete Groesse; wo er
+                nicht eindeutig ist (gleichmaessig verteilt, Weg ueber die Kreis-Naht), steht <b>offen</b>.
               </div>
               {nineRulesReport.rules.map((r) => {
+                const STATUS = nineRulesReport.STATUS;
                 const farbe =
                   r.status === STATUS.PASS ? T.accent
                     : r.status === STATUS.FAIL ? "#ff8f8f"

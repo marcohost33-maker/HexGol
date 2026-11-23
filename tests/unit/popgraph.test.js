@@ -144,3 +144,23 @@ describe("buildPaths — gemeinsame Skala beider Reihen", () => {
     expect(points(r.active).length).toBe(2);
   });
 });
+
+// 2026-11-22: Zusatzgroessen je Probe fuer das 9-Regel-Profil (R4/R5/R6). Sie
+// muessen dieselbe Ring-Geometrie haben wie pop/active, sonst zeigt Index i des
+// Traces auf die Zusatzdaten einer ANDEREN Generation.
+describe("extra: Zusatzgroessen laufen synchron im Ring mit", () => {
+  it("speichert extra parallel und kuerzt am Kapazitaetsrand mit", () => {
+    const b = createBuffer(2);
+    pushSample(b, 1, 1, { k: "a" });
+    pushSample(b, 2, 2);
+    pushSample(b, 3, 3, { k: "c" });
+    expect(b.pop).toEqual([2, 3]);
+    expect(b.extra).toEqual([null, { k: "c" }]);
+  });
+  it("resetBuffer leert auch extra", () => {
+    const b = createBuffer(3);
+    pushSample(b, 1, 1, { k: 1 });
+    resetBuffer(b);
+    expect(b.extra).toEqual([]);
+  });
+});

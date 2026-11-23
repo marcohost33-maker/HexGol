@@ -4,11 +4,11 @@ import { test, expect } from "@playwright/test";
 // Realer DOM-Kontrakt, KEINE window-Hooks (AGENTS.md §2): der Test bedient die App
 // ueber die echten Bedienelemente und prueft, was ein Mensch sieht.
 //
-// Der wichtigste Test hier ist NICHT, dass Regeln erscheinen, sondern dass R5
-// (Richtung) und R6 (Bewegung) FEHLEN. Eine Population hat keinen Ort; wer sie
-// trotzdem anzeigt, hat eine Groesse erfunden, damit ein Feld gruen wird. Genau das
-// verbietet die Spezifikation ("N/A, nicht kuenstlich PASS") -- und genau das faellt
-// bei einer Sichtpruefung niemandem auf, weil es plausibel aussieht.
+// Der wichtigste Test hier ist NICHT, dass Regeln erscheinen, sondern dass R4-R6
+// OHNE gemessene Groesse kein Urteil zeigen. Bis 2026-11-22 fehlten sie ganz, weil
+// der Trace keinen Ort und keinen Vergleichsraum trug; jetzt werden Schwerpunkt und
+// Uebergangsklassen erhoben -- aber wer ohne Messwert pass/fail anzeigt, haette eine
+// Groesse erfunden, damit ein Feld gruen wird ("N/A, nicht kuenstlich PASS").
 
 /** Oeffnet den Tab, der das Semantikprofil-Panel enthaelt. */
 async function oeffneSemantikPanel(page: import("@playwright/test").Page) {
@@ -45,20 +45,17 @@ test.describe("9-Regel-Semantikprofil", () => {
     await page.waitForTimeout(200);
     await expect(page.getByTestId("ninerules-panel")).toBeVisible();
 
-    // Die sechs fuer eine Population sinnvollen Regeln sind da ...
-    for (const id of ["R1", "R2", "R3", "R7", "R8", "R9"]) {
+    // Seit 2026-11-22 sind alle neun Regeln aktiv (NICHT_ANWENDBAR im Adapter ist
+    // leer). R4 wertet die Uebergangsklassen des letzten Schritts aus, R5/R6 den
+    // Schwerpunkt der lebenden Zellen. Der Kern des Tests bleibt: OHNE gemessene
+    // Groesse darf keine dieser drei Regeln ein Urteil zeigen. Auf dem frischen,
+    // nie gelaufenen Feld gibt es weder einen Simulationsschritt noch eine
+    // Verschiebung -- also "offen" bzw. "n. a.", nie pass/fail.
+    for (const id of ["R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8", "R9"]) {
       await expect(page.getByTestId(`ninerule-${id}`)).toBeVisible();
     }
-    // ... und die drei ohne Gegenstand fehlen. Das ist der Kern des Tests.
-    // R5/R6 sind ortsgebunden: eine Population hat keinen Ort. R4 kam am
-    // 2026-08-11 dazu (Befund B3) -- es verglich Populations- mit Aenderungszahl,
-    // zwei Groessen desselben Frames, und urteilte empirisch falsch herum: ein
-    // ERSTARRTER Automat "unterschied" (9 != 0), ein sterbender nicht (0 == 0).
-    // Der Ringpuffer traegt keinen Vergleichsraum, der Unterscheidung belegen
-    // koennte. Diese Liste ist die UI-Seite von NICHT_ANWENDBAR im Adapter --
-    // aendert sich die dort, muss sie sich hier mitaendern.
     for (const id of ["R4", "R5", "R6"]) {
-      await expect(page.getByTestId(`ninerule-${id}`)).toHaveCount(0);
+      await expect(page.getByTestId(`ninerule-status-${id}`)).toHaveText(/^(offen|n\. a\.)$/);
     }
 
     // Jede Regel zeigt einen Status UND eine Begruendung -- ein Urteil ohne Beleg
@@ -160,9 +157,9 @@ test.describe("9-Regel-Semantikprofil", () => {
     await expect(page.getByTestId("ninerules-panel")).toBeVisible();
     await expect(page.getByTestId("semantik-neunregeln")).toHaveAttribute("aria-pressed", "true");
     await expect(page.getByTestId("ninerule-R1")).toBeVisible();
-    // Und die drei ohne Gegenstand bleiben auch auf diesem Weg weg.
+    // Und alle neun sind auch auf diesem Weg da.
     for (const id of ["R4", "R5", "R6"]) {
-      await expect(page.getByTestId(`ninerule-${id}`)).toHaveCount(0);
+      await expect(page.getByTestId(`ninerule-${id}`)).toBeVisible();
     }
   });
 
