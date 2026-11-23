@@ -15,6 +15,7 @@ import { buildNeighbors } from "../../src/lib/sim-engine.js";
 
 const buf = (pop, active) => ({ pop, active: active ?? pop.map(() => 1) });
 const statusOf = (rep, id) => rep.rules.find((r) => r.id === id)?.status;
+const ruleOf = (rep, id) => rep.rules.find((r) => r.id === id);
 
 describe("Trace-Bau", () => {
   it("uebersetzt den Ringpuffer in Zustaende, aelteste zuerst", () => {
@@ -322,10 +323,29 @@ describe("Regeln gegen echte Populationsverlaeufe", () => {
     expect(statusOf(rep, "R7")).toBe(STATUS.PASS);
   });
 
-  it("lebende Population, angehaltene Simulation: R7 wird definitiv FAIL", () => {
-    // Der Trace ist abgeschlossen und endete nie terminal.
+  // E2 (Entscheid 2026-11-22, Variante b): BEWUSST geaendert. Bis hierher galt "Pause =
+  // Trace abgeschlossen" und R7 wurde bei angehaltener Simulation definitiv FAIL. Nach
+  // "Weiter" laeuft aber DERSELBE Trace fort und kann noch terminal werden -- ein FINAL-
+  // Urteil, das danach kippt, verletzt den Finalitaetsvertrag. Pause heisst: vorlaeufig.
+  it("lebende Population, angehaltene Simulation: R7 bleibt vorlaeufig (Pause ist kein Ende)", () => {
     const rep = bewerteGolHex(buf([5, 6, 7]), 3, { laeuft: false });
+    expect(statusOf(rep, "R7")).toBe(STATUS.FAIL_VORLAEUFIG);
+    expect(ruleOf(rep, "R7").finality).not.toBe("FINAL");
+  });
+
+  it("nur ein ausdrueckliches Trace-Ende macht R7 definitiv FAIL", () => {
+    // Der Trace ist abgeschlossen und endete nie terminal.
+    const rep = bewerteGolHex(buf([5, 6, 7]), 3, { laeuft: false, traceEnde: true });
     expect(statusOf(rep, "R7")).toBe(STATUS.FAIL);
+  });
+
+  it("Pause -> Weiter -> Aussterben: kein Urteil kippt von FINAL weg", () => {
+    const vorher = bewerteGolHex(buf([5, 6, 7]), 3, { laeuft: false });
+    const nachher = bewerteGolHex(buf([5, 6, 7, 0]), 4, { laeuft: true });
+    expect(statusOf(nachher, "R7")).toBe(STATUS.PASS);
+    for (const r of vorher.rules) {
+      if (r.finality === "FINAL") expect(statusOf(nachher, r.id), r.id).toBe(r.status);
+    }
   });
 
   it("konstante Population: R8 meldet keine Aenderung", () => {
