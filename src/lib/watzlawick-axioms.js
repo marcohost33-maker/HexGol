@@ -25,7 +25,7 @@ export const WATZLAWICK_BOOLEAN_AXIOMS = Object.freeze(
 export const WATZLAWICK_A5 = Object.freeze({
   id: "a5",
   short: "A5 Symmetrisch / komplementaer",
-  desc: "Symmetrische vs. komplementaere Interaktion: Ueberleben verlangt K <= S; Geburt verlangt S > K.",
+  desc: "Symmetrische vs. komplementaere Interaktion. Modus sym: Ueberleben verlangt K <= S; Geburt verlangt S > K (S = groesste gleichfarbige Nachbargruppe, K = uebrige). Modus komp: Schwellen zaehlen nur andersfarbige Nachbarn.",
   control: Object.freeze({
     kind: "mode",
     default: "off",

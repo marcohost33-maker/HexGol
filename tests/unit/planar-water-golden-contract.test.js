@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  assertProvenance,
   buildProfile,
   canonicalJson,
   SOURCE_ENGINE_BLOB,
@@ -38,7 +39,10 @@ describe("cross-repo planar water Golden Vector contract v1", () => {
       expect(parsed.source.engineFunction).toBe("stepWater");
       expect(parsed.source.engineBlobSha).toBe(SOURCE_ENGINE_BLOB);
       const blob = execFileSync("git", ["hash-object", "src/lib/sim-engine.js"], { encoding: "utf8", cwd: resolve(".") }).trim();
-      expect(blob).toBe(SOURCE_ENGINE_BLOB);
+      // Recorded blob = generation blob; a later blob only with byte-identical regeneration.
+      expect(["pinned", "reproduced-after-engine-change"]).toContain(
+        assertProvenance(blob, [{ id: spec.id, regenerated: canonicalJson(buildProfile(spec)), committed }]),
+      );
     });
 
     it(`${spec.id}: checkpoints are lossless binary32 states whose hashes recompute`, () => {
@@ -75,6 +79,16 @@ describe("cross-repo planar water Golden Vector contract v1", () => {
 
   it("covers both contrast kinds (binary32 store rounding and boundary)", () => {
     expect(WATER_PROFILES.map((p) => p.contrast.kind).sort()).toEqual(["boundary", "precision"]);
+  });
+
+  it("refuses a changed engine blob whose profiles changed (no silent refresh)", () => {
+    const otherBlob = "0".repeat(40);
+    const same = { id: "a", regenerated: "x", committed: "x" };
+    const moved = { id: "b", regenerated: "y", committed: "x" };
+    expect(assertProvenance(otherBlob, [same])).toBe("reproduced-after-engine-change"); // positive control
+    expect(() => assertProvenance(otherBlob, [same, moved])).toThrow(/\bb\b.*new contract version/);
+    expect(() => assertProvenance(otherBlob, [])).toThrow(/none checked/);
+    expect(assertProvenance(SOURCE_ENGINE_BLOB, [moved])).toBe("pinned");
   });
 
   it("leaves the life contracts v1 and v2 untouched", () => {

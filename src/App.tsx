@@ -3489,7 +3489,7 @@ export default function GolHex() {
           <div><b style={{ color: ax.a2 ? T.accent : T.sub }}>A2</b> Beziehung: Geburtsfarbe per Nachbar-Mehrheit statt Mischung.</div>
           <div><b style={{ color: ax.a3 ? T.accent : T.sub }}>A3</b> Interpunktion: alte Zellen (Alter &ge;6) +/-1 Survival-Toleranz.</div>
           <div><b style={{ color: ax.a4 ? T.accent : T.sub }}>A4</b> Analog: sterbende Zelle hinterlaesst 1 Generation Ghost.</div>
-          <div><b style={{ color: a5 !== "off" ? T.accent : T.sub }}>A5</b> Symm./Kompl.: nur gleich- bzw. andersfarbige Nachbarn zaehlen.</div>
+          <div><b style={{ color: a5 !== "off" ? T.accent : T.sub }}>A5</b> Symm.: Ueberleben nur bei K &le; S, Geburt nur bei S &gt; K (S = groesste Farbgruppe). Kompl.: nur andersfarbige Nachbarn zaehlen.</div>
           <div style={{ color: T.text, fontWeight: 700, margin: "7px 0 3px" }}>INT-Regeln (isotrop nicht-totalistisch, {INT_RULES.length})</div>
           <div>Callahan o/m/p: bei genau 2 Nachbarn zaehlt die Anordnung - o=ortho (60grad), m=meta (120grad), p=para (180grad gegenueber). Erzeugt Dynamik, die rein totalistische Regeln nicht erreichen.</div>
         </div>

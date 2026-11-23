@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  assertProvenance,
   buildProfile,
   canonicalJson,
   PROFILES_V2,
@@ -32,7 +33,10 @@ describe("cross-repo planar Golden Vector contract v2 (profile matrix)", () => {
       expect(parsed.schema).toBe("golhex-planar-golden-v2");
       expect(parsed.source.engineBlobSha).toBe(SOURCE_ENGINE_BLOB);
       const blob = execFileSync("git", ["hash-object", "src/lib/sim-engine.js"], { encoding: "utf8", cwd: resolve(".") }).trim();
-      expect(blob).toBe(SOURCE_ENGINE_BLOB);
+      // Recorded blob = generation blob; a later blob only with byte-identical regeneration.
+      expect(["pinned", "reproduced-after-engine-change"]).toContain(
+        assertProvenance(blob, [{ id: spec.id, regenerated: canonicalJson(buildProfile(spec)), committed }]),
+      );
     });
 
     it(`${spec.id}: carries a counterexample that diverges from the contrast profile`, () => {
@@ -44,6 +48,16 @@ describe("cross-repo planar Golden Vector contract v2 (profile matrix)", () => {
       }
     });
   }
+
+  it("refuses a changed engine blob whose profiles changed (no silent refresh)", () => {
+    const otherBlob = "0".repeat(40);
+    const same = { id: "a", regenerated: "x", committed: "x" };
+    const moved = { id: "b", regenerated: "y", committed: "x" };
+    expect(assertProvenance(otherBlob, [same])).toBe("reproduced-after-engine-change"); // positive control
+    expect(() => assertProvenance(otherBlob, [same, moved])).toThrow(/\bb\b.*Create v3/);
+    expect(() => assertProvenance(otherBlob, [])).toThrow(/none checked/);
+    expect(assertProvenance(SOURCE_ENGINE_BLOB, [moved])).toBe("pinned");
+  });
 
   it("leaves v1 untouched (no silent regeneration of an old contract version)", () => {
     const v1 = readFileSync("contracts/golhex-planar-golden-v1.json");

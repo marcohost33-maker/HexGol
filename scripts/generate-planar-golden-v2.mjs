@@ -160,10 +160,27 @@ export function canonicalJson(value) {
   return JSON.stringify(value, null, 2) + "\n";
 }
 
+// Provenance rule (contracts/README.md, 2026-11-23): `source.engineBlobSha` records the
+// engine blob the profiles were GENERATED from. A later engine blob is accepted only when
+// every committed profile regenerates byte-identically from it; any byte change under a
+// new blob is refused (new contract version, never a silent refresh of v2).
+// `profiles`: [{ id, regenerated, committed }].
+export function assertProvenance(currentBlob, profiles) {
+  if (currentBlob === SOURCE_ENGINE_BLOB) return "pinned";
+  const changed = profiles.filter((p) => p.regenerated !== p.committed).map((p) => p.id);
+  if (profiles.length > 0 && changed.length === 0) return "reproduced-after-engine-change";
+  throw new Error(`sim-engine.js changed (blob ${SOURCE_ENGINE_BLOB} -> ${currentBlob}) and v2 profiles changed with it (${changed.join(", ") || "none checked"}). Create v3 instead of refreshing v2.`);
+}
+
 if (process.argv[1] && realpathSync(fileURLToPath(import.meta.url)) === realpathSync(resolve(process.argv[1]))) {
   const current = currentEngineBlob();
-  if (current !== SOURCE_ENGINE_BLOB) {
-    throw new Error(`sim-engine.js changed: expected blob ${SOURCE_ENGINE_BLOB}, got ${current}. Create v3 instead of refreshing v2.`);
+  const ownDir = fileURLToPath(new URL("../contracts/golhex-planar-golden-v2", import.meta.url));
+  if (assertProvenance(current, PROFILES_V2.map((spec) => ({
+    id: spec.id,
+    regenerated: canonicalJson(buildProfile(spec)),
+    committed: readFileSync(join(ownDir, `${spec.id}.json`), "utf8"),
+  }))) !== "pinned") {
+    process.stderr.write(`note: sim-engine.js blob ${current} != generation blob ${SOURCE_ENGINE_BLOB}; v2 bytes reproduced unchanged\n`);
   }
   const check = process.argv.includes("--check");
   const dir = process.argv.filter((a) => a !== "--check")[2] ?? "contracts/golhex-planar-golden-v2";

@@ -132,8 +132,14 @@ const RMETA = RULES.map((r) => {
 // o=ortho (60grad benachbart), m=meta (120grad), p=para (180grad gegenueber).
 // Reicht das totalistische Modell nicht; erst INT erzeugt die reiche Hex-Dynamik.
 // hexConfig2: besetzte Richtungen (Bitmaske der 6 Nachbarn) -> Klasse bei genau 2.
+// Die Bits folgen der Tabellen-Reihenfolge von buildNeighbors (oben-links, oben-rechts,
+// links, rechts, unten-links, unten-rechts), NICHT dem Umlauf. UMLAUF[k] ist die
+// Position im Uhrzeigersinn ab oben-links. Bis v33.5.0 rechnete diese Funktion mit
+// dem Tabellenindex -- z. B. links/rechts (180 Grad) galt als "o" (Befund 2026-11-22,
+// Orakel tests/unit/step-life-contracts.test.js).
+const UMLAUF = [0, 1, 5, 2, 4, 3];
 function hexClass2(mask) {
-  const d = []; for (let k = 0; k < 6; k++) if (mask & (1 << k)) d.push(k);
+  const d = []; for (let k = 0; k < 6; k++) if (mask & (1 << k)) d.push(UMLAUF[k]);
   if (d.length !== 2) return null;
   const g = Math.min((d[1] - d[0] + 6) % 6, (d[0] - d[1] + 6) % 6);
   return g === 1 ? "o" : g === 2 ? "m" : "p";
@@ -534,19 +540,26 @@ function stepLife(g) {
         // Randzelle selbst (arxiv 2406.06195, 1607.02291). "null"-Standard = tote Wand.
         if (adia) {
           if (selfAlive) { cnt[self]++; live++; sx += COSH[self]; sy += SINH[self]; mask |= (1 << k); }
-          else if (a4 && gh[i]) live++;
+          else if (a4 && gh[i]) { live++; mask |= (1 << k); }
         }
         continue;
       }
       const cj = col[j];
       if (cj !== 0) { cnt[cj]++; live++; sx += COSH[cj]; sy += SINH[cj]; mask |= (1 << k); }
-      else if (a4 && gh[j]) live++;
+      // A4-Geist zaehlt als Nachbar -- dann auch seine RICHTUNG (INT-Anordnung);
+      // sonst lieferte hexClass2 bei "1 lebend + 1 Geist" null und sperrte still.
+      else if (a4 && gh[j]) { live++; mask |= (1 << k); }
     }
     const cntSelf = selfAlive ? cnt[self] : 0;
-    let maxN = 0; if (needMax) { for (let c = 1; c <= 12; c++) if (cnt[c] > maxN) maxN = cnt[c]; }
+    let maxN = 0, nCol = 0;
+    if (needMax) { for (let c = 1; c <= 12; c++) { const v = cnt[c]; nCol += v; if (v > maxN) maxN = v; } }
     let eff = live;
-    if (A5 === "sym") eff = selfAlive ? cntSelf : maxN;
-    else if (A5 === "komp") eff = selfAlive ? live - cntSelf : live - maxN;
+    // A5 "sym" = dokumentierte Regel (docs/watzlawick-rule.md, Axiom 5): Schwellen auf
+    // der Gesamtzahl, zusaetzlich Ueberleben nur bei K <= S, Geburt nur bei S > K
+    // (S = maxN, K = nCol - maxN). Bis v33.5.0 zaehlte "sym" nur gleichfarbige
+    // Nachbarn -- Verhaltensaenderung, Marco-Entscheid E3 2026-11-22.
+    const symGate = A5 === "sym";
+    if (A5 === "komp") eff = selfAlive ? live - cntSelf : live - maxN;
 
     let born = false, newC = 0;
     if (selfAlive) {
@@ -556,6 +569,7 @@ function stepLife(g) {
       if (!surv && a3 && age[i] >= 6 && eff >= smin - 1 && eff <= smax + 1) surv = true;
       // Systemtheorie: Unterdichte stuetzt das Ueberleben, Ueberdichte entzieht es.
       if (sysT) { if (!surv && live > 0 && live < spN) surv = true; else if (surv && live > spN + 1) surv = false; }
+      if (surv && symGate && nCol - maxN > maxN) surv = false; // A5: K <= S
       if (surv) {
         born = true;
         newC = (colorMode === "drift" && live > 0) ? driftHue(self, sx, sy) : self;
@@ -565,6 +579,7 @@ function stepLife(g) {
       if (isINT && eff === 2 && b2 && !b2.includes(hexClass2(mask))) ok = false;
       // Systemtheorie: Geburt nur unter dem Sollwert (fuellt Luecken bis Gleichgewicht).
       if (sysT && live > spN) ok = false;
+      if (ok && symGate && !(maxN > nCol - maxN)) ok = false; // A5: S > K
       if (ok) {
         born = true;
         if (colorMode === "quad") newC = birthColorQuad(cnt, sx, sy);
@@ -581,7 +596,8 @@ function stepLife(g) {
       if (nc[i] !== 0 || ng[i] !== 0 || col[i] !== 0) continue;
       const base = i * 6; let silent = true;
       for (let k = 0; k < 6; k++) { const j = NL[base + k]; if (j < 0) continue; if (col[j] !== 0 || (a4 && gh[j])) { silent = false; break; } }
-      if (silent && hash2(i, tick) < 0.012) { nc[i] = PRIMARY[Math.floor(hash2(i + 7, tick * 3 + 1) * 3)]; na[i] = 1; }
+      // Spontangeburt zaehlt als Geburt (Codex-Befund PR #228: fehlte in `births`).
+      if (silent && hash2(i, tick) < 0.012) { nc[i] = PRIMARY[Math.floor(hash2(i + 7, tick * 3 + 1) * 3)]; na[i] = 1; births++; }
     }
   }
   return { births, deaths };
