@@ -82,10 +82,14 @@ what each rule measures:
 - R1/R2/R3/R7/R8/R9 — population count over time (R9 is a MODEL/PROXY "CA-Life").
 - **R4 Unterscheidet** — did the last step treat cells with the same prior state
   differently (some survive and some die, or some empty cells are born and
-  others not)? Derived from births/deaths/domain size per sample.
+  others not)? Derived from births/deaths/domain size per sample — only while the
+  field is exactly the one that step produced; after painting, Random, Load, Undo
+  etc. the sample stays *offen* until the next step.
 - **R5 Richtung / R6 Bewegt** — the (fractional) centroid of the live cells, a
   derived summary quantity. Defined on edge topology; on the rectangular torus
-  and on circle + torus (antipodal rim, RP2) only for a localized population.
+  and on circle + torus (antipodal rim, RP2) only for a localized population
+  (RP2 also within a fixed work budget per sample, so large populations stay
+  *offen* instead of blocking the UI).
   Elsewhere the rules report *offen* (UNKNOWN). R5 reports a direction only for a
   displacement along a hex axis with a unique shortest path that does not cross
   the RP2 seam (RP2 is non-orientable).
